@@ -1,0 +1,198 @@
+// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.com).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import ballerina/ai;
+import ballerina/http;
+
+// ============================================================================
+// Credentials — design §9.5. A union; bearer (Bedrock API key) is first-class
+// on both endpoints (https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html).
+// ============================================================================
+
+# Long-lived IAM access keys.
+public type StaticCredentials record {|
+    # AWS access key id.
+    string accessKeyId;
+    # AWS secret access key.
+    string secretAccessKey;
+|};
+
+# Temporary STS credentials — the required `sessionToken` distinguishes this from
+# `StaticCredentials` and is emitted as `X-Amz-Security-Token` (design §9.5).
+public type StsCredentials record {|
+    # AWS access key id.
+    string accessKeyId;
+    # AWS secret access key.
+    string secretAccessKey;
+    # STS session token, sent as `X-Amz-Security-Token`.
+    string sessionToken;
+|};
+
+# A Bedrock API key (bearer token) — first-class on both endpoints (§9.5).
+public type BearerToken record {|
+    # The Bedrock API key, sent as `Authorization: Bearer`.
+    string apiKey;
+|};
+
+# The credential union accepted by every provider (design §9.5).
+public type BedrockCredentials StaticCredentials|StsCredentials|BearerToken;
+
+// ============================================================================
+// Guardrails / retry — design §9.5.
+// ============================================================================
+
+# Guardrail configuration. Placement is route-specific (design §9.5): Converse
+# body field, Invoke headers, and a construction error on Mantle.
+public type GuardrailConfig record {|
+    # `guardrailIdentifier` (Converse body / `X-Amzn-Bedrock-GuardrailIdentifier`).
+    string guardrailIdentifier;
+    # `guardrailVersion`.
+    string guardrailVersion;
+    # Optional `trace` mode (`enabled` | `disabled` | `enabled_full`).
+    string trace?;
+|};
+
+# Retry policy for the transport's throttling/warm-up backoff (design §9.5).
+public type RetryConfig record {|
+    # Max retry attempts for retryable errors (429/408/500/503).
+    int maxRetries = 3;
+    # Initial backoff delay, seconds.
+    decimal initialDelay = 1.0;
+    # Backoff ceiling, seconds.
+    decimal maxDelay = 20.0;
+    # Exponential backoff multiplier.
+    decimal backoffFactor = 2.0;
+|};
+
+// ============================================================================
+// Shared model config — design §10. Each vendor `*Config` includes this and adds
+// only its vendor-specific fields (CLAUDE.md §3).
+// ============================================================================
+
+# Everything that is not the model's identity, shared across vendors (design §10).
+public type CommonModelConfig record {|
+    // --- Routing (§5) ---
+    # Route selection (amendment): `AUTO` (default) runs the resolver; `CONVERSE`/
+    # `INVOKE`/`MANTLE` force that family. The escape hatch — outranks every heuristic.
+    ApiFamily apiFamily = AUTO;
+    # REQUIRED for `imported-model/` ARNs.
+    ModelSchema modelSchema?;
+    # Extend the routing tables without a release.
+    map<ApiFamily|MantleEntry> routeOverrides?;
+    # Per-route SigV4 signing name override (§9.4).
+    string signingServiceName?;
+
+    // --- Inference (§7) ---
+    # Nucleus sampling.
+    decimal topP?;
+    # Provider-level stop sequences; a per-call `stop` overrides these (§7).
+    string[] stopSequences?;
+
+    // --- Converse passthrough (§9.3) ---
+    # Forwarded verbatim on Converse; ignored elsewhere.
+    json additionalModelRequestFields?;
+    # JSON Pointers (max 10) whose values return in `additionalModelResponseFields`.
+    string[] additionalModelResponseFieldPaths?;
+    # `serviceTier`.
+    ServiceTier serviceTier?;
+    # `requestMetadata` (max 16 pairs).
+    map<string> requestMetadata?;
+
+    // --- Cross-cutting (§9.5) ---
+    # Guardrail; construction error on a MANTLE route (§9.5).
+    GuardrailConfig guardrail?;
+    # Retry policy.
+    RetryConfig retryConfig?;
+    # Underlying HTTP client configuration.
+    http:ClientConfiguration httpConfig?;
+|};
+
+// ============================================================================
+// Inference params — resolved once at construction (design §6, §7). Carries the
+// Converse-body passthrough so the fixed codec signature can emit it; non-Converse
+// codecs ignore the extra fields.
+// ============================================================================
+
+# Resolved inference parameters plus Converse-body passthrough (design §7, §9.3).
+public type InferenceParams record {|
+    # Sampling temperature.
+    decimal temperature;
+    # Maximum tokens to generate.
+    int maxTokens;
+    # Nucleus sampling.
+    decimal topP?;
+    # Provider-level stop sequences; a per-call `stop` overrides these (§7).
+    string[] stopSequences?;
+    # Converse `additionalModelRequestFields` passthrough (§9.3).
+    json additionalModelRequestFields?;
+    # Converse `additionalModelResponseFieldPaths` (§9.3).
+    string[] additionalModelResponseFieldPaths?;
+    # Converse `serviceTier` (§9.3).
+    ServiceTier serviceTier?;
+    # Converse `requestMetadata`, max 16 pairs (§9.3).
+    map<string> requestMetadata?;
+    # Converse `guardrailConfig` body field (§9.5); Invoke uses headers instead.
+    GuardrailConfig guardrail?;
+|};
+
+// ============================================================================
+// Codec contract — design §7. `decode` returns a record, never a bare message,
+// because the span/guardrail/retry all need `usage` + `stopReason` (§3.2, §7).
+// ============================================================================
+
+# Normalized token usage (design §7).
+public type TokenUsage record {|
+    # Prompt tokens consumed.
+    int inputTokens;
+    # Completion tokens generated.
+    int outputTokens;
+|};
+
+# What `decode` produces — more than the module-boundary message (design §7).
+public type DecodedResponse record {|
+    # The module invariant (§3).
+    ai:ChatAssistantMessage message;
+    # Span input (§3.2).
+    TokenUsage usage;
+    # Span + guardrail (§9.5) + retry (§8) signal.
+    string stopReason;
+    # Span input.
+    string? responseId;
+    # INTERVENED | NONE (§9.5).
+    GuardrailAction? guardrailAction;
+    # Converse-only response passthrough (§9.3).
+    json? additionalModelResponseFields;
+|};
+
+# Encode: system is hoisted out of `messages` into the signature (design §7.1) so
+# no codec can emit it as a `role: system` message.
+public type RequestCodec isolated function (
+        ai:ChatSystemMessage? system,
+        ai:ChatMessage[] messages,
+        ai:ChatCompletionFunctions[] tools,
+        string? stop,
+        InferenceParams params) returns json|ai:Error;
+
+# Decode: wire JSON → `DecodedResponse` (design §7).
+public type ResponseCodec isolated function (json response) returns DecodedResponse|ai:Error;
+
+# An encode/decode pair (design §7).
+public type ModelCodec record {|
+    # Messages → request body.
+    RequestCodec encode;
+    # Wire JSON → `DecodedResponse`.
+    ResponseCodec decode;
+    # Populated, unused today — streaming is out of scope (§9.6).
+    boolean supportsStreaming;
+|};
