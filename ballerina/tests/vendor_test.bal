@@ -155,7 +155,7 @@ function testAllVendorProvidersConstructOnConverse() returns error? {
     AmazonModelProvider amazon = check new (TEST_CREDS, "amazon.nova-pro-v1:0", REGION);
     MistralModelProvider mistral = check new (TEST_CREDS, "mistral.mistral-large-2407-v1:0", REGION);
     QwenModelProvider qwen = check new (TEST_CREDS, "qwen.qwen3-32b-v1:0", REGION);
-    GoogleModelProvider google = check new (TEST_CREDS, "google.gemma-4-31b", REGION);
+    GoogleModelProvider google = check new (TEST_CREDS, "google.gemma-3-27b-it", REGION);
     DeepSeekModelProvider deepseek = check new (TEST_CREDS, "us.deepseek.r1-v1:0", REGION);
     OpenAIModelProvider openai = check new (TEST_CREDS, "openai.gpt-oss-120b-1:0", REGION);
     test:assertTrue(amazon is AmazonModelProvider);
@@ -177,14 +177,46 @@ function testOpenAIMantleOnlyModelResolvesToMantleResponses() returns error? {
 }
 
 @test:Config {}
-function testGemmaResolvesToConverseOnBedrockRuntime() returns error? {
-    // Verified: Gemma is fully-managed open-weight on bedrock-runtime (signing 'bedrock').
-    Route route = check resolveRoute("google.gemma-4-31b", REGION);
+function testGemma3ResolvesToConverseOnBedrockRuntime() returns error? {
+    // Gemma 3's cards tick bedrock-runtime AND bedrock-mantle; we take Converse.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
+    Route route = check resolveRoute("google.gemma-3-27b-it", REGION);
     test:assertEquals(route.family, CONVERSE);
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.signingService, "bedrock");
     test:assertTrue(ep.host.startsWith("bedrock-runtime."));
 }
+
+@test:Config {}
+function testGemma4IsMantleOnlyNotConverse() returns error? {
+    // REGRESSION: this previously asserted CONVERSE + signing `bedrock`, which is
+    // what the code did and what the card contradicts — the Gemma 4 support matrix
+    // marks bedrock-runtime / Converse / Invoke / Messages all NO. Signing scope
+    // `bedrock` against a Mantle-only model is a 403 on every single call.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
+    foreach string id in ["google.gemma-4-31b", "google.gemma-4-e2b", "google.gemma-4-26b-a4b"] {
+        Route route = check resolveRoute(id, REGION);
+        test:assertEquals(route.family, MANTLE, id + " is served ONLY on bedrock-mantle");
+        Endpoint ep = check buildEndpoint(route);
+        test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
+        test:assertTrue(ep.host.startsWith("bedrock-mantle."), "wrong host for " + id);
+        // The card is explicit that this path differs from the `/v1/responses`
+        // other Mantle models use.
+        test:assertEquals(ep.path, "/openai/v1/responses", "wrong Mantle path for " + id);
+    }
+}
+
+@test:Config {}
+function testGemma4CannotDoStructuredOutput() returns error? {
+    // Falls out of being Mantle-only: no Converse route means no forced tools.
+    GoogleModelProvider provider = check new (TEST_CREDS, GEMMA_4_31B, REGION);
+    LiveFruitShape|ai:Error result = provider->generate(`Name a fruit.`);
+    test:assertTrue(result is ai:Error, "Gemma 4 must refuse a typed target (Mantle route)");
+}
+
+type LiveFruitShape record {|
+    string name;
+|};
 
 @test:Config {}
 function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
@@ -194,4 +226,42 @@ function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
     test:assertTrue(ep.path.includes("%3A"), "the model id's colon must be encoded on the wire");
     string canonical = getCanonicalUri(ep.path) ?: "";
     test:assertTrue(canonical.includes("%253A"), "and double-encoded in the canonical URI");
+}
+
+@test:Config {}
+function testAllKnownMantleOnlyModelsResolveToMantle() returns error? {
+    // Cross-checked against AWS's endpoint-availability table, which is the only
+    // page listing runtime-vs-mantle for every model in one place. Each id below is
+    // marked `bedrock-runtime: NO` there and verified against its own card.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+    map<string> mantleOnly = {
+        "openai.gpt-5.5": "/openai/v1/responses",
+        "openai.gpt-5.4": "/openai/v1/responses",
+        "openai.gpt-5.6-sol": "/openai/v1/responses",
+        "openai.gpt-5.6-terra": "/openai/v1/responses",
+        "openai.gpt-5.6-luna": "/openai/v1/responses",
+        "anthropic.claude-mythos-preview": "/anthropic/v1/messages",
+        "anthropic.claude-mythos-5": "/anthropic/v1/messages",
+        "google.gemma-4-31b": "/openai/v1/responses",
+        "google.gemma-4-e2b": "/openai/v1/responses",
+        "google.gemma-4-26b-a4b": "/openai/v1/responses"
+    };
+    foreach [string, string] [id, expectedPath] in mantleOnly.entries() {
+        Route route = check resolveRoute(id, REGION);
+        test:assertEquals(route.family, MANTLE, id + " is served ONLY on bedrock-mantle");
+        Endpoint ep = check buildEndpoint(route);
+        test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
+        test:assertEquals(ep.path, expectedPath, "wrong Mantle path for " + id);
+    }
+}
+
+@test:Config {}
+function testDualHomedModelsStillDefaultToConverse() returns error? {
+    // These are marked YES on BOTH endpoints. Being Mantle-capable must not pull
+    // them off Converse, which is the strictly richer surface (design §5.5).
+    foreach string id in ["anthropic.claude-haiku-4-5", "anthropic.claude-opus-4-8", "zai.glm-5",
+            "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it"] {
+        Route route = check resolveRoute(id, REGION);
+        test:assertEquals(route.family, CONVERSE, id + " is dual-homed and must default to Converse");
+    }
 }

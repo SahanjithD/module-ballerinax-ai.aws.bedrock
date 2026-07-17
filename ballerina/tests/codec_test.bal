@@ -178,3 +178,96 @@ function testAnthropicMessagesDecodeExtractsToolUse() returns error? {
     test:assertEquals(toolCalls[0].name, "lookup");
     test:assertEquals(toolCalls[0].id, "toolu_1");
 }
+
+// ---- Mistral: two dialects, one vendor prefix ----
+
+@test:Config {}
+function testMistralTextEncodesPromptNotMessages() returns error? {
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
+    map<json> body = check encodeMistralText((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertTrue(body.hasKey("prompt"), "the text dialect sends `prompt`, never `messages`");
+    test:assertFalse(body.hasKey("messages"));
+    test:assertEquals(body["prompt"], <json>"<s>[INST] Hello [/INST]",
+            "user text must sit inside Mistral's [INST] template");
+}
+
+@test:Config {}
+function testMistralTextFoldsSystemIntoTheFirstInstructionBlock() returns error? {
+    // The template has no system slot; system must never become a role:system
+    // message (§7.1), so it is prepended to the first [INST] block.
+    map<json> body = check encodeMistralText(SAMPLE_SYSTEM, SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertEquals(body["prompt"], <json>"<s>[INST] Be brief\n\nHello [/INST]");
+}
+
+@test:Config {}
+function testMistralTextRendersMultiTurnTemplate() returns error? {
+    ai:ChatMessage[] messages = [
+        {role: ai:USER, content: "First?"},
+        {role: ai:ASSISTANT, content: "Answer."},
+        {role: ai:USER, content: "Second?"}
+    ];
+    map<json> body = check encodeMistralText((), messages, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    // Assistant turns sit OUTSIDE the [INST] tokens and are closed with </s>.
+    test:assertEquals(body["prompt"], <json>"<s>[INST] First? [/INST] Answer.</s>[INST] Second? [/INST]");
+}
+
+@test:Config {}
+function testMistralTextDecodePopulatesUsageAndStopReason() returns error? {
+    json canned = {"outputs": [{"text": "hi there", "stop_reason": "length"}]};
+    DecodedResponse decoded = check decodeMistralText(canned);
+    test:assertEquals(decoded.message.content, "hi there");
+    // This dialect returns no token counts at all — usage must still be populated.
+    test:assertEquals(decoded.usage, {inputTokens: 0, outputTokens: 0});
+    test:assertEquals(decoded.stopReason, "length");
+}
+
+@test:Config {}
+function testMistralChatDecodeReadsStopReasonNotFinishReason() returns error? {
+    // The regression that motivated splitting Mistral off the OpenAI codec: this
+    // dialect spells it `stop_reason`, so the OpenAI decoder left stopReason empty.
+    json canned = {
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "stop_reason": "stop"}]
+    };
+    DecodedResponse decoded = check decodeMistralChat(canned);
+    test:assertEquals(decoded.stopReason, "stop");
+    test:assertEquals(decoded.message.content, "hello");
+    test:assertEquals(decoded.usage, {inputTokens: 0, outputTokens: 0});
+}
+
+@test:Config {}
+function testMistralChatKeepsSystemAsALeadingMessage() returns error? {
+    // Unlike Converse/Anthropic, this dialect DOES model system as a role (per the
+    // AWS page), so the hoisted system is re-added as the first message.
+    map<json> body = check encodeMistralChat(SAMPLE_SYSTEM, SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    json[] messages = check body["messages"].ensureType();
+    map<json> first = check messages[0].ensureType();
+    test:assertEquals(first["role"], "system");
+    test:assertEquals(first["content"], "Be brief");
+}
+
+@test:Config {}
+function testMistralDialectIsSelectedByModelId() returns error? {
+    // mistral-large-2402 is text-completion but mistral-large-2407 is chat: same
+    // family, four months apart, opposite wire shapes.
+    test:assertTrue(usesMistralTextDialect("mistral.mistral-large-2402-v1:0"));
+    test:assertFalse(usesMistralTextDialect("mistral.mistral-large-2407-v1:0"));
+    test:assertTrue(usesMistralTextDialect("mistral.mistral-7b-instruct-v0:2"));
+    test:assertTrue(usesMistralTextDialect("mistral.mixtral-8x7b-instruct-v0:1"));
+    // An id we have never seen defaults to the chat dialect, not the legacy one.
+    test:assertFalse(usesMistralTextDialect("mistral.mistral-large-9999-v1:0"));
+}
+
+@test:Config {}
+function testSelectInvokeCodecPicksTheRightMistralDialect() returns error? {
+    readonly & ModelCodec text = check selectInvokeCodec("mistral.mistral-7b-instruct-v0:2", ());
+    test:assertEquals(text.toolChoice, NO_TOOL_CHOICE);
+    readonly & ModelCodec chat = check selectInvokeCodec("mistral.mistral-large-2407-v1:0", ());
+    test:assertEquals(chat.toolChoice, MISTRAL_TOOL_CHOICE);
+    // modelSchema is the escape hatch when the id cannot say (imported ARNs).
+    readonly & ModelCodec forced = check selectInvokeCodec("my-imported-thing", MISTRAL_TEXT);
+    test:assertEquals(forced.toolChoice, NO_TOOL_CHOICE);
+}
