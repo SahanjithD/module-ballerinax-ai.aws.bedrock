@@ -21,7 +21,15 @@ import ballerina/jballerina.java;
 # Well-known OpenAI model ids on Bedrock. Any newer id can be passed as a `string`.
 public enum OpenAIModel {
     // Mantle-only (design §5.5) — these do not exist on bedrock-runtime.
+    # `bedrock-mantle` only, Responses API. No structured output.
+    GPT_5_6_SOL = "openai.gpt-5.6-sol",
+    # `bedrock-mantle` only, Responses API. No structured output.
+    GPT_5_6_TERRA = "openai.gpt-5.6-terra",
+    # `bedrock-mantle` only, Responses API. No structured output.
+    GPT_5_6_LUNA = "openai.gpt-5.6-luna",
+    # `bedrock-mantle` only, Responses API. No structured output.
     GPT_5_5 = "openai.gpt-5.5",
+    # `bedrock-mantle` only, Responses API. No structured output.
     GPT_5_4 = "openai.gpt-5.4",
     // Open-weight, on bedrock-runtime.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html

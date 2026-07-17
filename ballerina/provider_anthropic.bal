@@ -24,7 +24,14 @@ public enum AnthropicModel {
     CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
     CLAUDE_SONNET_4_6 = "anthropic.claude-sonnet-4-6",
     CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
-    CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview"
+    CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview",
+    # `bedrock-mantle` only (Messages API). No structured output.
+    #
+    # This model constrains sampling: temperature must be 1.0 or unset, and top_k is
+    # not supported — so the module's 0.7 default will be rejected. Pass
+    # `temperature = 1.0`. It also requires opting in to provider data sharing.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html
+    CLAUDE_MYTHOS_5 = "anthropic.claude-mythos-5"
 }
 
 # Anthropic-specific configuration (CLAUDE.md §3). Includes the shared
@@ -103,10 +110,11 @@ public isolated distinct client class AnthropicModelProvider {
         => runChat("Anthropic", self.family, self.wireModelId, self.codec, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
-    # Generates a value of the expected type via tool-forcing (Converse /
-    # Invoke-Anthropic) or prompt+parse+retry (Mantle) — design §8. External Java
-    # per the platform convention (§3); the shim calls back into
-    # `generateLlmResponse`, passing this provider's resolved state.
+    # Generates a value of the expected type by forcing a single tool whose schema
+    # is that type (design §8). Available on the Converse and Invoke routes; a
+    # Mantle-routed model returns an `ai:Error` for any target type other than
+    # `string`. External Java per the platform convention (§3); the shim calls back
+    # into `generateLlmResponse`, passing this provider's resolved state.
     #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type

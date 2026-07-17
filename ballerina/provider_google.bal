@@ -17,21 +17,40 @@ import ballerina/jballerina.java;
 
 // GoogleModelProvider — Gemma (open-weight). Gemini is NOT on Bedrock (CLAUDE.md §3).
 //
-// VERIFIED (CLAUDE.md §3 asked which endpoint serves Gemma): Gemma ships as a
-// fully-managed open-weight model on `bedrock-runtime` — it appears in the Bedrock
-// model-card catalogue under the `google.` prefix and in no Mantle table. So the
-// route is Converse and the SigV4 signing scope is `bedrock` (§9.4), which the
-// resolver reaches via the Converse sink (principle 3).
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-google.html
+// CLAUDE.md §3 asked which endpoint serves Gemma. The answer is BOTH, and it splits
+// by generation — the per-model cards are the only authority:
+//
+//   Gemma 3 — dual-homed. Its cards tick bedrock-runtime AND bedrock-mantle, so
+//             the module routes it to Converse (the richer surface). Note AWS's
+//             cards say "whenever possible, we recommend you use the bedrock-mantle
+//             endpoint"; Converse is supported, so this is a deliberate choice.
+//   Gemma 4 — bedrock-mantle ONLY. Its card marks bedrock-runtime / Converse /
+//             Invoke / Messages all NO, and serves it from `/openai/v1/responses`.
+//             So it signs `bedrock-mantle`, and it CANNOT do structured output.
+//
+// The routing lives in MANTLE_CAPABLE + MANTLE_DEFAULT (constants.bal), not here.
+//
+// HISTORY: this file previously claimed Gemma was on bedrock-runtime because it
+// appeared "in no Mantle table". That is routing by elimination — the very
+// inference the design forbids (§11 principle 2) — and it was wrong for Gemma 4.
+// A model's absence from a table is never evidence of its endpoint.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
 
 # Well-known Google Gemma model ids. Any newer id can be passed as a `string`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-google.html
 public enum GoogleModel {
+    # Converse on `bedrock-runtime` (also served on Mantle).
     GEMMA_3_4B_IT = "google.gemma-3-4b-it",
+    # Converse on `bedrock-runtime` (also served on Mantle).
     GEMMA_3_12B_IT = "google.gemma-3-12b-it",
+    # Converse on `bedrock-runtime` (also served on Mantle). AWS titles this card
+    # "Gemma 3 27B PT" but its id really is `-it` — do not "correct" this.
     GEMMA_3_27B_IT = "google.gemma-3-27b-it",
+    # `bedrock-mantle` ONLY — structured output is not available on this route.
     GEMMA_4_E2B = "google.gemma-4-e2b",
+    # `bedrock-mantle` ONLY — structured output is not available on this route.
     GEMMA_4_26B_A4B = "google.gemma-4-26b-a4b",
+    # `bedrock-mantle` ONLY — structured output is not available on this route.
     GEMMA_4_31B = "google.gemma-4-31b"
 }
 
@@ -40,7 +59,9 @@ public type GoogleConfig record {|
     *CommonModelConfig;
 |};
 
-# Google Gemma models on AWS Bedrock (Converse).
+# Google Gemma models on AWS Bedrock. Gemma 3 routes to Converse on
+# `bedrock-runtime`; Gemma 4 is served only on `bedrock-mantle` and therefore
+# supports neither structured output nor guardrails.
 public isolated distinct client class GoogleModelProvider {
     *ai:ModelProvider;
 
