@@ -52,8 +52,17 @@ final readonly & EmbeddingCodec COHERE_EMBED_V4_CODEC = {
 // of v3) would misroute every future id, so this matches the v4 family and lets
 // everything else fall to v3 — the shape the `-english-v3`/`-multilingual-v3` ids
 // use today.
-isolated function usesCohereEmbedV4(string modelId) returns boolean =>
-    modelId.startsWith("cohere.embed-v4");
+//
+// Normalizes FIRST because callers hold the wire id, which may carry a CRIS geo
+// prefix — Cohere Embed v4 is the one embedding model with Geo and Global
+// inference ids (`us.cohere.embed-v4:0`, `global.cohere.embed-v4:0`). Matching the
+// raw string would silently drop such a caller onto the v3 codec, sending v3's
+// truncate spelling and no `output_dimension` at all.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-cohere-embed-v4.html
+isolated function usesCohereEmbedV4(string modelId) returns boolean {
+    [string, string?] [bareId, _] = normalizeModelId(modelId);
+    return bareId.startsWith("cohere.embed-v4");
+}
 
 // The shared part of both request shapes (embedding design §6, §7). `input_type` is
 // REQUIRED on every request — omitting it is a 400, and the wrong value silently

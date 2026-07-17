@@ -24,6 +24,14 @@ import ballerina/ai;
 // Titan embeds exactly one text per InvokeModel call (embedding design §1).
 const int TITAN_MAX_BATCH = 1;
 
+// Titan Embed V1 ids, which have NO `dimensions` parameter (V2 added it). Strips
+// any CRIS geo prefix first, for the same reason as `usesCohereEmbedV4`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+isolated function isTitanEmbedV1(string modelId) returns boolean {
+    [string, string?] [bareId, _] = normalizeModelId(modelId);
+    return bareId.startsWith("amazon.titan-embed-text-v1");
+}
+
 // The Titan embedding codec (embedding design §7).
 final readonly & EmbeddingCodec TITAN_EMBED_CODEC = {
     maxBatchSize: TITAN_MAX_BATCH,

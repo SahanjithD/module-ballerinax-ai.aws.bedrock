@@ -71,11 +71,20 @@ public enum AuthHeaderStyle {
 }
 
 # Converse `serviceTier` passthrough (design §9.3).
+#
+# Values are AWS's, verbatim. Note there is no "standard" tier — the baseline is
+# spelled `default`. The member names carry a `TIER_` prefix because a bare
+# `DEFAULT` reads as a language keyword at the call site.
+# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
 public enum ServiceTier {
-    STANDARD,
-    PRIORITY,
-    FLEX,
-    RESERVED
+    # Baseline pay-per-token processing.
+    TIER_DEFAULT = "default",
+    # Higher throughput, time-based commitment.
+    TIER_PRIORITY = "priority",
+    # Lower cost for non-time-sensitive work.
+    TIER_FLEX = "flex",
+    # Dedicated throughput, term commitment.
+    TIER_RESERVED = "reserved"
 }
 
 # Whether a guardrail intervened on a response (design §9.5).

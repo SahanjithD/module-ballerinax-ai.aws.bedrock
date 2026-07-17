@@ -59,7 +59,9 @@ public distinct isolated client class TitanEmbeddingProvider {
             // Fail at construction, not per call (embedding design §8). Titan V2
             // accepts exactly three widths; V1 has no such parameter at all.
             // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
-            if wireModelId.startsWith("amazon.titan-embed-text-v1") {
+            // Normalize first: `wireModelId` may carry a CRIS geo prefix, and a raw
+            // `startsWith` would skip this guard for a prefixed id.
+            if isTitanEmbedV1(wireModelId) {
                 return error ai:Error(
                     string `'dimensions' is not supported by Titan Embed V1 ('${wireModelId}'), which ` +
                     string `always returns 1536-dimension vectors. Use 'amazon.titan-embed-text-v2:0'.`);

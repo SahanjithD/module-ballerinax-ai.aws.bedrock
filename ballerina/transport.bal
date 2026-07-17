@@ -113,13 +113,15 @@ isolated client class BedrockTransport {
             if jsonBody is error {
                 return error ai:LlmInvalidResponseError("Bedrock response was not valid JSON", jsonBody);
             }
-            // Capture the response headers the decoder/provider needs (§9.5):
-            // the Invoke guardrail-fired signal and the request id.
+            // Capture the response headers the decoder/provider needs (§9.5).
+            //
+            // The guardrail-fired signal is NOT here: it is a response BODY field
+            // (`amazon-bedrock-guardrailAction`), read by each Invoke codec via
+            // `invokeGuardrailAction`. InvokeModel documents only three response
+            // headers, and no guardrail among them — the `X-Amzn-Bedrock-Guardrail*`
+            // headers are request-only.
+            // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
             map<string> responseHeaders = {};
-            string? guardrailAction = optionalHeader(resp, "X-Amzn-Bedrock-GuardrailAction");
-            if guardrailAction is string {
-                responseHeaders[GUARDRAIL_ACTION_HEADER] = guardrailAction;
-            }
             string? requestId = optionalHeader(resp, "x-amzn-RequestId");
             if requestId is string {
                 responseHeaders[REQUEST_ID_HEADER] = requestId;
@@ -238,7 +240,6 @@ type TransportResponse record {|
 |};
 
 // Response-header keys captured into `TransportResponse.headers` (design §9.5).
-const GUARDRAIL_ACTION_HEADER = "guardrailAction";
 const REQUEST_ID_HEADER = "requestId";
 
 // A retryable transport outcome (429/408/500/503 or a connection failure — §9.5).
@@ -259,8 +260,16 @@ isolated function amzTimestamps() returns [string, string]|error {
     string d = pad(c.day, 2);
     string h = pad(c.hour, 2);
     string mi = pad(c.minute, 2);
+    // `time:Civil.second` is a decimal carrying sub-second precision. `<int>` on a
+    // decimal ROUNDS (half-to-even) in Ballerina — it does not truncate — so
+    // `<int>59.7d` is 60, and second 59 with a fraction >= 0.5 would emit
+    // "...T235960Z". That is not a valid ISO 8601 basic timestamp; AWS rejects the
+    // X-Amz-Date header, and the resulting 403 is NOT retryable. Roughly 1 request
+    // in 120 (P(second==59) * P(frac>=0.5)). `.floor()` truncates, which is what
+    // SigV4 wants: whole seconds, no milliseconds.
+    // https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-signing-elements.html
     decimal secDec = c.second ?: 0;
-    string s = pad(<int>secDec, 2);
+    string s = pad(<int>secDec.floor(), 2);
     string amzDate = string `${y}${mo}${d}T${h}${mi}${s}Z`;
     string dateStamp = string `${y}${mo}${d}`;
     return [amzDate, dateStamp];

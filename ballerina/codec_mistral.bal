@@ -182,7 +182,7 @@ isolated function decodeMistralChat(json response) returns DecodedResponse|ai:Er
         usage: {inputTokens, outputTokens},
         stopReason,
         responseId: strField(r, "id"),
-        guardrailAction: (),
+        guardrailAction: invokeGuardrailAction(r), // body field (§9.5)
         additionalModelResponseFields: ()
     };
 }
@@ -296,7 +296,7 @@ isolated function decodeMistralText(json response) returns DecodedResponse|ai:Er
         // No response id in the body; the transport fills it from the request-id
         // header (§9.5).
         responseId: (),
-        guardrailAction: (),
+        guardrailAction: invokeGuardrailAction(r), // body field (§9.5)
         additionalModelResponseFields: ()
     };
 }

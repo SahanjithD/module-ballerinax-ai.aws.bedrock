@@ -68,12 +68,29 @@ isolated function runChat(string providerName, ApiFamily family, string wireMode
         span.close(decoded);
         return decoded;
     }
-    // Surface the Invoke guardrail-fired signal / request id from headers (§9.5).
+    // Surface the request id from the response headers (§9.5).
     augmentFromHeaders(decoded, response.headers);
 
     span.addInputTokenCount(decoded.usage.inputTokens);
     span.addOutputTokenCount(decoded.usage.outputTokens);
-    span.addFinishReason(decoded.stopReason);
+    // A fired guardrail must never be silently dropped (§9.5) — that is the whole
+    // reason `decode` returns a record rather than a bare message (§3.2, §7).
+    //
+    // The `ai:ModelProvider` contract has nowhere to put this: `chat()` returns an
+    // `ai:ChatAssistantMessage`, which carries no guardrail field, and turning an
+    // intervention into an error would break callers who guardrail every request by
+    // policy and expect the blocked-content message back. So the signal goes to the
+    // span's finish reason — the one channel that both survives to the caller's
+    // observability backend and is already keyed on "why did generation stop".
+    //
+    // Converse already reports `guardrail_intervened` as its stopReason, so this
+    // only changes behaviour on the Invoke route, where the body field is the
+    // only source.
+    if decoded.guardrailAction == INTERVENED && decoded.stopReason != "guardrail_intervened" {
+        span.addFinishReason("guardrail_intervened");
+    } else {
+        span.addFinishReason(decoded.stopReason);
+    }
     string? responseId = decoded.responseId;
     if responseId is string {
         span.addResponseId(responseId);

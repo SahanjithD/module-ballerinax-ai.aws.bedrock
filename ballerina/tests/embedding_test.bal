@@ -322,3 +322,31 @@ function testCohereV4AcceptsItsSupportedWidths() returns error? {
         CohereEmbeddingProvider _ = check new (TEST_CREDS, COHERE_EMBED_V4, "us-east-1", dimensions = d);
     }
 }
+
+@test:Config {}
+function testCohereVersionSurvivesACrisGeoPrefix() {
+    // REGRESSION: the provider passes the WIRE id (geo prefix restored) to the
+    // version check. A raw startsWith("cohere.embed-v4") missed `us.`/`global.`
+    // prefixed ids and silently selected the v3 codec — wrong truncate spelling and
+    // no output_dimension, with no error. Cohere Embed v4 is the one embedding
+    // model AWS gives Geo AND Global inference ids.
+    test:assertTrue(usesCohereEmbedV4("us.cohere.embed-v4:0"));
+    test:assertTrue(usesCohereEmbedV4("eu.cohere.embed-v4:0"));
+    test:assertTrue(usesCohereEmbedV4("global.cohere.embed-v4:0"));
+    test:assertFalse(usesCohereEmbedV4("us.cohere.embed-english-v3"));
+}
+
+@test:Config {}
+function testTitanV1GuardSurvivesACrisGeoPrefix() {
+    test:assertTrue(isTitanEmbedV1("amazon.titan-embed-text-v1"));
+    test:assertTrue(isTitanEmbedV1("us.amazon.titan-embed-text-v1"));
+    test:assertFalse(isTitanEmbedV1("amazon.titan-embed-text-v2:0"));
+    test:assertFalse(isTitanEmbedV1("us.amazon.titan-embed-text-v2:0"));
+}
+
+@test:Config {}
+function testCrisPrefixedCohereV4StillGetsTheV4Codec() returns error? {
+    // End-to-end through construction: a geo-prefixed v4 id must accept `dimensions`
+    // (v3 rejects it) and reach the wire as `output_dimension`.
+    CohereEmbeddingProvider _ = check new (TEST_CREDS, "us.cohere.embed-v4:0", "us-east-1", dimensions = 256);
+}

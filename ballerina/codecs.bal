@@ -75,6 +75,15 @@ final readonly & ModelCodec INVOKE_OPENAI_CHAT_CODEC = {
     supportsStreaming: false
 };
 
+// Invoke-DeepSeek — text completion: `prompt` → `choices[].text`. NOT the OpenAI
+// chat shape, despite the shared `choices` wrapper (§7.2).
+final readonly & ModelCodec INVOKE_DEEPSEEK_CODEC = {
+    encode: encodeDeepSeekInvoke,
+    decode: decodeDeepSeekInvoke,
+    toolChoice: NO_TOOL_CHOICE,
+    supportsStreaming: false
+};
+
 // Invoke-Mistral chat completion — `messages`/`choices`, `tool_choice: "any"` (§7.2).
 final readonly & ModelCodec INVOKE_MISTRAL_CHAT_CODEC = {
     encode: encodeMistralChat,
@@ -127,8 +136,11 @@ isolated function selectInvokeCodec(string bareModelId, ModelSchema? schema) ret
             NOVA => {
                 return INVOKE_NOVA_CODEC;
             }
-            OPENAI|DEEPSEEK => {
+            OPENAI => {
                 return INVOKE_OPENAI_CHAT_CODEC;
+            }
+            DEEPSEEK => {
+                return INVOKE_DEEPSEEK_CODEC;
             }
             MISTRAL => {
                 return INVOKE_MISTRAL_CHAT_CODEC;
@@ -150,8 +162,12 @@ isolated function selectInvokeCodec(string bareModelId, ModelSchema? schema) ret
     if bareModelId.startsWith("mistral.") {
         return usesMistralTextDialect(bareModelId) ? INVOKE_MISTRAL_TEXT_CODEC : INVOKE_MISTRAL_CHAT_CODEC;
     }
+    if bareModelId.startsWith("deepseek.") {
+        // Text completion, NOT the OpenAI chat shape — see codec_deepseek.bal.
+        return INVOKE_DEEPSEEK_CODEC;
+    }
     if bareModelId.startsWith("openai.") || bareModelId.startsWith("qwen.") ||
-        bareModelId.startsWith("deepseek.") || bareModelId.startsWith("zai.") {
+        bareModelId.startsWith("zai.") {
         return INVOKE_OPENAI_CHAT_CODEC;
     }
     return error(string `no InvokeModel codec for '${bareModelId}'; pass 'modelSchema' or use Converse`);

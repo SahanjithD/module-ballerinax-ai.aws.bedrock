@@ -70,7 +70,10 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
     }
     ServiceTier? tier = params.serviceTier;
     if tier is ServiceTier {
-        body["serviceTier"] = tier.toString().toLowerAscii();
+        // An OBJECT, not a bare string: the Converse request syntax is
+        // `"serviceTier": { "type": "string" }`. Emitting the string 400s.
+        // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        body["serviceTier"] = {"type": tier};
     }
     // Guardrail is a Converse BODY field (design §9.5).
     GuardrailConfig? guardrail = params.guardrail;
@@ -174,7 +177,9 @@ isolated function decodeConverse(json response) returns DecodedResponse|ai:Error
         usage: {inputTokens, outputTokens},
         stopReason,
         responseId: (), // Converse returns the request id in a header, not the body
-        guardrailAction: stopReason == "guardrail_intervened" ? INTERVENED : (), // §9.5
+        // Converse reports it via stopReason; Nova-on-Invoke shares this decoder
+        // but reports it as a body field instead, so check both (§9.5).
+        guardrailAction: stopReason == "guardrail_intervened" ? INTERVENED : invokeGuardrailAction(r),
         additionalModelResponseFields: r["additionalModelResponseFields"]
     };
 }

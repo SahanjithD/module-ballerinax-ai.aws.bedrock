@@ -23,10 +23,16 @@ import ballerina/jballerina.java;
 // and principle 7 reserves construction errors for what AWS cannot tell us. The
 // resolver strips/re-applies the geo prefix for you (§5.3).
 
-# Well-known DeepSeek model ids. Prefix with a CRIS geo (e.g. `us.`) — see the
-# note above. Any newer id can be passed as a `string`.
+# Well-known DeepSeek model ids. Any newer id can be passed as a `string`.
 public enum DeepSeekModel {
-    DEEPSEEK_R1 = "deepseek.r1-v1:0"
+    # The CRIS (cross-region) profile id, NOT the bare `deepseek.r1-v1:0`.
+    #
+    # This is deliberate: the card's Regional Availability table marks In-Region as
+    # NO in *every* region and Geo as YES, so the bare id is not callable anywhere —
+    # `us.` is the only form that resolves. US is also the only geo AWS lists for
+    # this model. Pass a raw string if you need a different profile.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html
+    DEEPSEEK_R1 = "us.deepseek.r1-v1:0"
 }
 
 # DeepSeek-specific configuration (CLAUDE.md §3).

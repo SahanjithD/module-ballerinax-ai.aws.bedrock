@@ -92,17 +92,27 @@ isolated function arrField(map<json> m, string k) returns json[]? {
     return v is json[] ? v : ();
 }
 
-// Augments a decoded response with values that arrive in RESPONSE HEADERS rather
-// than the body (design §9.5): the Invoke guardrail-fired signal and the request
-// id. No-op when the codec already populated them from the body (e.g. Converse
-// `stopReason: guardrail_intervened`).
-isolated function augmentFromHeaders(DecodedResponse decoded, map<string> headers) {
-    if decoded.guardrailAction is () {
-        string? action = headers[GUARDRAIL_ACTION_HEADER];
-        if action is string {
-            decoded.guardrailAction = action.toUpperAscii() == "INTERVENED" ? INTERVENED : NONE;
-        }
+// Reads the InvokeModel guardrail-fired signal out of a response BODY (§9.5).
+//
+// It is a body field, NOT a response header. The InvokeModel Response Syntax has
+// exactly three headers (contentType, performanceConfigLatency, serviceTier); the
+// `X-Amzn-Bedrock-Guardrail*` headers are REQUEST-only. This module previously read
+// a nonexistent `X-Amzn-Bedrock-GuardrailAction` response header, which meant every
+// Invoke codec except Anthropic's silently reported "no guardrail fired" when one
+// had — a safety signal dropped on 4 of 7 vendors.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+// (Response Syntax + Example 4: `"amazon-bedrock-guardrailAction": "INTERVENED | NONE"`)
+isolated function invokeGuardrailAction(map<json> body) returns GuardrailAction? {
+    string? action = strField(body, "amazon-bedrock-guardrailAction");
+    if action is () {
+        return ();
     }
+    return action.toUpperAscii() == "INTERVENED" ? INTERVENED : NONE;
+}
+
+// Augments a decoded response with the request id, which arrives in a RESPONSE
+// HEADER rather than the body (§9.5). No-op when the codec already set it.
+isolated function augmentFromHeaders(DecodedResponse decoded, map<string> headers) {
     if decoded.responseId is () {
         string? requestId = headers[REQUEST_ID_HEADER];
         if requestId is string {

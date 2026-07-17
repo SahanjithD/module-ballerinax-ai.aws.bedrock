@@ -68,10 +68,18 @@ function testConverseSigningServiceIsBedrock() returns error? {
     test:assertEquals(ep.signingService, "bedrock");
 }
 
-// Invoke guardrail-fired signal / request id arrive in response headers (§9.5).
+// The Invoke guardrail-fired signal is a response BODY field; only the request id
+// arrives in a header (§9.5).
+//
+// REGRESSION: these tests previously asserted that a `GUARDRAIL_ACTION_HEADER` map
+// entry produced INTERVENED, under the comment "the guardrail signal arrives in
+// response headers". They passed by hand-injecting an entry the transport could
+// never populate — InvokeModel documents no such response header. Green tests,
+// dropped safety signal.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
 
 @test:Config {}
-function testAugmentFromHeadersSurfacesInvokeGuardrailAndRequestId() {
+function testAugmentFromHeadersSurfacesRequestId() {
     DecodedResponse decoded = {
         message: {role: ai:ASSISTANT, content: "hi"},
         usage: {inputTokens: 1, outputTokens: 1},
@@ -80,24 +88,73 @@ function testAugmentFromHeadersSurfacesInvokeGuardrailAndRequestId() {
         guardrailAction: (),
         additionalModelResponseFields: ()
     };
-    map<string> headers = {[GUARDRAIL_ACTION_HEADER]: "INTERVENED", [REQUEST_ID_HEADER]: "req-123"};
-    augmentFromHeaders(decoded, headers);
-    test:assertEquals(decoded.guardrailAction, INTERVENED, "Invoke guardrail-fired signal must not be dropped");
+    augmentFromHeaders(decoded, {[REQUEST_ID_HEADER]: "req-123"});
     test:assertEquals(decoded.responseId, "req-123");
 }
 
 @test:Config {}
-function testAugmentFromHeadersDoesNotOverrideBodyGuardrail() {
-    // Converse already set INTERVENED from the body stopReason — headers must not clobber it.
+function testAugmentFromHeadersDoesNotOverrideAResponseIdFromTheBody() {
     DecodedResponse decoded = {
         message: {role: ai:ASSISTANT, content: ""},
         usage: {inputTokens: 1, outputTokens: 0},
-        stopReason: "guardrail_intervened",
+        stopReason: "end_turn",
         responseId: "existing",
-        guardrailAction: INTERVENED,
+        guardrailAction: (),
         additionalModelResponseFields: ()
     };
-    augmentFromHeaders(decoded, {[GUARDRAIL_ACTION_HEADER]: "NONE", [REQUEST_ID_HEADER]: "other"});
-    test:assertEquals(decoded.guardrailAction, INTERVENED);
+    augmentFromHeaders(decoded, {[REQUEST_ID_HEADER]: "other"});
     test:assertEquals(decoded.responseId, "existing");
+}
+
+@test:Config {}
+function testInvokeGuardrailActionReadsTheBodyField() {
+    test:assertEquals(invokeGuardrailAction({"amazon-bedrock-guardrailAction": "INTERVENED"}), INTERVENED);
+    test:assertEquals(invokeGuardrailAction({"amazon-bedrock-guardrailAction": "NONE"}), NONE);
+    test:assertEquals(invokeGuardrailAction({"other": 1}), (), "absent field means no signal, not NONE");
+}
+
+@test:Config {}
+function testEveryInvokeCodecSurfacesAFiredGuardrail() returns error? {
+    // §9.5: the fired signal is never dropped on ANY Invoke dialect. Each of these
+    // decoders previously hardcoded `guardrailAction: ()`.
+    json mistralChat = {
+        "choices": [{"message": {"role": "assistant", "content": "blocked"}, "stop_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeMistralChat(mistralChat)).guardrailAction, INTERVENED);
+
+    json mistralText = {
+        "outputs": [{"text": "blocked", "stop_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeMistralText(mistralText)).guardrailAction, INTERVENED);
+
+    json openAIChat = {
+        "choices": [{"message": {"role": "assistant", "content": "blocked"}, "finish_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeOpenAIChat(openAIChat)).guardrailAction, INTERVENED);
+
+    json deepSeek = {
+        "choices": [{"text": "blocked", "stop_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeDeepSeekInvoke(deepSeek)).guardrailAction, INTERVENED);
+
+    // Nova-on-Invoke shares the Converse decoder but reports via the body field.
+    json novaInvoke = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "blocked"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1},
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeConverse(novaInvoke)).guardrailAction, INTERVENED);
+
+    // Converse proper still reports it via stopReason.
+    json converse = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "blocked"}]}},
+        "stopReason": "guardrail_intervened",
+        "usage": {"inputTokens": 1, "outputTokens": 1}
+    };
+    test:assertEquals((check decodeConverse(converse)).guardrailAction, INTERVENED);
 }

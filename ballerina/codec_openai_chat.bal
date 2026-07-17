@@ -157,7 +157,7 @@ isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Err
         usage: {inputTokens, outputTokens},
         stopReason,
         responseId: strField(r, "id"),
-        guardrailAction: (),
+        guardrailAction: invokeGuardrailAction(r), // body field (§9.5)
         additionalModelResponseFields: ()
     };
 }

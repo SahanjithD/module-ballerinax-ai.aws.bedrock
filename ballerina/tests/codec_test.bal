@@ -271,3 +271,74 @@ function testSelectInvokeCodecPicksTheRightMistralDialect() returns error? {
     readonly & ModelCodec forced = check selectInvokeCodec("my-imported-thing", MISTRAL_TEXT);
     test:assertEquals(forced.toolChoice, NO_TOOL_CHOICE);
 }
+
+// ---- DeepSeek: text completion, not the OpenAI chat shape ----
+
+@test:Config {}
+function testDeepSeekInvokeEmitsPromptNotMessages() returns error? {
+    // REGRESSION: DeepSeek was routed to the OpenAI chat codec, which emits
+    // `messages` — a 400 on every DeepSeek Invoke request. AWS documents this
+    // dialect as text completion.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
+    map<json> body = check encodeDeepSeekInvoke((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertTrue(body.hasKey("prompt"));
+    test:assertFalse(body.hasKey("messages"), "DeepSeek's Invoke dialect has no messages array");
+    string prompt = check body["prompt"].ensureType();
+    test:assertTrue(prompt.includes("Hello"));
+    test:assertTrue(prompt.startsWith("<｜begin▁of▁sentence｜>"), "must use DeepSeek's own delimiters");
+    test:assertTrue(prompt.endsWith("<｜Assistant｜><think>\n"), "must hand the turn over and open <think>");
+}
+
+@test:Config {}
+function testDeepSeekDecodeReadsChoicesTextNotMessage() returns error? {
+    // The `choices` wrapper makes it look OpenAI-shaped, but the payload is
+    // `choices[].text` + `stop_reason`, and there is no usage object at all.
+    json canned = {"choices": [{"text": "the answer", "stop_reason": "length"}]};
+    DecodedResponse decoded = check decodeDeepSeekInvoke(canned);
+    test:assertEquals(decoded.message.content, "the answer");
+    test:assertEquals(decoded.stopReason, "length");
+    test:assertEquals(decoded.usage, {inputTokens: 0, outputTokens: 0});
+}
+
+@test:Config {}
+function testDeepSeekRejectsToolsRatherThanDroppingThem() {
+    json|ai:Error encoded = encodeDeepSeekInvoke((), SAMPLE_MESSAGES, [RESULT_TOOL_DEF], (),
+            {temperature: 0.5, maxTokens: 100});
+    test:assertTrue(encoded is ai:Error, "this dialect has no tools; dropping them silently would be worse");
+}
+
+@test:Config {}
+function testDeepSeekSelectsItsOwnInvokeCodec() returns error? {
+    readonly & ModelCodec byPrefix = check selectInvokeCodec("deepseek.r1-v1:0", ());
+    test:assertEquals(byPrefix.toolChoice, NO_TOOL_CHOICE);
+    readonly & ModelCodec bySchema = check selectInvokeCodec("my-imported-deepseek", DEEPSEEK);
+    test:assertEquals(bySchema.toolChoice, NO_TOOL_CHOICE);
+    // GPT-OSS/Qwen keep the OpenAI chat codec.
+    readonly & ModelCodec openai = check selectInvokeCodec("openai.gpt-oss-120b-1:0", ());
+    test:assertEquals(openai.toolChoice, OPENAI_TOOL_CHOICE);
+}
+
+// ---- Converse serviceTier is an object, not a string ----
+
+@test:Config {}
+function testConverseServiceTierIsAnObjectWithAwsValues() returns error? {
+    // REGRESSION: emitted as a bare string `"standard"` — wrong shape AND wrong
+    // value (AWS's baseline tier is `default`; there is no `standard`). Any user
+    // setting serviceTier got a 400 whose message blamed the route.
+    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100, serviceTier: TIER_FLEX}).ensureType();
+    test:assertEquals(body["serviceTier"], <json>{"type": "flex"});
+
+    map<json> dflt = check encodeConverse((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100, serviceTier: TIER_DEFAULT}).ensureType();
+    test:assertEquals(dflt["serviceTier"], <json>{"type": "default"});
+}
+
+@test:Config {}
+function testConverseOmitsServiceTierWhenUnset() returns error? {
+    map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertFalse(body.hasKey("serviceTier"));
+}
