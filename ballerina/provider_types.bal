@@ -193,6 +193,9 @@ public type ModelCodec record {|
     RequestCodec encode;
     # Wire JSON → `DecodedResponse`.
     ResponseCodec decode;
+    # How structured generation forces the single result tool on this dialect (§8).
+    # Lives on the codec because tool-choice tracks the wire shape, not the route family.
+    ToolChoiceStyle toolChoice;
     # Populated, unused today — streaming is out of scope (§9.6).
     boolean supportsStreaming;
 |};

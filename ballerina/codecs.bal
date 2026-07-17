@@ -20,6 +20,7 @@
 final readonly & ModelCodec CONVERSE_CODEC = {
     encode: encodeConverse,
     decode: decodeConverse,
+    toolChoice: CONVERSE_TOOL_CHOICE,
     supportsStreaming: true
 };
 
@@ -27,6 +28,7 @@ final readonly & ModelCodec CONVERSE_CODEC = {
 final readonly & ModelCodec INVOKE_ANTHROPIC_CODEC = {
     encode: encodeInvokeAnthropic,
     decode: decodeAnthropicMessages,
+    toolChoice: ANTHROPIC_TOOL_CHOICE,
     supportsStreaming: true
 };
 
@@ -34,6 +36,7 @@ final readonly & ModelCodec INVOKE_ANTHROPIC_CODEC = {
 final readonly & ModelCodec MANTLE_MESSAGES_CODEC = {
     encode: encodeMantleMessages,
     decode: decodeAnthropicMessages,
+    toolChoice: ANTHROPIC_TOOL_CHOICE,
     supportsStreaming: false
 };
 
@@ -41,6 +44,7 @@ final readonly & ModelCodec MANTLE_MESSAGES_CODEC = {
 final readonly & ModelCodec MANTLE_RESPONSES_CODEC = {
     encode: encodeResponses,
     decode: decodeResponses,
+    toolChoice: OPENAI_TOOL_CHOICE,
     supportsStreaming: false
 };
 
@@ -48,20 +52,42 @@ final readonly & ModelCodec MANTLE_RESPONSES_CODEC = {
 final readonly & ModelCodec MANTLE_CHAT_CODEC = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
+    toolChoice: OPENAI_TOOL_CHOICE,
     supportsStreaming: false
 };
 
 // Nova InvokeModel — `schemaVersion: messages-v1`; Converse-shaped response (§7.2).
+// Nova's Invoke body is Converse-shaped, so it forces tools the CONVERSE way even
+// though the route family is INVOKE — see `ToolChoiceStyle`.
 final readonly & ModelCodec INVOKE_NOVA_CODEC = {
     encode: encodeNovaInvoke,
     decode: decodeConverse,
+    toolChoice: CONVERSE_TOOL_CHOICE,
     supportsStreaming: true
 };
 
-// OpenAI-shaped InvokeModel — GPT-OSS, Qwen, DeepSeek, Mistral chat (§7.2).
+// OpenAI-shaped InvokeModel — GPT-OSS, Qwen, DeepSeek (§7.2). NOT Mistral: that
+// dialect differs on stop_reason, tool_choice, and usage — see `codec_mistral.bal`.
 final readonly & ModelCodec INVOKE_OPENAI_CHAT_CODEC = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
+    toolChoice: OPENAI_TOOL_CHOICE,
+    supportsStreaming: false
+};
+
+// Invoke-Mistral chat completion — `messages`/`choices`, `tool_choice: "any"` (§7.2).
+final readonly & ModelCodec INVOKE_MISTRAL_CHAT_CODEC = {
+    encode: encodeMistralChat,
+    decode: decodeMistralChat,
+    toolChoice: MISTRAL_TOOL_CHOICE,
+    supportsStreaming: false
+};
+
+// Invoke-Mistral text completion — `prompt`/`outputs`; no tools at all (§7.2).
+final readonly & ModelCodec INVOKE_MISTRAL_TEXT_CODEC = {
+    encode: encodeMistralText,
+    decode: decodeMistralText,
+    toolChoice: NO_TOOL_CHOICE,
     supportsStreaming: false
 };
 
@@ -101,8 +127,14 @@ isolated function selectInvokeCodec(string bareModelId, ModelSchema? schema) ret
             NOVA => {
                 return INVOKE_NOVA_CODEC;
             }
-            OPENAI|MISTRAL|DEEPSEEK => {
+            OPENAI|DEEPSEEK => {
                 return INVOKE_OPENAI_CHAT_CODEC;
+            }
+            MISTRAL => {
+                return INVOKE_MISTRAL_CHAT_CODEC;
+            }
+            MISTRAL_TEXT => {
+                return INVOKE_MISTRAL_TEXT_CODEC;
             }
             LLAMA => {
                 return error("Llama Invoke codec is intentionally out of scope for this build (CLAUDE.md §3)");
@@ -115,10 +147,31 @@ isolated function selectInvokeCodec(string bareModelId, ModelSchema? schema) ret
     if bareModelId.startsWith("amazon.") {
         return INVOKE_NOVA_CODEC;
     }
+    if bareModelId.startsWith("mistral.") {
+        return usesMistralTextDialect(bareModelId) ? INVOKE_MISTRAL_TEXT_CODEC : INVOKE_MISTRAL_CHAT_CODEC;
+    }
     if bareModelId.startsWith("openai.") || bareModelId.startsWith("qwen.") ||
-        bareModelId.startsWith("deepseek.") || bareModelId.startsWith("mistral.") ||
-        bareModelId.startsWith("zai.") {
+        bareModelId.startsWith("deepseek.") || bareModelId.startsWith("zai.") {
         return INVOKE_OPENAI_CHAT_CODEC;
     }
     return error(string `no InvokeModel codec for '${bareModelId}'; pass 'modelSchema' or use Converse`);
 }
+
+// Mistral ids that speak the `prompt`/`outputs` TEXT-completion dialect on
+// InvokeModel. Everything else under `mistral.` speaks chat completion.
+//
+// This is an allowlist of the legacy dialect rather than the reverse because the
+// two are told apart only by exact id — `mistral-large-2402` is text-completion
+// while `mistral-large-2407` is chat-completion, same family, four months apart.
+// New ids therefore default to chat, and a wrong guess surfaces as a Bedrock
+// `ValidationException` the caller can act on; `modelSchema: MISTRAL_TEXT` is the
+// escape hatch.
+//
+// text:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
+//        (supported models: Mistral 7B Instruct, Mixtral 8X7B; AWS's own InvokeModel
+//        examples use this dialect for `mistral.mistral-large-2402-v1:0`)
+// chat:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-large-2407.html
+isolated function usesMistralTextDialect(string bareModelId) returns boolean =>
+    bareModelId.startsWith("mistral.mistral-7b-instruct") ||
+    bareModelId.startsWith("mistral.mixtral-") ||
+    bareModelId.startsWith("mistral.mistral-large-2402");

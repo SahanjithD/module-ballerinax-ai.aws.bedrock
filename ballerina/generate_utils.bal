@@ -51,7 +51,18 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
             string `'${wireModelId}'; the target type must be 'string'. Use a Converse/Invoke model ` +
             string `for typed generation.`);
     }
-    return generateByToolForcing(family, codec, transport, wireModelId, extraHeaders, params, prompt, td, schema);
+    if codec.toolChoice == NO_TOOL_CHOICE {
+        // A dialect with no tool-calling at all (Mistral text completion). Same
+        // shape as the Mantle guard, and reversible the same way.
+        if td is typedesc<string> {
+            return plainTextResponse(codec, transport, wireModelId, extraHeaders, params, prompt);
+        }
+        return error ai:LlmInvalidGenerationError(
+            string `Structured output is not supported for model '${wireModelId}': its InvokeModel ` +
+            string `dialect (Mistral text completion) has no tool-calling, so the target type must be ` +
+            string `'string'. Use the Converse route (the module default) for typed generation.`);
+    }
+    return generateByToolForcing(codec, transport, wireModelId, extraHeaders, params, prompt, td, schema);
 }
 
 // Plain-text generation for the Mantle route when the target type is `string`
@@ -80,7 +91,7 @@ isolated function plainTextResponse(readonly & ModelCodec codec, BedrockTranspor
 
 // Tier 1 — force a single tool whose schema is the expected type; parse the
 // tool-call arguments back into the record (design §8).
-isolated function generateByToolForcing(ApiFamily family, readonly & ModelCodec codec,
+isolated function generateByToolForcing(readonly & ModelCodec codec,
         BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td,
         map<json>? schema) returns anydata|ai:Error {
@@ -95,7 +106,7 @@ isolated function generateByToolForcing(ApiFamily family, readonly & ModelCodec 
     if encoded is ai:Error {
         return encoded;
     }
-    json body = applyToolChoice(encoded, family, RESULT_TOOL);
+    json body = applyToolChoice(encoded, codec.toolChoice, RESULT_TOOL);
     TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
     if response is ai:Error {
         return response;
@@ -121,20 +132,34 @@ isolated function generateByToolForcing(ApiFamily family, readonly & ModelCodec 
         string `Model did not return a '${RESULT_TOOL}' tool call for structured output`);
 }
 
-// Forces the single result tool on the encoded body, per route (design §8).
-isolated function applyToolChoice(json body, ApiFamily family, string toolName) returns json {
+// Forces the single result tool on the encoded body (design §8). Keyed on the
+// CODEC's dialect, not the route family: Nova on InvokeModel is Converse-shaped,
+// and Mistral chat forces with a bare string. Deriving this from `ApiFamily` sends
+// Anthropic's `tool_choice` to every non-Converse dialect, which they ignore —
+// the model then answers in prose and `generate()` fails with "no tool call".
+isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolName) returns json {
     if body !is map<json> {
         return body;
     }
     map<json> forced = body.clone();
-    if family == CONVERSE {
-        json existing = forced["toolConfig"];
-        map<json> toolConfig = existing is map<json> ? existing.clone() : {};
-        toolConfig["toolChoice"] = {"tool": {"name": toolName}};
-        forced["toolConfig"] = toolConfig;
-    } else {
-        // Anthropic Messages (Invoke / Mantle) tool_choice.
-        forced["tool_choice"] = {"type": "tool", "name": toolName};
+    match style {
+        CONVERSE_TOOL_CHOICE => {
+            json existing = forced["toolConfig"];
+            map<json> toolConfig = existing is map<json> ? existing.clone() : {};
+            toolConfig["toolChoice"] = {"tool": {"name": toolName}};
+            forced["toolConfig"] = toolConfig;
+        }
+        ANTHROPIC_TOOL_CHOICE => {
+            forced["tool_choice"] = {"type": "tool", "name": toolName};
+        }
+        OPENAI_TOOL_CHOICE => {
+            forced["tool_choice"] = {"type": "function", "function": {"name": toolName}};
+        }
+        MISTRAL_TOOL_CHOICE => {
+            // Mistral cannot name the forced tool — `"any"` means "call some tool".
+            // Safe here because generate() supplies exactly one tool.
+            forced["tool_choice"] = "any";
+        }
     }
     return forced;
 }

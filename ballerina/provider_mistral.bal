@@ -16,10 +16,23 @@ import ballerina/ai;
 import ballerina/jballerina.java;
 
 // MistralModelProvider — Converse (default) + Invoke-Mistral (CLAUDE.md §3).
+//
+// On the INVOKE route Mistral speaks two incompatible dialects picked by model id
+// (see `usesMistralTextDialect` in codecs.bal). The Converse default hides this;
+// it only matters when forcing `apiFamily = INVOKE`.
 
 # Well-known Mistral model ids. Any newer id can be passed as a `string`.
 public enum MistralModel {
-    MISTRAL_LARGE_2407 = "mistral.mistral-large-2407-v1:0"
+    # Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-large-2407.html
+    MISTRAL_LARGE_2407 = "mistral.mistral-large-2407-v1:0",
+    # TEXT-completion dialect on InvokeModel (`prompt`/`outputs`) — note this is the
+    # opposite dialect to its 24.07 sibling above, despite the shared family name.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime_example_bedrock-runtime_InvokeModel_MistralAi_section.html
+    MISTRAL_LARGE_2402 = "mistral.mistral-large-2402-v1:0",
+    # TEXT-completion dialect on InvokeModel; no tool-calling.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
+    MISTRAL_7B_INSTRUCT = "mistral.mistral-7b-instruct-v0:2"
 }
 
 # Mistral-specific configuration (CLAUDE.md §3).

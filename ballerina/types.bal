@@ -33,8 +33,34 @@ public enum ModelSchema {
     OPENAI,
     NOVA,
     LLAMA,
+    # Mistral's `messages`/`choices` chat-completion dialect (Mistral Large 24.07).
     MISTRAL,
+    # Mistral's `prompt`/`outputs` text-completion dialect (7B, Mixtral, Large 24.02).
+    # A SEPARATE schema because the two dialects share a vendor prefix but no wire
+    # shape, and an imported model's id cannot tell them apart.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
+    MISTRAL_TEXT,
     DEEPSEEK
+}
+
+# How a wire dialect forces a single named tool (design §8). This is a property of
+# the CODEC, not the route: Nova on InvokeModel is Converse-shaped, and Mistral's
+# chat dialect looks OpenAI-shaped but forces tools with the bare string `"any"`.
+# Deriving it from `ApiFamily` silently emits the wrong field for those dialects.
+public enum ToolChoiceStyle {
+    # Converse: `toolConfig.toolChoice = {"tool": {"name": ...}}`.
+    CONVERSE_TOOL_CHOICE,
+    # Anthropic Messages: `tool_choice = {"type": "tool", "name": ...}`.
+    ANTHROPIC_TOOL_CHOICE,
+    # OpenAI: `tool_choice = {"type": "function", "function": {"name": ...}}`.
+    OPENAI_TOOL_CHOICE,
+    # Mistral chat completion: `tool_choice = "any"` — a bare string, and it cannot
+    # name the tool, so forcing works only when exactly one tool is supplied.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-chat-completion.html
+    MISTRAL_TOOL_CHOICE,
+    # The dialect has no tool-calling at all (Mistral text completion), so
+    # structured output is impossible on it.
+    NO_TOOL_CHOICE
 }
 
 # Auth-header style for a Mantle model. Per-model data, not derivable from the
