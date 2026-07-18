@@ -22,6 +22,13 @@ import ballerina/jballerina.java;
 # a `string` (design §5.5, principle 4).
 public enum AnthropicModel {
     CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
+    # Claude Sonnet 5 — the current flagship Sonnet (1M context, adaptive thinking
+    # always on). Converse + Invoke + Messages; dual-homed (bedrock-runtime and
+    # bedrock-mantle), so it defaults to Converse and opts into Mantle explicitly.
+    # In-Region callable in us-east-1 (not every region — some are Geo/Global only);
+    # geo profiles `us.`/`eu.`/`au.` and `global.` also work.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+    CLAUDE_SONNET_5 = "anthropic.claude-sonnet-5",
     CLAUDE_SONNET_4_6 = "anthropic.claude-sonnet-4-6",
     CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
     CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview",
@@ -54,7 +61,6 @@ public isolated distinct client class AnthropicModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final AuthHeaderStyle? authHeader;
     private final readonly & ModelCodec codec;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
@@ -89,7 +95,6 @@ public isolated distinct client class AnthropicModelProvider {
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.authHeader = route.mantleEntry?.authHeader;
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
@@ -142,15 +147,18 @@ isolated function resolveParams(int? maxTokens, decimal? temperature, AnthropicC
     }
     json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
     return buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
-        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier,
+        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier, config?.latencyOptimized,
         config?.requestMetadata, config?.guardrail);
 }
 
-// Route-specific headers computed once (design §7.3, §9.5): common Invoke
-// guardrail headers plus the Mantle Messages version/workspace/api-key headers.
+// Route-specific headers computed once (design §7.3, §9.5): the common Invoke
+// guardrail and Mantle api-key headers, plus Anthropic's own Mantle Messages
+// version/workspace headers.
 isolated function buildExtraHeaders(Route route, AnthropicConfig config, BedrockCredentials creds)
         returns map<string> {
-    map<string> headers = commonExtraHeaders(route, config?.guardrail);
+    // `x-api-key` is emitted by `commonExtraHeaders` for every vendor whose Mantle
+    // entry declares X_API_KEY — it is table data, not an Anthropic special case.
+    map<string> headers = commonExtraHeaders(route, config?.guardrail, creds);
     MantleEntry? entry = route.mantleEntry;
     if route.family == MANTLE && entry is MantleEntry {
         if entry.codec == MESSAGES_CODEC {
@@ -160,10 +168,6 @@ isolated function buildExtraHeaders(Route route, AnthropicConfig config, Bedrock
         string? workspace = config?.anthropicWorkspaceId;
         if workspace is string {
             headers["anthropic-workspace"] = workspace;
-        }
-        // The model-provider key header only applies to a bearer/api key (§14 #1).
-        if creds is BearerToken && entry.authHeader == X_API_KEY {
-            headers["x-api-key"] = creds.apiKey;
         }
     }
     return headers;

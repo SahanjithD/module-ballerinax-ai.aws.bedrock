@@ -25,6 +25,19 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
     foreach ai:ChatMessage m in messages {
         input.push(responsesInputItem(m));
     }
+    // The Responses dialect has NO stop-sequence parameter — it is absent from the
+    // request schema entirely (unlike Chat Completions' `stop`), so there is nothing
+    // to map onto. Accepting one silently would let the model run past the caller's
+    // stop text: wrong output, and billed tokens they asked us not to spend.
+    // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py
+    string[]? configuredStops = params.stopSequences;
+    if stop is string || (configuredStops is string[] && configuredStops.length() > 0) {
+        return error ai:LlmInvalidGenerationError(
+            "Stop sequences are not supported on the bedrock-mantle Responses route: the OpenAI " +
+            "Responses API has no stop-sequence parameter. Remove 'stop'/'stopSequences', or use a " +
+            "Converse/Invoke model.");
+    }
+
     map<json> body = {"input": input, "max_output_tokens": params.maxTokens, "temperature": params.temperature};
     if system is ai:ChatSystemMessage {
         body["instructions"] = contentToString(system.content); // system → instructions (§7.1)

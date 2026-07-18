@@ -16,23 +16,23 @@ import ballerina/ai;
 
 // generate() — tool-forcing on Converse/Invoke (structured output supported);
 // Mantle has NO structured-output path (amendment): a non-string target type is a
-// clean error, a string target returns text. The external `Generator` shim derives
-// the JSON schema from the typedesc (reusing ballerina/ai's native generator,
-// already on the runtime classpath) and passes it, plus the per-model
-// `supportsStructuredOutput` flag, in here.
+// clean error, a string target returns text. The external `Generator` shim passes
+// the typedesc and the per-model `supportsStructuredOutput` flag in here; the JSON
+// schema is derived on this side by `to_json_schema.bal`, as in the reference
+// provider modules.
 
 const RESULT_TOOL = "respond_with_result";
 
 // Callback invoked by the external `Generator` shim (design §3, §8; amendment).
 // Regular (non-dependent) function returning `anydata`; the Java boundary coerces
 // the result to the caller's `td`. Reads the provider's resolved state as
-// parameters; `schema` is the JSON schema the shim derived from `td`.
+// parameters.
 isolated function generateLlmResponse(boolean supportsStructuredOutput, ApiFamily family,
         readonly & ModelCodec codec, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
-        typedesc<anydata> td, map<json>? schema) returns anydata|ai:Error
+        typedesc<anydata> td) returns anydata|ai:Error
     => structuredGenerate(supportsStructuredOutput, family, codec, transport, wireModelId,
-        extraHeaders, params, prompt, td, schema);
+        extraHeaders, params, prompt, td);
 
 // Dispatches generate() (amendment). Converse/Invoke → tool-forcing. Mantle
 // (`supportsStructuredOutput == false`) → text only; a typed target is an error,
@@ -40,7 +40,7 @@ isolated function generateLlmResponse(boolean supportsStructuredOutput, ApiFamil
 isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily family,
         readonly & ModelCodec codec, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
-        typedesc<anydata> td, map<json>? schema) returns anydata|ai:Error {
+        typedesc<anydata> td) returns anydata|ai:Error {
     if !supportsStructuredOutput {
         if td is typedesc<string> {
             // No structured output on Mantle, but a plain-text generation is fine.
@@ -62,7 +62,19 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
             string `dialect (Mistral text completion) has no tool-calling, so the target type must be ` +
             string `'string'. Use the Converse route (the module default) for typed generation.`);
     }
-    return generateByToolForcing(codec, transport, wireModelId, extraHeaders, params, prompt, td, schema);
+    return generateByToolForcing(codec, transport, wireModelId, extraHeaders, params, prompt, td);
+}
+
+// Derives the expected type's JSON schema (`to_json_schema.bal`). A target type
+// outside `json` cannot be described to a model at all, so it is an error here
+// rather than an empty schema the model would silently ignore.
+isolated function schemaFor(typedesc<anydata> td) returns map<json>|ai:Error {
+    if td !is typedesc<json> {
+        return error ai:LlmInvalidGenerationError(
+            string `Cannot derive a JSON schema for the expected type '${td.toString()}': ` +
+            string `structured output requires a type that is a subtype of 'json'.`);
+    }
+    return generateJsonSchemaForTypedescAsJson(td);
 }
 
 // Plain-text generation for the Mantle route when the target type is `string`
@@ -93,12 +105,12 @@ isolated function plainTextResponse(readonly & ModelCodec codec, BedrockTranspor
 // tool-call arguments back into the record (design §8).
 isolated function generateByToolForcing(readonly & ModelCodec codec,
         BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
-        readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td,
-        map<json>? schema) returns anydata|ai:Error {
+        readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td)
+        returns anydata|ai:Error {
     ai:ChatCompletionFunctions tool = {
         name: RESULT_TOOL,
         description: "Return the result strictly as structured arguments in the required schema.",
-        parameters: schema ?: {"type": "object", "properties": {}}
+        parameters: check schemaFor(td)
     };
     ai:ChatUserMessage userMsg = {role: ai:USER, content: prompt};
     RequestCodec encode = codec.encode;
@@ -152,8 +164,13 @@ isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolN
         ANTHROPIC_TOOL_CHOICE => {
             forced["tool_choice"] = {"type": "tool", "name": toolName};
         }
-        OPENAI_TOOL_CHOICE => {
+        OPENAI_CHAT_TOOL_CHOICE => {
             forced["tool_choice"] = {"type": "function", "function": {"name": toolName}};
+        }
+        RESPONSES_TOOL_CHOICE => {
+            // FLAT — Responses does not nest the name under `function` the way Chat
+            // Completions does; the two dialects genuinely differ (see ToolChoiceStyle).
+            forced["tool_choice"] = {"type": "function", "name": toolName};
         }
         MISTRAL_TOOL_CHOICE => {
             // Mistral cannot name the forced tool — `"any"` means "call some tool".

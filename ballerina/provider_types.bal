@@ -106,6 +106,13 @@ public type CommonModelConfig record {|
     string[] additionalModelResponseFieldPaths?;
     # `serviceTier`.
     ServiceTier serviceTier?;
+    # Request latency-optimized inference on Converse: routes the call onto AWS's
+    # faster serving path (custom silicon / reserved capacity) for a lower
+    # time-to-first-token, at a higher price. Same output — a speed/cost dial only.
+    # Emitted as `performanceConfig.latency = "optimized"`; unset means `standard`.
+    # Support is per model and region; unsupported combinations are rejected by AWS.
+    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    boolean latencyOptimized?;
     # `requestMetadata` (max 16 pairs).
     map<string> requestMetadata?;
 
@@ -140,6 +147,8 @@ public type InferenceParams record {|
     string[] additionalModelResponseFieldPaths?;
     # Converse `serviceTier` (§9.3).
     ServiceTier serviceTier?;
+    # Converse `performanceConfig.latency = "optimized"` when set (§9.3).
+    boolean latencyOptimized?;
     # Converse `requestMetadata`, max 16 pairs (§9.3).
     map<string> requestMetadata?;
     # Converse `guardrailConfig` body field (§9.5); Invoke uses headers instead.

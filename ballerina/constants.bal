@@ -26,7 +26,11 @@ const int DEFAULT_MAX_TOKEN_COUNT = 512;
 final readonly & string[] CRIS_PREFIXES = ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
 
 // WHAT a model needs to speak Mantle — every Mantle-capable model, dual-endpoint
-// or not (design §7.3). The explicit override (ladder step 1) reads this table.
+// or not (design §7.3). This is now THE table that drives AUTO routing: under
+// Amendment 2 the preference order is MANTLE → CONVERSE → INVOKE, so membership here
+// means a bare id resolves to Mantle by default (as well as when forced). Because
+// membership requires a verified path/auth/codec, an unknown model is still absent
+// and sinks to Converse — never Mantle by elimination.
 // Path, auth style, and codec are per-model data; deriving the path from the
 // `openai.` prefix would break the moment AWS ships an `openai.*` model on a
 // different path (design §7.3, model-card-openai-gpt-55).
@@ -57,6 +61,60 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     "anthropic.claude-mythos-5": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
     "anthropic.claude-haiku-4-5": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
     "zai.glm-5": {path: "/v1/chat/completions", authHeader: BEARER, codec: CHAT_CODEC},
+    // --- Dual-endpoint models (bedrock-runtime YES + bedrock-mantle YES). ---
+    // Under Amendment 2 these DEFAULT to Mantle under AUTO (preference MANTLE →
+    // CONVERSE → INVOKE); pass `apiFamily = CONVERSE` (or a `converse/` prefix) to use
+    // the runtime surface instead — which `generate()` with a typed target requires,
+    // since Mantle has no structured output.
+    //
+    // Card: bedrock-runtime YES + bedrock-mantle YES; Messages API YES,
+    // Responses/Chat Completions NO; Mantle URL `/anthropic/v1/messages`.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+    "anthropic.claude-opus-4-8": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
+    // Sonnet 5 is dual-homed like opus-4-8: bedrock-runtime YES + bedrock-mantle YES,
+    // Messages API on `/anthropic/v1/messages`. Defaults to Converse (richer); this
+    // entry exists so forcing MANTLE works instead of erroring "not on Mantle".
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+    "anthropic.claude-sonnet-5": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
+    // gpt-oss is published under DIFFERENT IDS PER ENDPOINT — `-1:0` on
+    // bedrock-runtime, bare on bedrock-mantle — hence `modelId`. Mantle base URL is
+    // `/v1` (not `/openai/v1` like GPT-5.x), and it serves both Responses and Chat
+    // Completions; we take Chat Completions.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    "openai.gpt-oss-120b-1:0": {
+        path: "/v1/chat/completions",
+        authHeader: BEARER,
+        codec: CHAT_CODEC,
+        modelId: "openai.gpt-oss-120b"
+    },
+    // DeepSeek V3.2 — dual-homed; Mantle serves Chat Completions on `/v1`, same id on
+    // both endpoints, BEARER (card sample sets OPENAI_API_KEY against the `/v1` base).
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+    "deepseek.v3.2": {path: "/v1/chat/completions", authHeader: BEARER, codec: CHAT_CODEC},
+    // Mistral Large 3 — dual-homed; Mantle Chat Completions on `/v1`, same id both
+    // endpoints, BEARER.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+    "mistral.mistral-large-3-675b-instruct":
+        {path: "/v1/chat/completions", authHeader: BEARER, codec: CHAT_CODEC},
+    // Qwen3 Coder 480B — dual-homed; DIFFERENT id per endpoint (`-v1:0` on runtime,
+    // `-instruct` on Mantle, like gpt-oss), so `modelId` overrides the wire id. Mantle
+    // Chat Completions on `/v1`, BEARER.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+    "qwen.qwen3-coder-480b-a35b-v1:0": {
+        path: "/v1/chat/completions",
+        authHeader: BEARER,
+        codec: CHAT_CODEC,
+        modelId: "qwen.qwen3-coder-480b-a35b-instruct"
+    },
+    // Qwen3 32B — dual-homed; DIFFERENT id per endpoint (`-v1:0` on runtime, bare
+    // `qwen.qwen3-32b` on Mantle), Chat Completions on `/v1`, BEARER. In-Region YES.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
+    "qwen.qwen3-32b-v1:0": {
+        path: "/v1/chat/completions",
+        authHeader: BEARER,
+        codec: CHAT_CODEC,
+        modelId: "qwen.qwen3-32b"
+    },
     // Gemma 4 is Mantle-ONLY. Its card's support matrix marks bedrock-runtime,
     // Converse, Invoke and Messages all NO, and states: "Gemma 4 models are
     // available only on the `bedrock-mantle` endpoint. This model is available on
@@ -72,44 +130,25 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-e2b.html
     "google.gemma-4-e2b": {path: "/openai/v1/responses", authHeader: BEARER, codec: RESPONSES_CODEC},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-26b-a4b.html
-    "google.gemma-4-26b-a4b": {path: "/openai/v1/responses", authHeader: BEARER, codec: RESPONSES_CODEC}
-    // Gemma 3 is deliberately absent: it is dual-homed (bedrock-runtime AND
-    // bedrock-mantle) and defaults to Converse. Its Mantle rows sit on `/v1` with
-    // Chat Completions — NOT `/openai/v1` + Responses like Gemma 4 — so one vendor
-    // prefix spans two Mantle path families. Adding Gemma 3 entries needs each id's
-    // own card read first; only 3-27b-it has been checked.
+    "google.gemma-4-26b-a4b": {path: "/openai/v1/responses", authHeader: BEARER, codec: RESPONSES_CODEC},
+    // Gemma 3 (dual-homed) — CRUCIALLY DIFFERENT from Gemma 4: its Mantle rows sit on
+    // `/v1` with Chat Completions, NOT `/openai/v1` + Responses. So one vendor prefix
+    // (`google.`) spans two Mantle path families, which is exactly why the path is
+    // per-model table data and never derived from the prefix. Each id verified against
+    // its own card: same id on both endpoints, `/v1` Chat Completions, BEARER,
+    // In-Region YES in us-east-1.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
+    "google.gemma-3-27b-it": {path: "/v1/chat/completions", authHeader: BEARER, codec: CHAT_CODEC},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-12b-it.html
+    "google.gemma-3-12b-it": {path: "/v1/chat/completions", authHeader: BEARER, codec: CHAT_CODEC},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-4b-it.html
+    "google.gemma-3-4b-it": {path: "/v1/chat/completions", authHeader: BEARER, codec: CHAT_CODEC}
 };
 
-// WHICH models DEFAULT to Mantle — only the Mantle-only ones (design §5.5, §7.3).
-// Dual-endpoint models are in MANTLE_CAPABLE but NOT here: they default to
-// Converse (the strictly richer surface) and opt into Mantle explicitly.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-final readonly & string[] MANTLE_DEFAULT = [
-    "openai.gpt-5.5",
-    "openai.gpt-5.4",
-    "openai.gpt-5.6-sol",
-    "openai.gpt-5.6-terra",
-    "openai.gpt-5.6-luna",
-    "anthropic.claude-mythos-preview",
-    "anthropic.claude-mythos-5",
-    // Gemma 4 is Mantle-ONLY (no Converse row on its card), so Mantle is not an
-    // opt-in here — it is the only endpoint that serves these models.
-    "google.gemma-4-31b",
-    "google.gemma-4-e2b",
-    "google.gemma-4-26b-a4b"
-];
-
-// Positive Converse allowlist (design §5.1 step 5). Membership is documentation:
-// an unknown bare id still resolves to Converse via the sink (step 6), so this
-// table never routes to Mantle by elimination (design principle 2, §11).
-final readonly & string[] CONVERSE_MODELS = [
-    "anthropic.claude-opus-4-8",
-    "anthropic.claude-sonnet-4-6",
-    "anthropic.claude-haiku-4-5",
-    "amazon.nova-pro-v1:0",
-    "amazon.nova-lite-v1:0",
-    "amazon.nova-micro-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-    "deepseek.r1-v1:0",
-    "qwen.qwen3-32b-v1:0"
-];
+// NOTE: there is no separate `MANTLE_DEFAULT` list (removed under Amendment 2). It
+// once held only the Mantle-ONLY models, because dual-endpoint models defaulted to
+// Converse. Amendment 2 flips that default — any Mantle-CAPABLE model prefers Mantle
+// under AUTO — so `MANTLE_CAPABLE` membership alone now decides the default, and a
+// second list would only drift out of sync. There is likewise no `CONVERSE_MODELS`
+// allowlist: everything absent from `MANTLE_CAPABLE` (and every geo-prefixed id)
+// sinks to Converse, so an unknown id can never reach Mantle by elimination (§11).

@@ -127,14 +127,24 @@ isolated function resolveBareId(string id, string region, string partition, Rout
         }
     }
 
-    // step 4: MANTLE_DEFAULT (positive allowlist) — checked BEFORE Converse so an
-    // unknown model can never reach Mantle by elimination (design principle 2).
-    if MANTLE_DEFAULT.indexOf(bareId) is int {
-        return mantleRoute(bareId, geoPrefix, region, partition, check mantleEntryForBare(bareId));
+    // step 4: AUTO preference order MANTLE → CONVERSE → INVOKE (Amendment 2). A
+    // Mantle-capable model prefers Mantle; membership in MANTLE_CAPABLE means we hold
+    // a verified path/auth/codec for it, so this is still table-driven — an unknown
+    // model is absent from the table and sinks to Converse, never Mantle by
+    // elimination (principle 2 survives; only the preference for the KNOWN case flips).
+    //
+    // GUARD: only a BARE id prefers Mantle. A CRIS geo prefix (`us.`, `eu.`, ...) is a
+    // bedrock-RUNTIME concept — Mantle has no geo prefixes — so a geo-prefixed id
+    // signals cross-region runtime intent and stays on Converse (CLAUDE.md §4:
+    // `us.anthropic.claude-opus-4-8` → Converse with the prefix re-applied).
+    if geoPrefix is () {
+        MantleEntry? entry = MANTLE_CAPABLE[bareId];
+        if entry is MantleEntry {
+            return mantleRoute(bareId, geoPrefix, region, partition, entry);
+        }
     }
 
-    // step 5: CONVERSE_MODELS positive allowlist. step 6 sink: everything else
-    // → CONVERSE (never Mantle). Both land on the same family.
+    // steps 5-6: everything else (and every geo-prefixed id) → CONVERSE.
     return buildBareRoute(CONVERSE, bareId, geoPrefix, region, partition, config);
 }
 
@@ -142,7 +152,13 @@ isolated function resolveBareId(string id, string region, string partition, Rout
 isolated function buildBareRoute(ApiFamily family, string bareId, string? geoPrefix, string region,
         string partition, RouteConfig config) returns Route|error {
     if family == MANTLE {
-        return mantleRoute(bareId, geoPrefix, region, partition, check mantleEntryForBare(bareId));
+        // `mantleEntryFor` (override-aware), NOT `mantleEntryForBare`: forcing Mantle
+        // via `apiFamily = MANTLE` or a `mantle/` prefix arrives here, and those are
+        // exactly the cases where a caller supplies `routeOverrides` for a model AWS
+        // shipped after our last release (§5.1 step 1/3, §7.3). Consulting only the
+        // static table discarded the override and errored "not available on Mantle"
+        // — breaking the escape hatch precisely when it was needed.
+        return mantleRoute(bareId, geoPrefix, region, partition, check mantleEntryFor(bareId, config));
     }
     // CONVERSE/INVOKE take the CRIS-prefixed id on the wire (design §5.3).
     return {
@@ -156,14 +172,17 @@ isolated function buildBareRoute(ApiFamily family, string bareId, string? geoPre
     };
 }
 
-// Builds a MANTLE route. Mantle takes the BARE id on the wire (design §5.3).
+// Builds a MANTLE route. Mantle takes the BARE id on the wire — never the CRIS
+// geo prefix (design §5.3) — unless the entry names a different Mantle-side id.
 isolated function mantleRoute(string bareId, string? geoPrefix, string region, string partition,
         MantleEntry entry) returns Route {
     return {
         family: MANTLE,
         bareModelId: bareId,
         geoPrefix,
-        effectiveModelId: bareId,
+        // A model may be published under different ids per endpoint (see
+        // `MantleEntry.modelId`); the entry wins when it says so.
+        effectiveModelId: entry?.modelId ?: bareId,
         region,
         partition,
         mantleEntry: entry

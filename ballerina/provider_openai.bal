@@ -53,7 +53,6 @@ public isolated distinct client class OpenAIModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final AuthHeaderStyle? authHeader;
     private final readonly & ModelCodec codec;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
@@ -86,12 +85,11 @@ public isolated distinct client class OpenAIModelProvider {
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.authHeader = route.mantleEntry?.authHeader;
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
         self.params = openAIParams(maxTokens, temperature, config);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail).cloneReadOnly();
+        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
     }
 
     # + messages - Chat messages or a single user message
@@ -124,6 +122,6 @@ isolated function openAIParams(int? maxTokens, decimal? temperature, OpenAIConfi
     }
     json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
     return buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
-        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier,
+        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier, config?.latencyOptimized,
         config?.requestMetadata, config?.guardrail);
 }

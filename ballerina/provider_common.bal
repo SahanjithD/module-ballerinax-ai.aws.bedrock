@@ -106,7 +106,8 @@ isolated function runChat(string providerName, ApiFamily family, string wireMode
 isolated function buildInferenceParams(int? maxTokens, decimal? temperature, decimal? topP,
         string[]? stopSequences, json additionalModelRequestFields,
         string[]? additionalModelResponseFieldPaths, ServiceTier? serviceTier,
-        map<string>? requestMetadata, GuardrailConfig? guardrail) returns readonly & InferenceParams {
+        boolean? latencyOptimized, map<string>? requestMetadata, GuardrailConfig? guardrail)
+        returns readonly & InferenceParams {
     InferenceParams params = {
         temperature: temperature ?: DEFAULT_TEMPERATURE,
         maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT
@@ -126,6 +127,9 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature, dec
     if serviceTier is ServiceTier {
         params.serviceTier = serviceTier;
     }
+    if latencyOptimized is boolean {
+        params.latencyOptimized = latencyOptimized;
+    }
     if requestMetadata is map<string> {
         params.requestMetadata = requestMetadata;
     }
@@ -137,7 +141,8 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature, dec
 
 // Route-specific headers common to all vendors (design §9.5): Invoke guardrail
 // headers. Vendor facades merge their own Mantle headers on top (§7.3).
-isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail) returns map<string> {
+isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail, BedrockCredentials creds)
+        returns map<string> {
     map<string> headers = {};
     if route.family == INVOKE && guardrail is GuardrailConfig {
         headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
@@ -147,7 +152,34 @@ isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail) re
             headers["X-Amzn-Bedrock-Trace"] = trace.toUpperAscii();
         }
     }
+    addMantleApiKeyHeader(headers, route, creds);
     return headers;
+}
+
+// `x-api-key` for a Mantle entry that declares X_API_KEY (design §14 open item #1).
+//
+// Shared, not per-vendor: `authHeader` is per-model TABLE data, so any vendor's
+// entry — or a user's `routeOverrides` — may declare X_API_KEY. This previously
+// lived in the Anthropic facade alone, which meant the same data was honoured there
+// and silently ignored everywhere else.
+//
+// NOTE (§14 open item #1, unresolved): which header Mantle wants for Anthropic
+// models is genuinely ambiguous — AWS's documented curl uses `x-api-key`, while
+// Anthropic's SDK sends `Authorization: Bearer`, and no first-party source states
+// the wire header. We therefore HEDGE rather than guess: the transport always sets
+// `Authorization: Bearer` for a BearerToken, and X_API_KEY entries additionally send
+// `x-api-key`. Both carry the same key, so whichever the service reads, it succeeds.
+// This is deliberate, not redundancy to tidy away — one live call settles it, after
+// which this can select rather than hedge.
+//
+// Only a BearerToken can populate it: with SigV4 credentials there is no api key,
+// and the signature alone must authenticate the request.
+isolated function addMantleApiKeyHeader(map<string> headers, Route route, BedrockCredentials creds) {
+    MantleEntry? entry = route.mantleEntry;
+    if route.family == MANTLE && entry is MantleEntry && entry.authHeader == X_API_KEY
+            && creds is BearerToken {
+        headers["x-api-key"] = creds.apiKey;
+    }
 }
 
 // Guardrail-on-Mantle construction guard, shared by every facade (design §9.5).

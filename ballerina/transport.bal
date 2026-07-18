@@ -38,6 +38,11 @@ isolated client class BedrockTransport {
     private final string wirePath; // model-id segment single-encoded (from buildEndpoint)
     private final http:Client httpClient;
     private final readonly & RetryConfig retryConfig;
+    // Whether the RESOLVED ROUTE is Mantle. Derived from the route's own signing
+    // name, never from the `signingServiceName` override — otherwise a user of that
+    // escape hatch silently loses the `bedrock-mantle:CreateInference` hint on a
+    // 403, which is the difference between a solvable and an unsolvable error.
+    private final boolean isMantleRoute;
 
     isolated function init(BedrockCredentials credentials, string region, Endpoint ep,
             string? signingServiceName = (), http:ClientConfiguration? httpConfig = (),
@@ -46,6 +51,7 @@ isolated client class BedrockTransport {
         self.region = region;
         // Signing name defaults per route, overridable without a release (§9.4).
         self.signingService = signingServiceName ?: ep.signingService;
+        self.isMantleRoute = ep.signingService == SIGNING_BEDROCK_MANTLE;
         self.host = ep.host;
         self.wirePath = ep.path;
         self.httpClient = check new (string `https://${ep.host}`, httpConfig ?: {});
@@ -129,7 +135,7 @@ isolated client class BedrockTransport {
             return {body: jsonBody, headers: responseHeaders};
         }
         string detail = self.errorDetail(resp);
-        boolean mantle = self.signingService == SIGNING_BEDROCK_MANTLE;
+        boolean mantle = self.isMantleRoute;
         match status {
             429|408|500|503 => {
                 return error RetryableError(string `Bedrock transient error (HTTP ${status}): ${detail}`);
@@ -171,7 +177,11 @@ isolated client class BedrockTransport {
     }
 
     // Builds the SigV4 (or bearer) headers for one request (design §9.4-9.5).
-    isolated function signedHeaders(string payload, map<string> extraHeaders) returns map<string>|error {
+    // `fixedClock` exists ONLY for tests: signing is otherwise unobservable without
+    // live AWS, and a wall clock makes the output unassertable. Production callers
+    // omit it and get `amzTimestamps()`.
+    isolated function signedHeaders(string payload, map<string> extraHeaders,
+            [string, string]? fixedClock = ()) returns map<string>|error {
         map<string> headers = {};
         foreach [string, string] [k, v] in extraHeaders.entries() {
             headers[k] = v;
@@ -186,10 +196,17 @@ isolated client class BedrockTransport {
         }
 
         // ---- SigV4 (static / STS) ----
-        [string, string] [amzDate, dateStamp] = check amzTimestamps();
+        [string, string] [amzDate, dateStamp] = fixedClock ?: check amzTimestamps();
         // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule §9.4):
         // the server re-encodes the received (single-encoded) path once to match.
-        string canonicalUri = getCanonicalUri(self.wirePath) ?: self.wirePath;
+        // A signing input must never fail open: falling back to the single-encoded
+        // path would sign something AWS cannot reconstruct, turning an encode bug
+        // into an undiagnosable 403 on every request. Fail loudly instead.
+        string? encodedUri = getCanonicalUri(self.wirePath);
+        if encodedUri is () {
+            return error("Failed to percent-encode the canonical URI for signing: " + self.wirePath);
+        }
+        string canonicalUri = encodedUri;
         string payloadHash = array:toBase16(crypto:hashSha256(payload.toBytes())).toLowerAscii();
 
         string accessKey = creds.accessKeyId;
@@ -252,9 +269,15 @@ isolated function optionalHeader(http:Response resp, string name) returns string
     return value is string ? value : ();
 }
 
-// `[amzDate (ISO8601 basic), dateStamp (YYYYMMDD)]` in UTC (SigV4 requirement).
+// `[amzDate (ISO8601 basic), dateStamp (YYYYMMDD)]` for NOW, in UTC.
 isolated function amzTimestamps() returns [string, string]|error {
-    time:Civil c = time:utcToCivil(time:utcNow());
+    return formatAmzTimestamps(time:utcToCivil(time:utcNow()));
+}
+
+// The pure formatter behind `amzTimestamps` — split out so the format can be
+// tested at a fixed clock, including the second-59 boundary that a wall-clock test
+// would only hit once a minute (and only half the time).
+isolated function formatAmzTimestamps(time:Civil c) returns [string, string]|error {
     string y = pad(c.year, 4);
     string mo = pad(c.month, 2);
     string d = pad(c.day, 2);

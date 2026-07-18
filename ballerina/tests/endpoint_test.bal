@@ -62,7 +62,9 @@ function testMantleEndpointHostAndSigningService() returns error? {
 
 @test:Config {}
 function testConverseSigningServiceIsBedrock() returns error? {
-    Route route = check resolveRoute("anthropic.claude-opus-4-8", "us-east-1");
+    // nova-pro is Converse-default (not Mantle-capable); opus-4-8 now prefers Mantle
+    // under AUTO (Amendment 2), so it no longer exercises the runtime signing path.
+    Route route = check resolveRoute("amazon.nova-pro-v1:0", "us-east-1");
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com");
     test:assertEquals(ep.signingService, "bedrock");

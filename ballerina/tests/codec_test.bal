@@ -316,7 +316,7 @@ function testDeepSeekSelectsItsOwnInvokeCodec() returns error? {
     test:assertEquals(bySchema.toolChoice, NO_TOOL_CHOICE);
     // GPT-OSS/Qwen keep the OpenAI chat codec.
     readonly & ModelCodec openai = check selectInvokeCodec("openai.gpt-oss-120b-1:0", ());
-    test:assertEquals(openai.toolChoice, OPENAI_TOOL_CHOICE);
+    test:assertEquals(openai.toolChoice, OPENAI_CHAT_TOOL_CHOICE);
 }
 
 // ---- Converse serviceTier is an object, not a string ----
@@ -341,4 +341,28 @@ function testConverseOmitsServiceTierWhenUnset() returns error? {
     map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (),
             {temperature: 0.5, maxTokens: 100}).ensureType();
     test:assertFalse(body.hasKey("serviceTier"));
+}
+
+// ---- Converse performanceConfig.latency ----
+
+@test:Config {}
+function testConverseEmitsLatencyOptimizedAsAnObject() returns error? {
+    // `latencyOptimized = true` → `"performanceConfig": {"latency": "optimized"}`,
+    // an object like serviceTier, not a bare string.
+    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100, latencyOptimized: true}).ensureType();
+    test:assertEquals(body["performanceConfig"], <json>{"latency": "optimized"});
+}
+
+@test:Config {}
+function testConverseOmitsPerformanceConfigWhenUnsetOrFalse() returns error? {
+    // Unset sends nothing — `standard` is the default, so there is no value to emit.
+    map<json> unset = check encodeConverse((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertFalse(unset.hasKey("performanceConfig"));
+    // Explicit false is also `standard` — the same as unset, never a `standard` value.
+    map<json> off = check encodeConverse((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100, latencyOptimized: false}).ensureType();
+    test:assertFalse(off.hasKey("performanceConfig"), "false must not emit a standard value");
 }

@@ -23,6 +23,13 @@ import ballerina/jballerina.java;
 
 # Well-known Mistral model ids. Any newer id can be passed as a `string`.
 public enum MistralModel {
+    # Mistral Large 3 — the current flagship (675B, coding/reasoning/multilingual,
+    # 256K context). Chat-completion dialect on InvokeModel (`messages`/`choices`)
+    # and Converse — the same dialect as 24.07, NOT the 24.02 text template. In-Region
+    # callable (us-east-1 etc.); Geo/Global not supported. Same id on both endpoints;
+    # dual-homed with bedrock-mantle, defaults to Converse here.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+    MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct",
     # Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-large-2407.html
     MISTRAL_LARGE_2407 = "mistral.mistral-large-2407-v1:0",
@@ -46,7 +53,6 @@ public isolated distinct client class MistralModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final AuthHeaderStyle? authHeader;
     private final readonly & ModelCodec codec;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
@@ -79,14 +85,13 @@ public isolated distinct client class MistralModelProvider {
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.authHeader = route.mantleEntry?.authHeader;
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
         self.params = buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
             config?.additionalModelRequestFields, config?.additionalModelResponseFieldPaths,
-            config?.serviceTier, config?.requestMetadata, config?.guardrail);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail).cloneReadOnly();
+            config?.serviceTier, config?.latencyOptimized, config?.requestMetadata, config?.guardrail);
+        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
     }
 
     # + messages - Chat messages or a single user message

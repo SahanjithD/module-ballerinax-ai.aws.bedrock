@@ -22,10 +22,13 @@ const REGION = "us-east-1";
 
 @test:Config {}
 function testBareIdResolvesToConverse() returns error? {
-    Route r = check resolveRoute("anthropic.claude-opus-4-8", REGION);
+    // nova-pro is Converse-default (not Mantle-capable). opus-4-8 now prefers Mantle
+    // under AUTO (Amendment 2), so a Converse-clean-fields assertion needs a model
+    // that genuinely defaults to Converse.
+    Route r = check resolveRoute("amazon.nova-pro-v1:0", REGION);
     test:assertEquals(r.family, CONVERSE);
-    test:assertEquals(r.bareModelId, "anthropic.claude-opus-4-8");
-    test:assertEquals(r.effectiveModelId, "anthropic.claude-opus-4-8");
+    test:assertEquals(r.bareModelId, "amazon.nova-pro-v1:0");
+    test:assertEquals(r.effectiveModelId, "amazon.nova-pro-v1:0");
     test:assertEquals(r.geoPrefix, ());
     test:assertEquals(r.region, REGION);
     test:assertEquals(r.mantleEntry, ());
@@ -94,8 +97,14 @@ function testForceMantleOnDualEndpointModelResolvesViaCapable() returns error? {
 
 @test:Config {}
 function testForceMantleOnConverseOnlyModelErrors() {
-    // §7.3: not in MANTLE_CAPABLE → clean construction error, not a hard 400 later.
-    Route|error r = resolveRoute("anthropic.claude-opus-4-8", REGION, {apiFamily: MANTLE});
+    // §7.3: not Mantle-capable → clean construction error, not a hard 400 later.
+    //
+    // This previously used `anthropic.claude-opus-4-8` as the example — but that
+    // model's card says `bedrock-mantle: YES`, so the assertion was false and only
+    // passed because MANTLE_CAPABLE was missing every dual-endpoint model. Sonnet
+    // 4.6 is genuinely runtime-only per AWS's endpoint-availability table.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+    Route|error r = resolveRoute("anthropic.claude-sonnet-4-6", REGION, {apiFamily: MANTLE});
     test:assertTrue(r is error);
     if r is error {
         test:assertTrue(r.message().includes("not available on Mantle"), r.message());
@@ -251,4 +260,74 @@ function testNormalizeModelIdKeepsNonCrisDotPrefix() {
     [string, string?] [bareId, geoPrefix] = normalizeModelId("anthropic.claude-opus-4-8");
     test:assertEquals(bareId, "anthropic.claude-opus-4-8");
     test:assertEquals(geoPrefix, ());
+}
+
+// ---- Mantle escape hatch for dual-endpoint models (design §7.3) ----
+
+@test:Config {}
+function testDualHomedModelCanBeForcedOntoMantle() returns error? {
+    // REGRESSION: MANTLE_CAPABLE held only Mantle-only models, so forcing Mantle on
+    // a dual-endpoint model errored "not available on Mantle" — which its own card
+    // contradicts. §7.3 says the table must list every Mantle-capable model.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+    Route forced = check resolveRoute("anthropic.claude-opus-4-8", REGION, {apiFamily: MANTLE});
+    test:assertEquals(forced.family, MANTLE);
+    Endpoint ep = check buildEndpoint(forced);
+    test:assertEquals(ep.path, "/anthropic/v1/messages");
+    test:assertEquals(ep.signingService, "bedrock-mantle");
+
+    // ...and the prefix form must agree with the config form.
+    Route prefixed = check resolveRoute("mantle/anthropic.claude-opus-4-8", REGION);
+    test:assertEquals(prefixed.family, MANTLE);
+
+    // Under Amendment 2 it also DEFAULTS to Mantle under AUTO (Mantle-capable →
+    // Mantle); `converse/` (or apiFamily=CONVERSE) is needed for the runtime surface.
+    Route auto = check resolveRoute("anthropic.claude-opus-4-8", REGION);
+    test:assertEquals(auto.family, MANTLE);
+    Route converse = check resolveRoute("converse/anthropic.claude-opus-4-8", REGION);
+    test:assertEquals(converse.family, CONVERSE);
+}
+
+@test:Config {}
+function testMantleUsesItsOwnModelIdWhenTheEndpointsDisagree() returns error? {
+    // gpt-oss is `openai.gpt-oss-120b-1:0` on bedrock-runtime but plain
+    // `openai.gpt-oss-120b` on bedrock-mantle. Sending the runtime id to Mantle
+    // fails, so MantleEntry.modelId overrides the wire id.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    Route mantle = check resolveRoute("openai.gpt-oss-120b-1:0", REGION, {apiFamily: MANTLE});
+    test:assertEquals(mantle.family, MANTLE);
+    test:assertEquals(mantle.effectiveModelId, "openai.gpt-oss-120b", "Mantle has its own id for this model");
+    test:assertEquals(mantle.bareModelId, "openai.gpt-oss-120b-1:0", "the lookup key stays the runtime id");
+
+    // The runtime routes keep the `-1:0` id. gpt-oss is Mantle-capable, so it now
+    // prefers Mantle under AUTO (Amendment 2) — force CONVERSE for the runtime form.
+    Route converse = check resolveRoute("openai.gpt-oss-120b-1:0", REGION, {apiFamily: CONVERSE});
+    test:assertEquals(converse.family, CONVERSE);
+    test:assertEquals(converse.effectiveModelId, "openai.gpt-oss-120b-1:0");
+}
+
+@test:Config {}
+function testForcedMantleHonoursRouteOverrides() returns error? {
+    // REGRESSION: forcing MANTLE consulted only the static table and discarded the
+    // caller's routeOverrides — breaking the "AWS shipped a model, no release
+    // needed" hatch in exactly the case it exists for (§5.1 step 1/3, §7.3).
+    MantleEntry entry = {path: "/openai/v1/responses", authHeader: BEARER, codec: RESPONSES_CODEC};
+    RouteConfig config = {apiFamily: MANTLE, routeOverrides: {"openai.gpt-6": entry}};
+    Route route = check resolveRoute("openai.gpt-6", REGION, config);
+    test:assertEquals(route.family, MANTLE);
+    Endpoint ep = check buildEndpoint(route);
+    test:assertEquals(ep.path, "/openai/v1/responses");
+
+    // The `mantle/` prefix form must honour it too.
+    Route prefixed = check resolveRoute("mantle/openai.gpt-6", REGION, {routeOverrides: {"openai.gpt-6": entry}});
+    test:assertEquals(prefixed.family, MANTLE);
+    test:assertEquals((check buildEndpoint(prefixed)).path, "/openai/v1/responses");
+}
+
+@test:Config {}
+function testForcingMantleOnAnUnknownModelStillErrors() {
+    // The hatch must not become a fabricator: no entry and no override → error,
+    // never a guessed path.
+    Route|error route = resolveRoute("acme.totally-new", REGION, {apiFamily: MANTLE});
+    test:assertTrue(route is error);
 }

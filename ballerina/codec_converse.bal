@@ -75,6 +75,14 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
         // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         body["serviceTier"] = {"type": tier};
     }
+    boolean? latencyOptimized = params.latencyOptimized;
+    if latencyOptimized == true {
+        // `"performanceConfig": { "latency": "optimized" }` — an object, like
+        // serviceTier. Only `optimized` is worth emitting; `standard` is the default,
+        // so an unset/false flag sends nothing. Support is per model+region (§9.3).
+        // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        body["performanceConfig"] = {"latency": "optimized"};
+    }
     // Guardrail is a Converse BODY field (design §9.5).
     GuardrailConfig? guardrail = params.guardrail;
     if guardrail is GuardrailConfig {

@@ -32,7 +32,13 @@ public enum DeepSeekModel {
     # `us.` is the only form that resolves. US is also the only geo AWS lists for
     # this model. Pass a raw string if you need a different profile.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html
-    DEEPSEEK_R1 = "us.deepseek.r1-v1:0"
+    DEEPSEEK_R1 = "us.deepseek.r1-v1:0",
+    # DeepSeek V3.2 — the current flagship (MoE, reasoning/coding). UNLIKE R1, the
+    # BARE id IS callable: the card marks In-Region YES in us-east-1 and elsewhere,
+    # Geo/Global not supported — so no CRIS prefix. Converse + Invoke on
+    # bedrock-runtime (dual-homed with bedrock-mantle; defaults to Converse here).
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+    DEEPSEEK_V3_2 = "deepseek.v3.2"
 }
 
 # DeepSeek-specific configuration (CLAUDE.md §3).
@@ -46,7 +52,6 @@ public isolated distinct client class DeepSeekModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final AuthHeaderStyle? authHeader;
     private final readonly & ModelCodec codec;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
@@ -79,14 +84,13 @@ public isolated distinct client class DeepSeekModelProvider {
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.authHeader = route.mantleEntry?.authHeader;
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
         self.params = buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
             config?.additionalModelRequestFields, config?.additionalModelResponseFieldPaths,
-            config?.serviceTier, config?.requestMetadata, config?.guardrail);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail).cloneReadOnly();
+            config?.serviceTier, config?.latencyOptimized, config?.requestMetadata, config?.guardrail);
+        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
     }
 
     # + messages - Chat messages or a single user message

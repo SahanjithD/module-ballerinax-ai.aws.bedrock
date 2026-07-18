@@ -52,8 +52,16 @@ public enum ToolChoiceStyle {
     CONVERSE_TOOL_CHOICE,
     # Anthropic Messages: `tool_choice = {"type": "tool", "name": ...}`.
     ANTHROPIC_TOOL_CHOICE,
-    # OpenAI: `tool_choice = {"type": "function", "function": {"name": ...}}`.
-    OPENAI_TOOL_CHOICE,
+    # OpenAI Chat Completions: `tool_choice = {"type": "function", "function": {"name": ...}}`
+    # — the function name NESTED, matching that dialect's nested `tools` entries.
+    # https://github.com/openai/openai-python/blob/main/src/openai/types/chat/chat_completion_named_tool_choice_param.py
+    OPENAI_CHAT_TOOL_CHOICE,
+    # OpenAI Responses: `tool_choice = {"type": "function", "name": ...}` — FLAT, and
+    # a different shape from Chat Completions above, mirroring this dialect's flat
+    # `tools` entries. Sending the nested form here leaves the tool unforced: the
+    # model answers in prose and generate() fails with "no tool call".
+    # https://github.com/openai/openai-python/blob/main/src/openai/types/responses/tool_choice_function.py
+    RESPONSES_TOOL_CHOICE,
     # Mistral chat completion: `tool_choice = "any"` — a bare string, and it cannot
     # name the tool, so forcing works only when exactly one tool is supplied.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-chat-completion.html
@@ -106,6 +114,14 @@ public type MantleEntry record {|
     AuthHeaderStyle authHeader;
     # Codec key selecting the encode/decode pair for this Mantle dialect.
     MantleCodecKey codec;
+    # The id to put on the wire when it DIFFERS from the `bedrock-runtime` id.
+    #
+    # For most models the two endpoints share an id, and this is omitted. But some
+    # models are published under different ids per endpoint — gpt-oss is
+    # `openai.gpt-oss-120b-1:0` on `bedrock-runtime` and `openai.gpt-oss-120b` on
+    # `bedrock-mantle`. Without this, forcing Mantle sends the runtime id and fails.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    string modelId?;
 |};
 
 # Names the Mantle wire dialect a `MantleEntry` speaks. Kept as a key (not the

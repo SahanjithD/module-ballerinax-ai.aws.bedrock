@@ -63,12 +63,24 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockCredentials 
     }
 }
 
+// The only thing `runBatchEmbed` needs of a transport: one window in, one response
+// out. `BedrockTransport` satisfies it structurally.
+//
+// Named as a type rather than taking the concrete class so the reassembly loop below
+// can be driven without live AWS. That loop enforces the ORDER contract, and order
+// bugs are invisible from the outside — every vector present and well-formed, merely
+// attached to the wrong chunk — so it must be tested, and it cannot be tested through
+// a transport that hardcodes https.
+type EmbedTransport isolated object {
+    isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error;
+};
+
 // The shared `batchEmbed` implementation (embedding design §7). Windows the texts
 // by `codec.maxBatchSize` (Titan → n windows of 1; Cohere → ceil(n/96)) and
 // reassembles BY INDEX — order is the contract, and index-based reassembly keeps a
 // future concurrent implementation from becoming a correctness change.
 isolated function runBatchEmbed(string providerName, string wireModelId,
-        readonly & EmbeddingCodec codec, BedrockTransport transport,
+        readonly & EmbeddingCodec codec, EmbedTransport transport,
         readonly & EmbeddingParams params, ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error {
     observe:EmbeddingSpan span = observe:createEmbeddingSpan(wireModelId);
     span.addProvider(providerName);
@@ -135,7 +147,7 @@ isolated function runBatchEmbed(string providerName, string wireModelId,
 
 // `embed` is just `batchEmbed([chunk])[0]` — exactly one code path (§7).
 isolated function runEmbed(string providerName, string wireModelId, readonly & EmbeddingCodec codec,
-        BedrockTransport transport, readonly & EmbeddingParams params, ai:Chunk chunk)
+        EmbedTransport transport, readonly & EmbeddingParams params, ai:Chunk chunk)
         returns ai:Embedding|ai:Error {
     ai:Embedding[] embeddings =
         check runBatchEmbed(providerName, wireModelId, codec, transport, params, [chunk]);

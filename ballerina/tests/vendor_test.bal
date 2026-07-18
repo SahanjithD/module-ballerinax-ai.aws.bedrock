@@ -22,10 +22,12 @@ import ballerina/test;
 
 @test:Config {}
 function testAutoIsTheDefaultAndRunsTheResolver() returns error? {
-    // AUTO must behave exactly like "no forced family" (amendment).
+    // AUTO must behave exactly like "no forced family" (amendment). Under Amendment 2
+    // the resolver prefers Mantle for a Mantle-capable model, so opus-4-8 → Mantle;
+    // the point of this test is that AUTO and "no family" agree.
     Route auto = check resolveRoute("anthropic.claude-opus-4-8", REGION, {apiFamily: AUTO});
     Route implicit = check resolveRoute("anthropic.claude-opus-4-8", REGION);
-    test:assertEquals(auto.family, CONVERSE);
+    test:assertEquals(auto.family, MANTLE);
     test:assertEquals(auto.family, implicit.family);
 }
 
@@ -53,7 +55,7 @@ function testMantleRejectsTypedStructuredOutput() returns error? {
     ai:Prompt prompt = `Give me a number`;
 
     anydata|ai:Error result = structuredGenerate(false, MANTLE, codec, transport,
-        route.effectiveModelId, {}, {temperature: 0.5d, maxTokens: 16}, prompt, int, ());
+        route.effectiveModelId, {}, {temperature: 0.5d, maxTokens: 16}, prompt, int);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         test:assertTrue(result.message().includes("bedrock-mantle"), result.message());
@@ -64,7 +66,8 @@ function testMantleRejectsTypedStructuredOutput() returns error? {
 @test:Config {}
 function testConverseRouteSupportsStructuredOutputFlag() returns error? {
     // The flag is derived from the resolved route: true off Mantle, false on it.
-    Route converse = check resolveRoute("anthropic.claude-opus-4-8", REGION);
+    // nova-pro is Converse-default; opus-4-8 now prefers Mantle under AUTO.
+    Route converse = check resolveRoute("amazon.nova-pro-v1:0", REGION);
     Route mantle = check resolveRoute("anthropic.claude-mythos-preview", REGION);
     test:assertTrue(converse.family != MANTLE, "Converse route → structured output supported");
     test:assertTrue(mantle.family == MANTLE, "Mantle route → structured output unsupported");
@@ -151,7 +154,10 @@ function testResponsesEncodesSystemAsInstructions() returns error? {
 // ---- vendor construction smoke tests (no I/O) ----
 
 @test:Config {}
-function testAllVendorProvidersConstructOnConverse() returns error? {
+function testAllVendorProvidersConstruct() returns error? {
+    // Smoke test: every vendor facade constructs (no I/O). Note routing varies —
+    // qwen3-32b and gpt-oss now resolve to Mantle under AUTO (Amendment 2) — but
+    // construction succeeds on any route.
     AmazonModelProvider amazon = check new (TEST_CREDS, "amazon.nova-pro-v1:0", REGION);
     MistralModelProvider mistral = check new (TEST_CREDS, "mistral.mistral-large-2407-v1:0", REGION);
     QwenModelProvider qwen = check new (TEST_CREDS, "qwen.qwen3-32b-v1:0", REGION);
@@ -177,14 +183,23 @@ function testOpenAIMantleOnlyModelResolvesToMantleResponses() returns error? {
 }
 
 @test:Config {}
-function testGemma3ResolvesToConverseOnBedrockRuntime() returns error? {
-    // Gemma 3's cards tick bedrock-runtime AND bedrock-mantle; we take Converse.
+function testGemma3DefaultsToMantleOnItsOwnChatCompletionsPath() returns error? {
+    // Gemma 3 is dual-homed, so under Amendment 2 AUTO prefers Mantle. The point that
+    // matters: Gemma 3's Mantle path is `/v1/chat/completions`, DIFFERENT from Gemma
+    // 4's `/openai/v1/responses` — one vendor prefix, two Mantle path families.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
     Route route = check resolveRoute("google.gemma-3-27b-it", REGION);
-    test:assertEquals(route.family, CONVERSE);
+    test:assertEquals(route.family, MANTLE);
     Endpoint ep = check buildEndpoint(route);
-    test:assertEquals(ep.signingService, "bedrock");
-    test:assertTrue(ep.host.startsWith("bedrock-runtime."));
+    test:assertEquals(ep.signingService, "bedrock-mantle");
+    test:assertEquals(ep.path, "/v1/chat/completions", "Gemma 3 uses Chat Completions, not Responses");
+
+    // Forcing CONVERSE still reaches the runtime surface.
+    Route converse = check resolveRoute("google.gemma-3-27b-it", REGION, {apiFamily: CONVERSE});
+    test:assertEquals(converse.family, CONVERSE);
+    Endpoint cep = check buildEndpoint(converse);
+    test:assertEquals(cep.signingService, "bedrock");
+    test:assertTrue(cep.host.startsWith("bedrock-runtime."));
 }
 
 @test:Config {}
@@ -220,8 +235,10 @@ type LiveFruitShape record {|
 
 @test:Config {}
 function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
-    // `openai.gpt-oss-120b-1:0` carries a colon — the SigV4 double-encoding case.
-    Route route = check resolveRoute("openai.gpt-oss-120b-1:0", REGION);
+    // `openai.gpt-oss-120b-1:0` carries a colon — the SigV4 double-encoding case. It
+    // is Mantle-capable so AUTO now prefers Mantle (Amendment 2); force CONVERSE to
+    // exercise the runtime `/model/{id}` path where the colon lands in the URI.
+    Route route = check resolveRoute("openai.gpt-oss-120b-1:0", REGION, {apiFamily: CONVERSE});
     Endpoint ep = check buildEndpoint(route);
     test:assertTrue(ep.path.includes("%3A"), "the model id's colon must be encoded on the wire");
     string canonical = getCanonicalUri(ep.path) ?: "";
@@ -256,12 +273,29 @@ function testAllKnownMantleOnlyModelsResolveToMantle() returns error? {
 }
 
 @test:Config {}
-function testDualHomedModelsStillDefaultToConverse() returns error? {
-    // These are marked YES on BOTH endpoints. Being Mantle-capable must not pull
-    // them off Converse, which is the strictly richer surface (design §5.5).
+function testMantleCapableModelsDefaultToMantleUnderAuto() returns error? {
+    // Amendment 2: AUTO prefers MANTLE → CONVERSE → INVOKE, so every model with a
+    // verified MANTLE_CAPABLE entry defaults to Mantle. (Pre-amendment these defaulted
+    // to Converse; that assertion is now inverted.)
     foreach string id in ["anthropic.claude-haiku-4-5", "anthropic.claude-opus-4-8", "zai.glm-5",
-            "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it"] {
+            "deepseek.v3.2", "mistral.mistral-large-3-675b-instruct", "qwen.qwen3-coder-480b-a35b-v1:0",
+            "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it", "google.gemma-3-12b-it",
+            "google.gemma-3-4b-it"] {
         Route route = check resolveRoute(id, REGION);
-        test:assertEquals(route.family, CONVERSE, id + " is dual-homed and must default to Converse");
+        test:assertEquals(route.family, MANTLE, id + " is Mantle-capable and must default to Mantle");
+    }
+}
+
+@test:Config {}
+function testRuntimeOnlyModelsDefaultToConverse() returns error? {
+    // Models with NO Mantle entry sink to Converse — the table-driven safety: we
+    // prefer Mantle only where we hold a verified wire shape, never by guessing.
+    // sonnet-4-6 is genuinely runtime-only (its card marks bedrock-mantle NO), so it
+    // will never gain an entry; nova-pro simply has none.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
+    foreach string id in ["anthropic.claude-sonnet-4-6", "amazon.nova-pro-v1:0",
+            "mistral.mistral-large-2407-v1:0"] {
+        Route route = check resolveRoute(id, REGION);
+        test:assertEquals(route.family, CONVERSE, id + " has no Mantle entry, so it defaults to Converse");
     }
 }

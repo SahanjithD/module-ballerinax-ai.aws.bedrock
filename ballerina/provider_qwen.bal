@@ -20,7 +20,14 @@ import ballerina/jballerina.java;
 
 # Well-known Qwen model ids. Any newer id can be passed as a `string`.
 public enum QwenModel {
-    QWEN3_32B = "qwen.qwen3-32b-v1:0"
+    QWEN3_32B = "qwen.qwen3-32b-v1:0",
+    # Qwen3 Coder 480B A35B — the flagship coding model (MoE, 480B/35B active).
+    # This is the bedrock-runtime id; on bedrock-mantle the id differs
+    # (`qwen.qwen3-coder-480b-a35b-instruct`, like gpt-oss), so forcing MANTLE needs
+    # a `routeOverrides` entry. In-Region callable (us-east-1 etc.); Geo/Global not
+    # supported. Converse + Invoke; defaults to Converse here.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+    QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
 
 # Qwen-specific configuration (CLAUDE.md §3).
@@ -37,7 +44,6 @@ public isolated distinct client class QwenModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final AuthHeaderStyle? authHeader;
     private final readonly & ModelCodec codec;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
@@ -70,12 +76,11 @@ public isolated distinct client class QwenModelProvider {
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.authHeader = route.mantleEntry?.authHeader;
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
         self.params = qwenParams(maxTokens, temperature, config);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail).cloneReadOnly();
+        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
     }
 
     # + messages - Chat messages or a single user message
@@ -108,6 +113,6 @@ isolated function qwenParams(int? maxTokens, decimal? temperature, QwenConfig co
     }
     json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
     return buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
-        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier,
+        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier, config?.latencyOptimized,
         config?.requestMetadata, config?.guardrail);
 }

@@ -44,7 +44,9 @@ final readonly & ModelCodec MANTLE_MESSAGES_CODEC = {
 final readonly & ModelCodec MANTLE_RESPONSES_CODEC = {
     encode: encodeResponses,
     decode: decodeResponses,
-    toolChoice: OPENAI_TOOL_CHOICE,
+    // Responses forces tools with a FLAT `tool_choice`, unlike the Chat Completions
+    // codecs below — same vendor, different dialect.
+    toolChoice: RESPONSES_TOOL_CHOICE,
     supportsStreaming: false
 };
 
@@ -52,7 +54,7 @@ final readonly & ModelCodec MANTLE_RESPONSES_CODEC = {
 final readonly & ModelCodec MANTLE_CHAT_CODEC = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
-    toolChoice: OPENAI_TOOL_CHOICE,
+    toolChoice: OPENAI_CHAT_TOOL_CHOICE,
     supportsStreaming: false
 };
 
@@ -71,7 +73,7 @@ final readonly & ModelCodec INVOKE_NOVA_CODEC = {
 final readonly & ModelCodec INVOKE_OPENAI_CHAT_CODEC = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
-    toolChoice: OPENAI_TOOL_CHOICE,
+    toolChoice: OPENAI_CHAT_TOOL_CHOICE,
     supportsStreaming: false
 };
 

@@ -198,7 +198,7 @@ function mantleTransport() returns BedrockTransport|error =>
 function testMantleRefusesStructuredOutputNamingTheModel() returns error? {
     BedrockTransport transport = check mantleTransport();
     anydata|ai:Error result = structuredGenerate(false, MANTLE, MANTLE_RESPONSES_CODEC, transport,
-            "openai.gpt-5.4", {}, GEN_PARAMS, `Rate this`, Review, REVIEW_SCHEMA);
+            "openai.gpt-5.4", {}, GEN_PARAMS, `Rate this`, Review);
     test:assertTrue(result is ai:Error, "a typed target on Mantle must be a clean error (amendment)");
     if result is ai:Error {
         string message = result.message();
@@ -214,7 +214,7 @@ function testMistralTextDialectRefusesStructuredOutput() returns error? {
     // come from the CODEC having no tool-calling at all.
     BedrockTransport transport = check mantleTransport();
     anydata|ai:Error result = structuredGenerate(true, INVOKE, INVOKE_MISTRAL_TEXT_CODEC, transport,
-            "mistral.mistral-7b-instruct-v0:2", {}, GEN_PARAMS, `Rate this`, Review, REVIEW_SCHEMA);
+            "mistral.mistral-7b-instruct-v0:2", {}, GEN_PARAMS, `Rate this`, Review);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         string message = result.message();

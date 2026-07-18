@@ -28,7 +28,7 @@ import ballerina/jballerina.java;
 //             Invoke / Messages all NO, and serves it from `/openai/v1/responses`.
 //             So it signs `bedrock-mantle`, and it CANNOT do structured output.
 //
-// The routing lives in MANTLE_CAPABLE + MANTLE_DEFAULT (constants.bal), not here.
+// The routing lives in MANTLE_CAPABLE (constants.bal), not here.
 //
 // HISTORY: this file previously claimed Gemma was on bedrock-runtime because it
 // appeared "in no Mantle table". That is routing by elimination — the very
@@ -67,7 +67,6 @@ public isolated distinct client class GoogleModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final AuthHeaderStyle? authHeader;
     private final readonly & ModelCodec codec;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
@@ -100,14 +99,13 @@ public isolated distinct client class GoogleModelProvider {
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.authHeader = route.mantleEntry?.authHeader;
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
         self.params = buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
             config?.additionalModelRequestFields, config?.additionalModelResponseFieldPaths,
-            config?.serviceTier, config?.requestMetadata, config?.guardrail);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail).cloneReadOnly();
+            config?.serviceTier, config?.latencyOptimized, config?.requestMetadata, config?.guardrail);
+        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
     }
 
     # + messages - Chat messages or a single user message
