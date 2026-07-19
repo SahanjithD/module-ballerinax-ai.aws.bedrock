@@ -109,3 +109,22 @@ function testTypedGenerateErrorsOnAutoRoutedMantleModel() returns error? {
         test:assertTrue(typed.message().includes("anthropic.claude-sonnet-5"), typed.message());
     }
 }
+
+// Qwen3 32B is served under a DIFFERENT id on Mantle (`qwen.qwen3-32b`) than on
+// bedrock-runtime (`qwen.qwen3-32b-v1:0`). The caller always passes the RUNTIME id
+// — MANTLE_CAPABLE is keyed by it — and the resolver performs the swap. Getting
+// this backwards sends an id Mantle does not know, so both halves are asserted.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
+@test:Config {}
+function testQwen332bUsesItsOwnIdOnMantle() returns error? {
+    Route mantle = check resolveRoute("qwen.qwen3-32b-v1:0", REGION, {apiFamily: MANTLE});
+    test:assertEquals(mantle.family, MANTLE);
+    test:assertEquals(mantle.effectiveModelId, "qwen.qwen3-32b",
+            "Mantle serves this model under its own id");
+    test:assertEquals(mantle.bareModelId, "qwen.qwen3-32b-v1:0",
+            "the lookup key stays the runtime id");
+
+    Route converse = check resolveRoute("qwen.qwen3-32b-v1:0", REGION, {apiFamily: CONVERSE});
+    test:assertEquals(converse.effectiveModelId, "qwen.qwen3-32b-v1:0",
+            "the runtime surface keeps the runtime id");
+}
