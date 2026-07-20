@@ -121,7 +121,7 @@ isolated function openAIParams(int? maxTokens, decimal? temperature, OpenAIConfi
         extras["reasoning_effort"] = reasoningEffort;
     }
     json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
-    return buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
+    return buildInferenceParams(maxTokens, temperature, config?.stopSequences,
         additional, config?.additionalModelResponseFieldPaths, config?.serviceTier, config?.latencyOptimized,
         config?.requestMetadata, config?.guardrail);
 }

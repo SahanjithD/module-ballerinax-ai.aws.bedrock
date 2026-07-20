@@ -88,7 +88,7 @@ public isolated distinct client class MistralModelProvider {
         self.codec = codec;
         self.transport = transport;
         self.supportsStructuredOutput = route.family != MANTLE; // amendment
-        self.params = buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
+        self.params = buildInferenceParams(maxTokens, temperature, config?.stopSequences,
             config?.additionalModelRequestFields, config?.additionalModelResponseFieldPaths,
             config?.serviceTier, config?.latencyOptimized, config?.requestMetadata, config?.guardrail);
         self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();

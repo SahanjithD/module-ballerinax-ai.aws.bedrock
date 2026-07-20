@@ -42,10 +42,6 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
     if system is ai:ChatSystemMessage {
         body["instructions"] = contentToString(system.content); // system → instructions (§7.1)
     }
-    decimal? topP = params.topP;
-    if topP is decimal {
-        body["top_p"] = topP;
-    }
     if tools.length() > 0 {
         json[] toolDefs = [];
         foreach ai:ChatCompletionFunctions t in tools {

@@ -94,8 +94,6 @@ public type CommonModelConfig record {|
     string signingServiceName?;
 
     // --- Inference (§7) ---
-    # Nucleus sampling.
-    decimal topP?;
     # Provider-level stop sequences; a per-call `stop` overrides these (§7).
     string[] stopSequences?;
 
@@ -137,8 +135,6 @@ public type InferenceParams record {|
     decimal temperature;
     # Maximum tokens to generate.
     int maxTokens;
-    # Nucleus sampling.
-    decimal topP?;
     # Provider-level stop sequences; a per-call `stop` overrides these (§7).
     string[] stopSequences?;
     # Converse `additionalModelRequestFields` passthrough (§9.3).

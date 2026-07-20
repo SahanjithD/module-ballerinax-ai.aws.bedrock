@@ -48,10 +48,6 @@ isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMess
         "max_tokens": params.maxTokens,
         "temperature": params.temperature
     };
-    decimal? topP = params.topP;
-    if topP is decimal {
-        body["top_p"] = topP;
-    }
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop]; // per-call stop overrides configured stopSequences (§7)

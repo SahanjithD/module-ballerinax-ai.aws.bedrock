@@ -29,10 +29,6 @@ isolated function encodeNovaInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[
     }
 
     map<json> inferenceConfig = {"maxTokens": params.maxTokens, "temperature": params.temperature};
-    decimal? topP = params.topP;
-    if topP is decimal {
-        inferenceConfig["topP"] = topP;
-    }
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop];

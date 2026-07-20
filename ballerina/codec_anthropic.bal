@@ -50,10 +50,6 @@ isolated function encodeAnthropicMessages(ai:ChatSystemMessage? system, ai:ChatM
         // REQUIRED for Invoke-Anthropic; LiteLLM injects the same default (§7.2).
         body["anthropic_version"] = "bedrock-2023-05-31";
     }
-    decimal? topP = params.topP;
-    if topP is decimal {
-        body["top_p"] = topP;
-    }
     // Per-call `stop` overrides configured stopSequences outright (design §7).
     string[]? stops = params.stopSequences;
     if stop is string {

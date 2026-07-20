@@ -102,8 +102,8 @@ isolated function runChat(string providerName, ApiFamily family, string wireMode
 
 // Assembles the resolved `InferenceParams` once at construction (design §6, §7).
 // `additionalModelRequestFields` already carries any vendor extras the facade
-// folded in (Claude `top_k`/`thinking`, Nova `reasoningConfig`, Qwen thinking…).
-isolated function buildInferenceParams(int? maxTokens, decimal? temperature, decimal? topP,
+// folded in (Claude `thinking`, Nova `reasoningConfig`, Qwen thinking…).
+isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
         string[]? stopSequences, json additionalModelRequestFields,
         string[]? additionalModelResponseFieldPaths, ServiceTier? serviceTier,
         boolean? latencyOptimized, map<string>? requestMetadata, GuardrailConfig? guardrail)
@@ -112,9 +112,6 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature, dec
         temperature: temperature ?: DEFAULT_TEMPERATURE,
         maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT
     };
-    if topP is decimal {
-        params.topP = topP;
-    }
     if stopSequences is string[] {
         params.stopSequences = stopSequences;
     }

@@ -34,20 +34,18 @@ public enum AnthropicModel {
     CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview",
     # `bedrock-mantle` only (Messages API). No structured output.
     #
-    # This model constrains sampling: temperature must be 1.0 or unset, and top_k is
-    # not supported — so the module's 0.7 default will be rejected. Pass
-    # `temperature = 1.0`. It also requires opting in to provider data sharing.
+    # This model constrains sampling: temperature must be 1.0 or unset, so the
+    # module's 0.7 default will be REJECTED — pass `temperature = 1.0` explicitly.
+    # It also requires opting in to provider data sharing.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html
     CLAUDE_MYTHOS_5 = "anthropic.claude-mythos-5"
 }
 
 # Anthropic-specific configuration (CLAUDE.md §3). Includes the shared
-# `CommonModelConfig` and adds Claude-only knobs. `topK`/`thinking` are folded
+# `CommonModelConfig` and adds Claude-only knobs. `thinking` is folded
 # into the Converse `additionalModelRequestFields` passthrough (design §9.3).
 public type AnthropicConfig record {|
     *CommonModelConfig;
-    # `top_k` sampling — Converse passthrough / Anthropic body (§9.3).
-    int topK?;
     # Extended-thinking config, forwarded verbatim (§9.3).
     json thinking?;
     # `anthropic-workspace` header for per-application cost scoping on Mantle (§7.3).
@@ -132,21 +130,17 @@ public isolated distinct client class AnthropicModelProvider {
 }
 
 // Resolves inference params once at construction (design §6, §7). Folds the
-// Claude `topK`/`thinking` knobs into the `additionalModelRequestFields`
+// Claude `thinking` knob into the `additionalModelRequestFields`
 // passthrough (§9.3), which every Anthropic codec forwards.
 isolated function resolveParams(int? maxTokens, decimal? temperature, AnthropicConfig config)
         returns readonly & InferenceParams {
     map<json> extras = {};
-    int? topK = config?.topK;
-    if topK is int {
-        extras["top_k"] = topK;
-    }
     json thinking = config?.thinking;
     if thinking != () {
         extras["thinking"] = thinking;
     }
     json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
-    return buildInferenceParams(maxTokens, temperature, config?.topP, config?.stopSequences,
+    return buildInferenceParams(maxTokens, temperature, config?.stopSequences,
         additional, config?.additionalModelResponseFieldPaths, config?.serviceTier, config?.latencyOptimized,
         config?.requestMetadata, config?.guardrail);
 }
