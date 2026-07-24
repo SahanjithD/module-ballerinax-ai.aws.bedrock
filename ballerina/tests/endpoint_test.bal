@@ -1,0 +1,162 @@
+// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.com).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import ballerina/ai;
+import ballerina/test;
+
+// Endpoint + SigV4 canonical-URI encoding (design §9.1, §9.4). Regression tests
+// for the double-encoding fix from the sub-agent review.
+
+const ARN = "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123";
+
+@test:Config {}
+function testWirePathSingleEncodesArnModelIdSegment() returns error? {
+    Route route = check resolveRoute(ARN, REGION, {modelSchema: LLAMA});
+    Endpoint ep = check buildEndpoint(route);
+    test:assertTrue(ep.path.startsWith("/model/") && ep.path.endsWith("/invoke"));
+    test:assertTrue(ep.path.includes("%3A"), "ARN colons must be %3A on the wire");
+    test:assertTrue(ep.path.includes("%2F"), "ARN internal slash must be %2F on the wire");
+    test:assertFalse(ep.path.includes("arn:aws"), "raw colons must not appear on the wire path");
+}
+
+@test:Config {}
+function testCanonicalUriDoubleEncodesWirePath() returns error? {
+    // SigV4 non-S3 rule (§9.4): the canonical URI is the wire path encoded again.
+    Route route = check resolveRoute(ARN, REGION, {modelSchema: LLAMA});
+    Endpoint ep = check buildEndpoint(route);
+    string canonical = getCanonicalUri(ep.path) ?: "";
+    test:assertTrue(canonical.includes("%253A"), "canonical URI must double-encode the colon");
+    test:assertTrue(canonical.includes("%252F"), "canonical URI must double-encode the ARN slash");
+    test:assertTrue(canonical.startsWith("/model/") && canonical.endsWith("/invoke"),
+        "structural separators must stay literal '/'");
+}
+
+@test:Config {}
+function testBareIdWirePathHasNoEncodingArtifacts() returns error? {
+    Route route = check resolveRoute("us.anthropic.claude-opus-4-8", REGION);
+    Endpoint ep = check buildEndpoint(route);
+    test:assertEquals(ep.path, "/model/us.anthropic.claude-opus-4-8/converse");
+    // Unreserved chars: single == double, so the signature matches without ARNs.
+    test:assertEquals(getCanonicalUri(ep.path), "/model/us.anthropic.claude-opus-4-8/converse");
+}
+
+@test:Config {}
+function testMantleEndpointHostAndSigningService() returns error? {
+    Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-east-1");
+    Endpoint ep = check buildEndpoint(route);
+    test:assertEquals(ep.host, "bedrock-mantle.us-east-1.api.aws");
+    test:assertEquals(ep.path, "/anthropic/v1/messages");
+    test:assertEquals(ep.signingService, "bedrock-mantle");
+}
+
+@test:Config {}
+function testConverseSigningServiceIsBedrock() returns error? {
+    // nova-pro is Converse-default (not Mantle-capable); opus-4-8 now prefers Mantle
+    // under AUTO (Amendment 2), so it no longer exercises the runtime signing path.
+    Route route = check resolveRoute("amazon.nova-pro-v1:0", "us-east-1");
+    Endpoint ep = check buildEndpoint(route);
+    test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com");
+    test:assertEquals(ep.signingService, "bedrock");
+}
+
+// The Invoke guardrail-fired signal is a response BODY field; only the request id
+// arrives in a header (§9.5).
+//
+// REGRESSION: these tests previously asserted that a `GUARDRAIL_ACTION_HEADER` map
+// entry produced INTERVENED, under the comment "the guardrail signal arrives in
+// response headers". They passed by hand-injecting an entry the transport could
+// never populate — InvokeModel documents no such response header. Green tests,
+// dropped safety signal.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+
+@test:Config {}
+function testAugmentFromHeadersSurfacesRequestId() {
+    DecodedResponse decoded = {
+        message: {role: ai:ASSISTANT, content: "hi"},
+        usage: {inputTokens: 1, outputTokens: 1},
+        stopReason: "end_turn",
+        responseId: (),
+        guardrailAction: (),
+        additionalModelResponseFields: ()
+    };
+    augmentFromHeaders(decoded, {[REQUEST_ID_HEADER]: "req-123"});
+    test:assertEquals(decoded.responseId, "req-123");
+}
+
+@test:Config {}
+function testAugmentFromHeadersDoesNotOverrideAResponseIdFromTheBody() {
+    DecodedResponse decoded = {
+        message: {role: ai:ASSISTANT, content: ""},
+        usage: {inputTokens: 1, outputTokens: 0},
+        stopReason: "end_turn",
+        responseId: "existing",
+        guardrailAction: (),
+        additionalModelResponseFields: ()
+    };
+    augmentFromHeaders(decoded, {[REQUEST_ID_HEADER]: "other"});
+    test:assertEquals(decoded.responseId, "existing");
+}
+
+@test:Config {}
+function testInvokeGuardrailActionReadsTheBodyField() {
+    test:assertEquals(invokeGuardrailAction({"amazon-bedrock-guardrailAction": "INTERVENED"}), INTERVENED);
+    test:assertEquals(invokeGuardrailAction({"amazon-bedrock-guardrailAction": "NONE"}), NONE);
+    test:assertEquals(invokeGuardrailAction({"other": 1}), (), "absent field means no signal, not NONE");
+}
+
+@test:Config {}
+function testEveryInvokeCodecSurfacesAFiredGuardrail() returns error? {
+    // §9.5: the fired signal is never dropped on ANY Invoke dialect. Each of these
+    // decoders previously hardcoded `guardrailAction: ()`.
+    json mistralChat = {
+        "choices": [{"message": {"role": "assistant", "content": "blocked"}, "stop_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeMistralChat(mistralChat)).guardrailAction, INTERVENED);
+
+    json mistralText = {
+        "outputs": [{"text": "blocked", "stop_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeMistralText(mistralText)).guardrailAction, INTERVENED);
+
+    json openAIChat = {
+        "choices": [{"message": {"role": "assistant", "content": "blocked"}, "finish_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeOpenAIChat(openAIChat)).guardrailAction, INTERVENED);
+
+    json deepSeek = {
+        "choices": [{"text": "blocked", "stop_reason": "stop"}],
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeDeepSeekInvoke(deepSeek)).guardrailAction, INTERVENED);
+
+    // Nova-on-Invoke shares the Converse decoder but reports via the body field.
+    json novaInvoke = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "blocked"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1},
+        "amazon-bedrock-guardrailAction": "INTERVENED"
+    };
+    test:assertEquals((check decodeConverse(novaInvoke)).guardrailAction, INTERVENED);
+
+    // Converse proper still reports it via stopReason.
+    json converse = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "blocked"}]}},
+        "stopReason": "guardrail_intervened",
+        "usage": {"inputTokens": 1, "outputTokens": 1}
+    };
+    test:assertEquals((check decodeConverse(converse)).guardrailAction, INTERVENED);
+}
