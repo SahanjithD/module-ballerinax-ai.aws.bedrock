@@ -40,6 +40,10 @@ public enum ModelSchema {
     # shape, and an imported model's id cannot tell them apart.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
     MISTRAL_TEXT,
+    # DeepSeek-R1's `prompt`/`choices[].text` text-completion dialect. DeepSeek V3.1
+    # and V3.2 speak OpenAI-shaped chat completion on InvokeModel instead — use
+    # `OPENAI` for an imported model of that generation.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
     DEEPSEEK
 }
 

@@ -14,9 +14,9 @@
 
 import ballerina/ai;
 
-// DeepSeek on the InvokeModel route (design §7.2).
+// DeepSeek-R1 on the InvokeModel route (design §7.2).
 //
-// DeepSeek's Invoke dialect is TEXT COMPLETION, not chat — despite the `choices`
+// R1's Invoke dialect is TEXT COMPLETION, not chat — despite the `choices`
 // wrapper making it look OpenAI-shaped at a glance:
 //
 //   request:  {"prompt": string, "temperature": float, "top_p": float,
@@ -28,9 +28,12 @@ import ballerina/ai;
 // OpenAI chat codec sends `messages` (a 400 on encode) and, if it somehow got a
 // response, would read every field from the wrong place.
 //
-// Converse is the better route for DeepSeek and stays the module default; this
-// codec only serves an explicit `apiFamily = INVOKE` or `modelSchema: DEEPSEEK`.
+// This codec serves R1 ONLY (`usesDeepSeekTextDialect` in codecs.bal). DeepSeek
+// V3.1/V3.2 take `{"messages": [...]}` on InvokeModel and go through the OpenAI
+// chat codec instead — sending `prompt` to V3.2 returns `ValidationException ...
+// missing field messages`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
 
 // Encodes a DeepSeek text-completion request body (§7.2).
 isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,

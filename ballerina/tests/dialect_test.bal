@@ -84,6 +84,37 @@ function testResponsesEncodesNormallyWithNoStop() returns error? {
     test:assertFalse(body.hasKey("stop"), "no stop field exists in this dialect");
 }
 
+@test:Config {}
+function testResponsesReplaysAssistantToolCallAsFunctionCallItem() returns error? {
+    // REGRESSION (live 400, 2026-08-03): an assistant tool-call turn was encoded as an
+    // empty `output_text`, dropping the `function_call`. The Responses API then rejected
+    // the following `function_call_output` with "No tool call found for function call
+    // output with call_id …" and the agent loop stalled. The call must be replayed as a
+    // `function_call` item carrying its `call_id`, so a later output can pair to it.
+    ai:ChatMessage[] messages = [
+        {role: ai:USER, content: "What is 3607 multiplied by 4021?"},
+        {role: ai:ASSISTANT, content: (),
+            toolCalls: [{name: "multiply", arguments: {a: 3607, b: 4021}, id: "call_abc"}]}
+    ];
+    map<json> body = check encodeResponses((), messages, [], (),
+            {temperature: 0, maxTokens: 100}).ensureType();
+    json[] input = check body["input"].ensureType();
+
+    json[] calls = from json it in input where it is map<json> && it["type"] == "function_call" select it;
+    test:assertEquals(calls.length(), 1, "the assistant tool call must be replayed as a function_call item");
+    map<json> call = check calls[0].ensureType();
+    test:assertEquals(call["call_id"], "call_abc");
+    test:assertEquals(call["name"], "multiply");
+    // arguments is a JSON STRING in the Responses schema; assert on the parsed value so
+    // the test is not brittle to key spacing.
+    json parsedArgs = check (check call["arguments"].ensureType(string)).fromJsonString();
+    test:assertEquals(parsedArgs, {"a": 3607, "b": 4021});
+    // The dropped-to-empty-output_text bug must not recur: no blank assistant text item.
+    json[] blanks = from json it in input
+        where it is map<json> && it["role"] == "assistant" select it;
+    test:assertEquals(blanks.length(), 0, "the tool-call turn must not become an empty output_text item");
+}
+
 // ---- x-api-key is table data, honoured for every vendor ----
 
 @test:Config {}

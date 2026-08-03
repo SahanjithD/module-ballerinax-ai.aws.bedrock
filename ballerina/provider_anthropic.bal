@@ -21,6 +21,14 @@ import ballerina/jballerina.java;
 # Well-known Claude model ids. Any newer Claude is reachable by passing its id as
 # a `string` (design §5.5, principle 4).
 public enum AnthropicModel {
+    # Claude Opus 5 — Anthropic's most advanced Opus (1M context, 128K max output,
+    # adaptive thinking on by default). Converse + Invoke + Messages; dual-homed
+    # (bedrock-runtime and bedrock-mantle), so under `AUTO` it resolves to Mantle —
+    # pass `apiFamily = CONVERSE` for typed `generate()`. In-Region callable in
+    # us-east-1, eu-north-1, eu-west-1 and ap-southeast-4 only; elsewhere use a geo
+    # (`us.`/`eu.`/`au.`) or `global.` profile.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
+    CLAUDE_OPUS_5 = "anthropic.claude-opus-5",
     CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
     # Claude Sonnet 5 — the current flagship Sonnet (1M context, adaptive thinking
     # always on). Converse + Invoke + Messages; dual-homed (bedrock-runtime and

@@ -319,6 +319,32 @@ function testDeepSeekSelectsItsOwnInvokeCodec() returns error? {
     test:assertEquals(openai.toolChoice, OPENAI_CHAT_TOOL_CHOICE);
 }
 
+@test:Config {}
+function testDeepSeekDialectIsSelectedByModelId() {
+    // R1 is the ONLY DeepSeek id on the text-completion dialect. V3.1/V3.2 take
+    // `messages` on InvokeModel per their model cards, so a new `deepseek.` id
+    // defaults to chat — the opposite guess is a hard 400.
+    test:assertTrue(usesDeepSeekTextDialect("deepseek.r1-v1:0"));
+    test:assertFalse(usesDeepSeekTextDialect("deepseek.v3.2"));
+    test:assertFalse(usesDeepSeekTextDialect("deepseek.v3-v1:0"));
+    test:assertFalse(usesDeepSeekTextDialect("deepseek.v4-whatever"));
+}
+
+@test:Config {}
+function testDeepSeekV32InvokeEmitsMessagesNotPrompt() returns error? {
+    // REGRESSION: every `deepseek.` id went to the text-completion codec, so
+    // INVOKE on deepseek.v3.2 sent `prompt` and Bedrock answered
+    // `ValidationException ... missing field messages`.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+    readonly & ModelCodec codec = check selectInvokeCodec("deepseek.v3.2", ());
+    test:assertEquals(codec.toolChoice, OPENAI_CHAT_TOOL_CHOICE);
+    RequestCodec encode = codec.encode;
+    map<json> body = check encode((), SAMPLE_MESSAGES, [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertTrue(body.hasKey("messages"));
+    test:assertFalse(body.hasKey("prompt"), "V3.x is chat-shaped, not text completion");
+}
+
 // ---- Converse serviceTier is an object, not a string ----
 
 @test:Config {}

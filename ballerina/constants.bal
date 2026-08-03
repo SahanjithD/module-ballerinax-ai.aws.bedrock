@@ -71,6 +71,14 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // Responses/Chat Completions NO; Mantle URL `/anthropic/v1/messages`.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
     "anthropic.claude-opus-4-8": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
+    // Opus 5 (launched 2026-07-24) is dual-homed: bedrock-runtime YES +
+    // bedrock-mantle YES; Messages YES, Responses NO, Chat Completions NO. Same id on
+    // both endpoints, Mantle URL `/anthropic/v1/messages`. X_API_KEY for consistency
+    // with the Anthropic entries above (the card's sample uses the Anthropic SDK with
+    // AWS_BEARER_TOKEN_BEDROCK, which does not state the wire header) — §14 open
+    // item #1.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
+    "anthropic.claude-opus-5": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
     // Sonnet 5 is dual-homed like opus-4-8: bedrock-runtime YES + bedrock-mantle YES,
     // Messages API on `/anthropic/v1/messages`. Defaults to Converse (richer); this
     // entry exists so forcing MANTLE works instead of erroring "not on Mantle".

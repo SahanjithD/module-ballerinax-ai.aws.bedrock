@@ -23,7 +23,7 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] input = [];
     foreach ai:ChatMessage m in messages {
-        input.push(responsesInputItem(m));
+        input.push(...responsesInputItems(m));
     }
     // The Responses dialect has NO stop-sequence parameter — it is absent from the
     // request schema entirely (unlike Chat Completions' `stop`), so there is nothing
@@ -58,18 +58,47 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
     return body;
 }
 
-// Maps one `ai:ChatMessage` to a Responses `input` item.
-isolated function responsesInputItem(ai:ChatMessage m) returns json {
+// Maps one `ai:ChatMessage` to one or more Responses `input` items.
+//
+// An assistant turn that made tool calls MUST expand to a `function_call` item per
+// call, carrying its `call_id`: the Responses API pairs every `function_call_output`
+// to a preceding `function_call` by `call_id`. Dropping the call — as this once did,
+// encoding it as an empty `output_text` — makes AWS reject the following tool result
+// with 400 "No tool call found for function call output with call_id …", so the agent
+// loop never completes (verified live 2026-08-03). One assistant message can carry
+// several tool calls, which is why this returns json[].
+isolated function responsesInputItems(ai:ChatMessage m) returns json[] {
     if m is ai:ChatUserMessage {
-        return {"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]};
+        return [{"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]}];
     }
     if m is ai:ChatAssistantMessage {
-        return {"role": "assistant", "content": [{"type": "output_text", "text": m.content ?: ""}]};
+        json[] items = [];
+        string? content = m.content;
+        if content is string && content != "" {
+            items.push({"role": "assistant", "content": [{"type": "output_text", "text": content}]});
+        }
+        ai:FunctionCall[]? toolCalls = m.toolCalls;
+        if toolCalls is ai:FunctionCall[] {
+            foreach ai:FunctionCall fc in toolCalls {
+                items.push({
+                    "type": "function_call",
+                    "call_id": fc.id ?: fc.name,
+                    "name": fc.name,
+                    "arguments": (fc.arguments ?: {}).toJsonString()
+                });
+            }
+        }
+        // A bare assistant turn (no text, no calls) still needs an item so it is not
+        // silently dropped from the transcript.
+        if items.length() == 0 {
+            items.push({"role": "assistant", "content": [{"type": "output_text", "text": ""}]});
+        }
+        return items;
     }
     if m is ai:ChatFunctionMessage {
-        return {"type": "function_call_output", "call_id": m.id ?: m.name, "output": m.content ?: ""};
+        return [{"type": "function_call_output", "call_id": m.id ?: m.name, "output": m.content ?: ""}];
     }
-    return {"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]};
+    return [{"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]}];
 }
 
 // Decodes an OpenAI Responses response (design §7). Always populates `usage` and

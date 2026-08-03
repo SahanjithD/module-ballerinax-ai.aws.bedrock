@@ -93,6 +93,38 @@ function testBearerCredentialsSkipSigV4Entirely() returns error? {
 }
 
 @test:Config {}
+function testBearerWithXApiKeyMantleRouteSendsOnlyXApiKey() returns error? {
+    // REGRESSION (live 401, 2026-08-03): an X_API_KEY Mantle route on a bearer credential
+    // attaches `x-api-key` (addMantleApiKeyHeader); the transport must then NOT also add
+    // `Authorization: Bearer`, because Anthropic's Mantle surface rejects a request carrying
+    // BOTH with 401 "must not include both 'authorization' and 'x-api-key' headers".
+    // Exactly one auth header may reach the wire. The merged set had no coverage, which is
+    // how the collision shipped.
+    BedrockTransport transport = check new ({apiKey: "bedrock-api-key"}, "us-east-1",
+            {host: "bedrock-mantle.us-east-1.api.aws", path: "/anthropic/v1/messages",
+                signingService: SIGNING_BEDROCK_MANTLE});
+    map<string> headers = check transport.signedHeaders("{}",
+            {"x-api-key": "bedrock-api-key", "anthropic-version": "2023-06-01"}, FIXED_CLOCK);
+    test:assertEquals(headers["x-api-key"], "bedrock-api-key");
+    test:assertFalse(headers.hasKey("Authorization"),
+            "must not send Authorization alongside x-api-key — Anthropic Mantle 401s on both");
+}
+
+@test:Config {}
+function testBearerWithMixedCaseXApiKeyStillSuppressesAuthorization() returns error? {
+    // The suppression is case-insensitive: HTTP header names are case-insensitive, so a
+    // `routeOverrides` entry using `X-Api-Key` must not slip past the guard and resurrect
+    // both headers.
+    BedrockTransport transport = check new ({apiKey: "bedrock-api-key"}, "us-east-1",
+            {host: "bedrock-mantle.us-east-1.api.aws", path: "/anthropic/v1/messages",
+                signingService: SIGNING_BEDROCK_MANTLE});
+    map<string> headers = check transport.signedHeaders("{}",
+            {"X-Api-Key": "bedrock-api-key"}, FIXED_CLOCK);
+    test:assertFalse(headers.hasKey("Authorization"),
+            "case-insensitive guard: X-Api-Key must also suppress Authorization");
+}
+
+@test:Config {}
 function testStsCredentialsSignAndSendTheSecurityToken() returns error? {
     // The session token must be BOTH sent and signed — Bedrock requires it in the
     // canonical request, so it has to appear in SignedHeaders too.
