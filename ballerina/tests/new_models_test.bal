@@ -71,6 +71,39 @@ function testClaudeSonnet5DefaultsToMantleAndUsesTheMessagesPath() returns error
 }
 
 @test:Config {}
+function testClaudeOpus5DefaultsToMantleAndUsesTheMessagesPath() returns error? {
+    // Dual-homed (bedrock-runtime YES + bedrock-mantle YES), Messages API, same id on
+    // both endpoints — so AUTO prefers Mantle on `/anthropic/v1/messages`.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
+    Route auto = check resolveRoute(CLAUDE_OPUS_5, "us-east-1");
+    test:assertEquals(auto.family, MANTLE);
+    MantleEntry? entry = auto.mantleEntry;
+    if entry is () {
+        test:assertFail("Opus 5 under AUTO must yield a Mantle entry");
+    }
+    test:assertEquals(entry.path, "/anthropic/v1/messages");
+    test:assertEquals(entry.codec, MESSAGES_CODEC);
+    test:assertEquals(entry.authHeader, X_API_KEY);
+    // The card lists no separate Mantle id, so the wire id must not be rewritten.
+    test:assertEquals(auto.effectiveModelId, "anthropic.claude-opus-5");
+    // CONVERSE stays reachable explicitly (for typed generate()).
+    Route converse = check resolveRoute(CLAUDE_OPUS_5, "us-east-1", {apiFamily: CONVERSE});
+    test:assertEquals(converse.family, CONVERSE);
+}
+
+@test:Config {}
+function testClaudeOpus5AcceptsItsGeoAndGlobalProfiles() returns error? {
+    // The card lists `us.`/`eu.`/`au.` geo ids and `global.` — all must strip for
+    // lookup and re-apply on the Converse wire.
+    foreach string id in ["us.anthropic.claude-opus-5", "eu.anthropic.claude-opus-5",
+        "au.anthropic.claude-opus-5", "global.anthropic.claude-opus-5"] {
+        Route route = check resolveRoute(id, "us-east-1");
+        test:assertEquals(route.family, CONVERSE, id + " must leave Mantle once prefixed");
+        test:assertEquals(route.effectiveModelId, id, "the prefix must survive onto the wire");
+    }
+}
+
+@test:Config {}
 function testClaudeSonnet5AcceptsItsUsCrisProfile() returns error? {
     // The card lists `us.anthropic.claude-sonnet-5` as the US geo id: it must strip
     // for lookup and re-apply on the Converse wire.

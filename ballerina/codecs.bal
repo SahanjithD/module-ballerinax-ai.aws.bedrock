@@ -165,8 +165,8 @@ isolated function selectInvokeCodec(string bareModelId, ModelSchema? schema) ret
         return usesMistralTextDialect(bareModelId) ? INVOKE_MISTRAL_TEXT_CODEC : INVOKE_MISTRAL_CHAT_CODEC;
     }
     if bareModelId.startsWith("deepseek.") {
-        // Text completion, NOT the OpenAI chat shape — see codec_deepseek.bal.
-        return INVOKE_DEEPSEEK_CODEC;
+        // R1 is text completion; V3.x is OpenAI-shaped chat — see codec_deepseek.bal.
+        return usesDeepSeekTextDialect(bareModelId) ? INVOKE_DEEPSEEK_CODEC : INVOKE_OPENAI_CHAT_CODEC;
     }
     if bareModelId.startsWith("openai.") || bareModelId.startsWith("qwen.") ||
         bareModelId.startsWith("zai.") {
@@ -193,3 +193,27 @@ isolated function usesMistralTextDialect(string bareModelId) returns boolean =>
     bareModelId.startsWith("mistral.mistral-7b-instruct") ||
     bareModelId.startsWith("mistral.mixtral-") ||
     bareModelId.startsWith("mistral.mistral-large-2402");
+
+// DeepSeek ids that speak the `prompt`/`choices[].text` TEXT-completion dialect on
+// InvokeModel. Everything else under `deepseek.` speaks OpenAI-shaped chat
+// completion (`messages`/`choices[].message`), same as the Mistral split above.
+//
+// R1 only. V3.1 (`deepseek.v3-v1:0`) and V3.2 (`deepseek.v3.2`) both take
+// `{"messages": [...], "max_tokens": n}` on InvokeModel per their model cards, and a
+// live V3.2 Invoke call against us-east-1 confirms it: sending `prompt` comes back
+// `ValidationException ... missing field messages`.
+//
+// CONFLICTING FIRST-PARTY SOURCES on R1 — surfaced, not silently resolved:
+// the DeepSeek parameters page documents the full text-completion request/response
+// for R1 (and calls V3.1 text-completion too, which the V3.1 card contradicts),
+// while R1's own model card now shows an Invoke sample using `messages`. We keep R1
+// on the dialect that has a documented RESPONSE shape (`choices[].text` +
+// `stop_reason`) — decoding is only defined for that pairing — and default every
+// other DeepSeek id to chat.
+//
+// text:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
+// V3.2:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+// V3.1:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-1.html
+// R1:    https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html
+isolated function usesDeepSeekTextDialect(string bareModelId) returns boolean =>
+    bareModelId.startsWith("deepseek.r1");

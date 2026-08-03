@@ -190,7 +190,17 @@ isolated client class BedrockTransport {
 
         // Bedrock API key (bearer) — first-class on both endpoints (§9.5): skip SigV4.
         if creds is BearerToken {
-            headers["Authorization"] = string `Bearer ${creds.apiKey}`;
+            // Anthropic's Mantle surface REJECTS a request carrying BOTH `Authorization`
+            // and `x-api-key` (verified live 2026-08-03: either header alone -> 200, both
+            // -> 401 `authentication_error: "request must not include both 'authorization'
+            // and 'x-api-key' headers"`). When the caller already attached `x-api-key` — an
+            // X_API_KEY Mantle route, set by addMantleApiKeyHeader — that header is the sole
+            // authenticator and Bearer must be SUPPRESSED. The check is case-insensitive so
+            // a routeOverrides entry using a different casing (e.g. `X-Api-Key`) cannot
+            // slip past and resurrect the collision.
+            if !hasApiKeyHeader(headers) {
+                headers["Authorization"] = string `Bearer ${creds.apiKey}`;
+            }
             headers["Content-Type"] = APPLICATION_JSON;
             return headers;
         }
@@ -247,6 +257,19 @@ isolated client class BedrockTransport {
             string `SignedHeaders=${signedHeaderList}, Signature=${signature}`;
         return headers;
     }
+}
+
+// True if `headers` already carries an `x-api-key` (any casing). Used to decide
+// whether the transport's default `Authorization: Bearer` must be SUPPRESSED: an
+// X_API_KEY Mantle route attaches x-api-key, and Anthropic's Mantle surface 401s on a
+// request that includes both auth headers (see the BearerToken branch above).
+isolated function hasApiKeyHeader(map<string> headers) returns boolean {
+    foreach string name in headers.keys() {
+        if name.toLowerAscii() == "x-api-key" {
+            return true;
+        }
+    }
+    return false;
 }
 
 // A successful transport round-trip: the JSON body plus the selected response

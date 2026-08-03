@@ -160,14 +160,16 @@ isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail, Be
 // lived in the Anthropic facade alone, which meant the same data was honoured there
 // and silently ignored everywhere else.
 //
-// NOTE (§14 open item #1, unresolved): which header Mantle wants for Anthropic
-// models is genuinely ambiguous — AWS's documented curl uses `x-api-key`, while
-// Anthropic's SDK sends `Authorization: Bearer`, and no first-party source states
-// the wire header. We therefore HEDGE rather than guess: the transport always sets
-// `Authorization: Bearer` for a BearerToken, and X_API_KEY entries additionally send
-// `x-api-key`. Both carry the same key, so whichever the service reads, it succeeds.
-// This is deliberate, not redundancy to tidy away — one live call settles it, after
-// which this can select rather than hedge.
+// RESOLVED (§14 open item #1, verified live 2026-08-03): Anthropic's Mantle surface
+// REJECTS a request that carries BOTH `Authorization` and `x-api-key` — it returns
+// 401 `authentication_error: "request must not include both 'authorization' and
+// 'x-api-key' headers"`. Either header ALONE returns 200, so the per-model
+// `authHeader` now SELECTS the header rather than hedging with both. AWS's documented
+// curl uses `x-api-key`, so an X_API_KEY entry sends exactly that, and the transport
+// SUPPRESSES its default `Authorization: Bearer` whenever x-api-key is present
+// (see the BearerToken branch in transport.bal). Do NOT re-add a second header here:
+// the old "both carry the same key, so whichever the service reads it succeeds"
+// assumption is known-false and was the exact cause of the 401.
 //
 // Only a BearerToken can populate it: with SigV4 credentials there is no api key,
 // and the signature alone must authenticate the request.
