@@ -241,13 +241,19 @@ function testChinaPartitionArnBuildsTheCnHostAndSignsAsBedrock() returns error? 
 function testMantleIsRejectedOnTheChinaPartitionBeforeAnyIo() {
     // The `api.aws` Mantle host is not partition-templated (§9.2), so this must be
     // a construction error rather than a request to a host that cannot exist.
+    // Rejection may land in either stage, so BOTH branches assert — an `if r is
+    // Route` wrapper alone would let the test pass without running one assertion
+    // the day resolution starts erroring instead.
     Route|error r = resolveRoute("mantle/anthropic.claude-opus-4-8", "cn-north-1");
-    if r is Route {
-        Endpoint|error ep = buildEndpoint(r);
-        test:assertTrue(ep is error, "Mantle must not build an endpoint on aws-cn");
-        if ep is error {
-            test:assertTrue(ep.message().includes("partition"), ep.message());
-        }
+    if r is error {
+        test:assertTrue(r.message().includes("partition") || r.message().includes("Mantle"),
+                "rejected at resolution, but the message must say why: " + r.message());
+        return;
+    }
+    Endpoint|error ep = buildEndpoint(r);
+    test:assertTrue(ep is error, "Mantle must not build an endpoint on aws-cn");
+    if ep is error {
+        test:assertTrue(ep.message().includes("partition"), ep.message());
     }
 }
 

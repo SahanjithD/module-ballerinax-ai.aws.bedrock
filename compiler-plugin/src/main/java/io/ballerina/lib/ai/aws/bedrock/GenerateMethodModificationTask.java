@@ -105,11 +105,9 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     };
 
     private final AiAwsBedrockCodeModifier.AnalysisData analysisData;
-    private final ModifierData modifierData;
 
     GenerateMethodModificationTask(AiAwsBedrockCodeModifier.AnalysisData analysisData) {
         this.analysisData = analysisData;
-        this.modifierData = new ModifierData();
     }
 
     @Override
@@ -126,14 +124,21 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             Collection<DocumentId> documentIds = module.documentIds();
             Collection<DocumentId> testDocumentIds = module.testDocumentIds();
 
+            // Per MODULE, not per task. `typeSchemas` is keyed by the UNQUALIFIED
+            // type name, so a shared map lets a `Result` record in one module
+            // annotate an unrelated `Result` in the next with the wrong schema.
+            // Module-scoped state makes the key collision unreachable: within one
+            // module the names are already unique.
+            ModifierData modifierData = new ModifierData();
+
             List<ClassSymbol> providerSymbols = resolveProviderSymbols(semanticModel);
 
             for (DocumentId documentId : documentIds) {
-                analyzeDocument(module, documentId, semanticModel, providerSymbols);
+                analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
             }
 
             for (DocumentId documentId : testDocumentIds) {
-                analyzeDocument(module, documentId, semanticModel, providerSymbols);
+                analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
             }
 
             for (DocumentId documentId : documentIds) {
@@ -162,14 +167,14 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     }
 
     private void analyzeDocument(Module module, DocumentId documentId, SemanticModel semanticModel,
-                                 List<ClassSymbol> providerSymbols) {
+                                 List<ClassSymbol> providerSymbols, ModifierData modifierData) {
         Document document = module.document(documentId);
         Node rootNode = document.syntaxTree().rootNode();
         if (!(rootNode instanceof ModulePartNode modulePartNode)) {
             return;
         }
 
-        new GenerateMethodJsonSchemaGenerator(semanticModel, providerSymbols, this.analysisData)
+        new GenerateMethodJsonSchemaGenerator(semanticModel, providerSymbols, this.analysisData, modifierData)
                 .generate(modulePartNode);
     }
 
@@ -230,7 +235,7 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
         return null;
     }
 
-    private class GenerateMethodJsonSchemaGenerator extends NodeVisitor {
+    private static class GenerateMethodJsonSchemaGenerator extends NodeVisitor {
         private static final String GENERATE_METHOD_NAME = "generate";
         private static final String STRING = "string";
         private static final String BYTE = "byte";
@@ -238,12 +243,15 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
         private final SemanticModel semanticModel;
         private final TypeMapper typeMapper;
         private final List<ClassSymbol> providerSymbols;
+        private final ModifierData modifierData;
 
         GenerateMethodJsonSchemaGenerator(SemanticModel semanticModel, List<ClassSymbol> providerSymbols,
-                                          AiAwsBedrockCodeModifier.AnalysisData analyserData) {
+                                          AiAwsBedrockCodeModifier.AnalysisData analyserData,
+                                          ModifierData modifierData) {
             this.semanticModel = semanticModel;
             this.typeMapper = analyserData.typeMapper;
             this.providerSymbols = providerSymbols;
+            this.modifierData = modifierData;
         }
 
         void generate(ModulePartNode modulePartNode) {
@@ -273,7 +281,7 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
 
         private void updateTypeSchemaForTypeDef(RemoteMethodCallActionNode remoteMethodCallActionNode) {
             semanticModel.typeOf(remoteMethodCallActionNode).ifPresent(symbol -> populateTypeSchema(symbol,
-                    this.typeMapper, modifierData.typeSchemas, this.semanticModel.types().ANYDATA));
+                    this.typeMapper, this.modifierData.typeSchemas, this.semanticModel.types().ANYDATA));
         }
 
         private static void populateTypeSchema(TypeSymbol memberType, TypeMapper typeMapper,

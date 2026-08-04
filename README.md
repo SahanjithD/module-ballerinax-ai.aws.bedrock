@@ -220,6 +220,21 @@ rather than cluttering the config record. Note that passthrough is honoured on
 Converse, Nova, OpenAI-chat, Responses, Mistral and Invoke-DeepSeek, but **not** on
 the Invoke-Anthropic codec.
 
+> **`temperature` has no default, and that is deliberate.** Leave it unset and the
+> field is omitted from the request entirely, so the model applies its own default.
+> This is not a style choice: Anthropic deprecated sampling parameters on Claude 4.7
+> and later (`CLAUDE_OPUS_4_8`, `CLAUDE_OPUS_5`, `CLAUDE_SONNET_5`, `CLAUDE_MYTHOS_5`)
+> and OpenAI's GPT-5.x reasoning models (`GPT_5_4`, `GPT_5_5`, `GPT_5_6_*`) never
+> accepted them. On those models **any** value returns
+> `400 temperature is deprecated for this model`, so a module-level default would
+> make them unusable out of the box. Set `temperature` only for models you know
+> accept it — Nova, Mistral, Qwen, Gemma, DeepSeek, GPT-OSS, and Claude 4.6 and
+> earlier.
+
+`maxTokens` **does** default (to 4096). It is capped per model — Nova Pro/Lite/Micro
+top out at 5K output tokens — and on adaptive-thinking models the thinking pass is
+billed against the same ceiling, so raise it for long reasoning tasks.
+
 ## Fails fast, before any network call
 
 Construction errors are reserved for what AWS *cannot* diagnose for you:

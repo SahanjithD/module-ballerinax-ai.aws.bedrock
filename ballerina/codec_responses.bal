@@ -38,7 +38,8 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
             "Converse/Invoke model.");
     }
 
-    map<json> body = {"input": input, "max_output_tokens": params.maxTokens, "temperature": params.temperature};
+    map<json> body = {"input": input, "max_output_tokens": params.maxTokens};
+    setTemperature(body, params);
     if system is ai:ChatSystemMessage {
         body["instructions"] = contentToString(system.content); // system → instructions (§7.1)
     }

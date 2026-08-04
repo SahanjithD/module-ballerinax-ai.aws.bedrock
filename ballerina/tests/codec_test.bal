@@ -472,3 +472,55 @@ function testIntFieldRejectsAFractionalDecimal() {
     test:assertEquals(intField({"n": 1.5d}, "n"), (),
             "a fractional token count is unusable and must be absent, not rounded to 2");
 }
+
+// ---- temperature is OMITTED when unset, on every codec ----
+
+@test:Config {}
+function testTemperatureIsOmittedFromEveryCodecWhenUnset() returns error? {
+    // Not a cosmetic default. Claude 4.7+/Opus 5/Sonnet 5/Mythos 5 and OpenAI's
+    // GPT-5.x reject `temperature` outright, so a module default made those model
+    // ids return 400 on every single request. Unset MUST mean absent on the wire.
+    InferenceParams bare = {maxTokens: 100};
+
+    map<json> converse = check encodeConverse((), SAMPLE_MESSAGES, [], (), bare).ensureType();
+    map<json> converseInference = check converse["inferenceConfig"].ensureType();
+    test:assertFalse(converseInference.hasKey("temperature"), "Converse must omit temperature");
+
+    map<json> nova = check encodeNovaInvoke((), SAMPLE_MESSAGES, [], (), bare).ensureType();
+    map<json> novaInference = check nova["inferenceConfig"].ensureType();
+    test:assertFalse(novaInference.hasKey("temperature"), "Nova must omit temperature");
+
+    map<json> anthropic = check encodeAnthropicMessages((), SAMPLE_MESSAGES, [], (), bare, false).ensureType();
+    test:assertFalse(anthropic.hasKey("temperature"), "Anthropic Messages must omit temperature");
+
+    map<json> responses = check encodeResponses((), SAMPLE_MESSAGES, [], (), bare).ensureType();
+    test:assertFalse(responses.hasKey("temperature"), "Responses must omit temperature");
+
+    map<json> chat = check encodeOpenAIChat((), SAMPLE_MESSAGES, [], (), bare).ensureType();
+    test:assertFalse(chat.hasKey("temperature"), "OpenAI chat must omit temperature");
+
+    map<json> mistral = check encodeMistralChat((), SAMPLE_MESSAGES, [], (), bare).ensureType();
+    test:assertFalse(mistral.hasKey("temperature"), "Mistral chat must omit temperature");
+}
+
+@test:Config {}
+function testTemperatureIsStillEmittedWhenTheCallerSetsIt() returns error? {
+    // The omission must be driven by "unset", not by dropping support.
+    InferenceParams withTemp = {maxTokens: 100, temperature: 0.25};
+    map<json> converse = check encodeConverse((), SAMPLE_MESSAGES, [], (), withTemp).ensureType();
+    map<json> inference = check converse["inferenceConfig"].ensureType();
+    test:assertEquals(inference["temperature"], 0.25d);
+
+    map<json> anthropic = check encodeAnthropicMessages((), SAMPLE_MESSAGES, [], (), withTemp, false).ensureType();
+    test:assertEquals(anthropic["temperature"], 0.25d);
+}
+
+@test:Config {}
+function testBuildInferenceParamsDoesNotInventATemperature() {
+    InferenceParams none = buildInferenceParams((), (), (), (), (), (), (), (), ());
+    test:assertEquals(none?.temperature, (), "an unset temperature must stay unset");
+    test:assertEquals(none.maxTokens, DEFAULT_MAX_TOKEN_COUNT, "maxTokens still defaults");
+
+    InferenceParams set = buildInferenceParams((), 0.9d, (), (), (), (), (), (), ());
+    test:assertEquals(set?.temperature, 0.9d);
+}

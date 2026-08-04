@@ -63,6 +63,23 @@ isolated function toolParameters(ai:ChatCompletionFunctions tool) returns map<js
     return params ?: {"type": "object", "properties": {}};
 }
 
+// Sets `temperature` on a request body ONLY when the caller supplied one.
+//
+// The field cannot be defaulted. Anthropic deprecated sampling parameters on
+// Claude 4.7 and later (Opus 4.7/4.8, Opus 5, Sonnet 5, Fable 5, Mythos 5) and
+// OpenAI's GPT-5.x reasoning models never accepted them: on those models ANY
+// value — including a module default the caller never asked for — is a hard 400
+// (`temperature is deprecated for this model` / `Unsupported parameter`). Omitting
+// the key is the only universally safe behaviour, and it lets each model apply its
+// own default rather than one this module invents.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+isolated function setTemperature(map<json> body, InferenceParams params, string key = "temperature") {
+    decimal? temperature = params?.temperature;
+    if temperature is decimal {
+        body[key] = temperature;
+    }
+}
+
 // ---- typed JSON field accessors (decode helpers) ----
 
 isolated function strField(map<json> m, string k) returns string? {

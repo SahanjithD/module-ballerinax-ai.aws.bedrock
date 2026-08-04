@@ -26,7 +26,8 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
         wire.push(converseMessage(m));
     }
 
-    map<json> inferenceConfig = {"maxTokens": params.maxTokens, "temperature": params.temperature};
+    map<json> inferenceConfig = {"maxTokens": params.maxTokens};
+    setTemperature(inferenceConfig, params);
     // Per-call `stop` overrides configured stopSequences outright (design §7).
     string[]? stops = params.stopSequences;
     if stop is string {

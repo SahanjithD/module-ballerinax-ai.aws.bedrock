@@ -50,9 +50,9 @@ isolated function encodeMistralChat(ai:ChatSystemMessage? system, ai:ChatMessage
 
     map<json> body = {
         "messages": wire,
-        "max_tokens": params.maxTokens,
-        "temperature": params.temperature
+        "max_tokens": params.maxTokens
     };
+    setTemperature(body, params);
     // AWS's own page is internally inconsistent here: `stop` is absent from the
     // chat-completion parameter list, yet the `stop_reason` description refers to
     // "the stop sequences that you define in the stop request parameter". We emit
@@ -202,9 +202,9 @@ isolated function encodeMistralText(ai:ChatSystemMessage? system, ai:ChatMessage
 
     map<json> body = {
         "prompt": mistralInstructPrompt(system, messages),
-        "max_tokens": params.maxTokens,
-        "temperature": params.temperature
+        "max_tokens": params.maxTokens
     };
+    setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop]; // per-call stop overrides configured stopSequences (§7)
