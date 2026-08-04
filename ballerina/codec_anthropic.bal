@@ -43,9 +43,9 @@ isolated function encodeAnthropicMessages(ai:ChatSystemMessage? system, ai:ChatM
     }
     map<json> body = {
         "max_tokens": params.maxTokens,
-        "temperature": params.temperature,
         "messages": wire
     };
+    setTemperature(body, params);
     if bedrockInvoke {
         // REQUIRED for Invoke-Anthropic; LiteLLM injects the same default (§7.2).
         body["anthropic_version"] = "bedrock-2023-05-31";

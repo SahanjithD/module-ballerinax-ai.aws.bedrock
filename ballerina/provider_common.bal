@@ -41,7 +41,12 @@ isolated function runChat(string providerName, ApiFamily family, string wireMode
     if stop is string {
         span.addStopSequence(stop);
     }
-    span.addTemperature(params.temperature);
+    decimal? spanTemperature = params?.temperature;
+    if spanTemperature is decimal {
+        // Only report a temperature the caller actually set — recording an invented
+        // default would misreport what went on the wire.
+        span.addTemperature(spanTemperature);
+    }
     span.addInputMessages(messagesForSpan(msgs));
     if tools.length() > 0 {
         span.addTools(tools);
@@ -108,10 +113,14 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
         string[]? additionalModelResponseFieldPaths, ServiceTier? serviceTier,
         boolean? latencyOptimized, map<string>? requestMetadata, GuardrailConfig? guardrail)
         returns readonly & InferenceParams {
-    InferenceParams params = {
-        temperature: temperature ?: DEFAULT_TEMPERATURE,
-        maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT
-    };
+    InferenceParams params = {maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT};
+    // No default: an unset temperature stays unset all the way to the wire, so the
+    // model applies its own. `?:` here would make it impossible for a caller to
+    // OMIT the field, which is a hard 400 on every sampling-deprecated model — see
+    // `setTemperature` in codec_common.bal.
+    if temperature is decimal {
+        params.temperature = temperature;
+    }
     if stopSequences is string[] {
         params.stopSequences = stopSequences;
     }

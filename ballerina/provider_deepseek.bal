@@ -62,7 +62,9 @@ public isolated distinct client class DeepSeekModelProvider {
     # + model - A DeepSeek id; use a CRIS inference-profile id (e.g. `us.deepseek.r1-v1:0`)
     # + region - Default region; an ARN `model`'s region segment overrides it (§5.2)
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature
+    # + temperature - Sampling temperature. Leave unset (the default) to omit the
+    #                 field entirely and use the model's own default — several current
+    #                 models reject it outright
     # + config - Routing overrides, guardrails, Converse passthrough
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -70,7 +72,7 @@ public isolated distinct client class DeepSeekModelProvider {
             @display {label: "Model"} DeepSeekModel|string model,
             @display {label: "Region"} string region,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
-            @display {label: "Temperature"} decimal? temperature = DEFAULT_TEMPERATURE,
+            @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *DeepSeekConfig config)
             returns ai:Error? {
         RouteConfig routeConfig = {

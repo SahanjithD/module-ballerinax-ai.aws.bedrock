@@ -28,7 +28,8 @@ isolated function encodeNovaInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[
         wire.push(converseMessage(m)); // Nova uses the Converse content-block shape
     }
 
-    map<json> inferenceConfig = {"maxTokens": params.maxTokens, "temperature": params.temperature};
+    map<json> inferenceConfig = {"maxTokens": params.maxTokens};
+    setTemperature(inferenceConfig, params);
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop];

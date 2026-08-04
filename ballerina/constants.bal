@@ -16,7 +16,12 @@
 // for a listed vendor is reachable by extending these tables (or via
 // `routeOverrides`) with no other code change.
 
-const decimal DEFAULT_TEMPERATURE = 0.7d;
+// There is deliberately NO default temperature. Anthropic deprecated sampling
+// parameters on Claude 4.7 and later, and OpenAI's GPT-5.x reasoning models never
+// accepted them — on those models any value at all is a 400, so a module default
+// would make seven of this package's flagship model ids unusable out of the box.
+// Unset means the key is absent from the request and the model's own default
+// applies. See `setTemperature` in codec_common.bal.
 
 // 512 was too low to be a safe default: on adaptive-thinking models (Claude 4.7+,
 // Sonnet 5, Opus 5) thinking tokens count against this ceiling, so the response

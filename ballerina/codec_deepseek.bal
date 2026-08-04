@@ -48,9 +48,9 @@ isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMess
 
     map<json> body = {
         "prompt": deepSeekPrompt(system, messages),
-        "max_tokens": params.maxTokens,
-        "temperature": params.temperature
+        "max_tokens": params.maxTokens
     };
+    setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop]; // per-call stop overrides configured stopSequences (§7)

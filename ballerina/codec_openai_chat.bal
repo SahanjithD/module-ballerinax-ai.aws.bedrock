@@ -34,9 +34,9 @@ isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[
 
     map<json> body = {
         "messages": wire,
-        "max_tokens": params.maxTokens,
-        "temperature": params.temperature
+        "max_tokens": params.maxTokens
     };
+    setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop]; // per-call stop overrides configured stopSequences (§7)

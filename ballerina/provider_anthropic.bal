@@ -43,8 +43,8 @@ public enum AnthropicModel {
     CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview",
     # `bedrock-mantle` only (Messages API). No structured output.
     #
-    # This model constrains sampling: temperature must be 1.0 or unset, so the
-    # module's 0.7 default will be REJECTED — pass `temperature = 1.0` explicitly.
+    # This model rejects sampling parameters (as do Opus 4.7+, Opus 5 and Sonnet 5):
+    # passing `temperature` at all returns a 400. Leave it unset — the default.
     # It also requires opting in to provider data sharing.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html
     CLAUDE_MYTHOS_5 = "anthropic.claude-mythos-5"
@@ -79,7 +79,9 @@ public isolated distinct client class AnthropicModelProvider {
     # + model - A Claude id (bare, CRIS-prefixed, ARN, or `mantle/|converse/|invoke/` prefixed)
     # + region - Default region; an ARN `model`'s region segment overrides it (§5.2)
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature
+    # + temperature - Sampling temperature. Leave unset (the default) to omit the
+    #                 field entirely and use the model's own default — several current
+    #                 models reject it outright
     # + config - Routing overrides, guardrails, Converse passthrough, Claude knobs
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -87,7 +89,7 @@ public isolated distinct client class AnthropicModelProvider {
             @display {label: "Model"} AnthropicModel|string model,
             @display {label: "Region"} string region,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
-            @display {label: "Temperature"} decimal? temperature = DEFAULT_TEMPERATURE,
+            @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AnthropicConfig config)
             returns ai:Error? {
         // ---- shared spine (identical in every vendor provider) ----

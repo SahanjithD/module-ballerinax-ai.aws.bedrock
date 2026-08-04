@@ -157,8 +157,9 @@ public type CommonModelConfig record {|
 
 # Resolved inference parameters plus Converse-body passthrough (design §7, §9.3).
 public type InferenceParams record {|
-    # Sampling temperature.
-    decimal temperature;
+    # Sampling temperature. OPTIONAL: when unset the field is omitted from the
+    # request body entirely and the model's own default applies (§7).
+    decimal temperature?;
     # Maximum tokens to generate.
     int maxTokens;
     # Provider-level stop sequences; a per-call `stop` overrides these (§7).

@@ -66,7 +66,14 @@ task build {
     dependsOn(':ai.aws.bedrock-ballerina:build')
 }
 
-tasks.findByPath(':ai.aws.bedrock-ballerina:build').mustRunAfter(':ai.aws.bedrock-native:build')
+// `bal build` loads BOTH jars by path: Ballerina.toml points at the native jar and
+// CompilerPlugin.toml at the compiler-plugin jar. Order the Ballerina build after
+// both, or the plugin can be loaded before its jar exists and fail intermittently.
+// `getByPath` over `findByPath`: a wrong path should fail configuration with a
+// clear message, not NPE on a null task.
+tasks.getByPath(':ai.aws.bedrock-ballerina:build').mustRunAfter(
+        ':ai.aws.bedrock-native:build',
+        ':ai.aws.bedrock-compiler-plugin:build')
 
 release {
     buildTasks = ['build']
