@@ -156,7 +156,8 @@ public type CommonModelConfig record {|
 // ============================================================================
 
 # Resolved inference parameters plus Converse-body passthrough (design §7, §9.3).
-public type InferenceParams record {|
+# Module-private: built at construction and consumed only by the internal codecs.
+type InferenceParams record {|
     # Sampling temperature. OPTIONAL: when unset the field is omitted from the
     # request body entirely and the model's own default applies (§7).
     decimal temperature?;
@@ -183,8 +184,8 @@ public type InferenceParams record {|
 // because the span/guardrail/retry all need `usage` + `stopReason` (§3.2, §7).
 // ============================================================================
 
-# Normalized token usage (design §7).
-public type TokenUsage record {|
+# Normalized token usage (design §7). Module-private — only reachable via `DecodedResponse`.
+type TokenUsage record {|
     # Prompt tokens consumed.
     int inputTokens;
     # Completion tokens generated.
@@ -192,7 +193,8 @@ public type TokenUsage record {|
 |};
 
 # What `decode` produces — more than the module-boundary message (design §7).
-public type DecodedResponse record {|
+# Module-private (CLAUDE.md §3): the span, guardrail signal, and retry loop read it.
+type DecodedResponse record {|
     # The module invariant (§3).
     ai:ChatAssistantMessage message;
     # Span input (§3.2).
@@ -208,19 +210,19 @@ public type DecodedResponse record {|
 |};
 
 # Encode: system is hoisted out of `messages` into the signature (design §7.1) so
-# no codec can emit it as a `role: system` message.
-public type RequestCodec isolated function (
+# no codec can emit it as a `role: system` message. Module-private codec plumbing.
+type RequestCodec isolated function (
         ai:ChatSystemMessage? system,
         ai:ChatMessage[] messages,
         ai:ChatCompletionFunctions[] tools,
         string? stop,
         InferenceParams params) returns json|ai:Error;
 
-# Decode: wire JSON → `DecodedResponse` (design §7).
-public type ResponseCodec isolated function (json response) returns DecodedResponse|ai:Error;
+# Decode: wire JSON → `DecodedResponse` (design §7). Module-private codec plumbing.
+type ResponseCodec isolated function (json response) returns DecodedResponse|ai:Error;
 
-# An encode/decode pair (design §7).
-public type ModelCodec record {|
+# An encode/decode pair (design §7). Module-private codec registry record.
+type ModelCodec record {|
     # Messages → request body.
     RequestCodec encode;
     # Wire JSON → `DecodedResponse`.

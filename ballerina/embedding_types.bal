@@ -92,7 +92,8 @@ public type CohereEmbeddingConfig record {|
 |};
 
 # Resolved embedding parameters, fixed at construction (embedding design §7).
-public type EmbeddingParams record {|
+# Module-private: built at construction and consumed only by the internal codecs.
+type EmbeddingParams record {|
     # Output vector size.
     int dimensions?;
     # Titan only.
@@ -107,8 +108,8 @@ public type EmbeddingParams record {|
 
 # What an embedding `decode` produces — NOT a bare vector (embedding design §2,
 # §7). Cohere's response carries no token count at all, so `inputTokenCount` is
-# optional and the observe-span call MUST be guarded.
-public type DecodedEmbedding record {|
+# optional and the observe-span call MUST be guarded. Module-private (design §2, §7).
+type DecodedEmbedding record {|
     # One embedding per input text, in input order.
     ai:Embedding[] embeddings;
     # Titan: `inputTextTokenCount`. Cohere: absent → `()`.
@@ -118,16 +119,17 @@ public type DecodedEmbedding record {|
 |};
 
 # Encodes a window of texts into a request body (embedding design §7).
-public type EncodeEmbedRequest isolated function (string[] texts, EmbeddingParams params)
+# Module-private codec plumbing.
+type EncodeEmbedRequest isolated function (string[] texts, EmbeddingParams params)
     returns json|ai:Error;
 
-# Decodes an embedding response (embedding design §7).
-public type DecodeEmbedResponse isolated function (json response) returns DecodedEmbedding|ai:Error;
+# Decodes an embedding response (embedding design §7). Module-private codec plumbing.
+type DecodeEmbedResponse isolated function (json response) returns DecodedEmbedding|ai:Error;
 
 # An embedding codec (embedding design §7). `maxBatchSize` is the WIRE limit, not
 # a tuning knob: Titan's `inputText` is a single string (1), Cohere's `texts` is
-# an array of up to 96.
-public type EmbeddingCodec record {|
+# an array of up to 96. Module-private codec registry record.
+type EmbeddingCodec record {|
     # Texts per request the wire allows — Titan 1, Cohere 96. One window == one call.
     int maxBatchSize;
     # Texts → request body.
