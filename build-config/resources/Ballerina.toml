@@ -1,7 +1,7 @@
 [package]
 org = "ballerinax"
 name = "ai.aws.bedrock"
-version = "0.9.0"
+version = "@toml.version@"
 distribution = "2201.12.0"
 authors = ["Ballerina"]
 keywords = ["ai", "aws", "bedrock", "llm", "embeddings", "converse", "mantle", "Area/AI & Machine Learning", "Type/Model Provider", "Type/Embedding Provider", "Type/Connector", "Vendor/AWS"]
@@ -18,5 +18,5 @@ graalvmCompatible = true
 # Native shim for generate() (design §3). Built by `./gradlew :ai.aws.bedrock-native:build`.
 groupId = "io.ballerina.lib"
 artifactId = "ai.aws.bedrock-native"
-version = "0.9.0"
-path = "../native/build/libs/ai.aws.bedrock-native-0.9.0-SNAPSHOT.jar"
+version = "@toml.version@"
+path = "../native/build/libs/ai.aws.bedrock-native-@project.version@.jar"
