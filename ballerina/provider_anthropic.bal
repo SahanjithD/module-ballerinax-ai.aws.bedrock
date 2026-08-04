@@ -32,7 +32,8 @@ public enum AnthropicModel {
     CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
     # Claude Sonnet 5 — the current flagship Sonnet (1M context, adaptive thinking
     # always on). Converse + Invoke + Messages; dual-homed (bedrock-runtime and
-    # bedrock-mantle), so it defaults to Converse and opts into Mantle explicitly.
+    # bedrock-mantle), so under `AUTO` it resolves to Mantle — pass
+    # `apiFamily = CONVERSE` for typed `generate()`.
     # In-Region callable in us-east-1 (not every region — some are Geo/Global only);
     # geo profiles `us.`/`eu.`/`au.` and `global.` also work.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html

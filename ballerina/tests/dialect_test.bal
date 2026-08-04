@@ -172,3 +172,49 @@ function testMantleApiKeyHeaderIsAbsentForSigV4Credentials() {
     map<string> headers = commonExtraHeaders(route, (), TEST_CREDS);
     test:assertFalse(headers.hasKey("x-api-key"));
 }
+
+// ---- Claude-only knobs: `anthropic-workspace` header + `thinking` fold ----
+
+@test:Config {}
+function testAnthropicWorkspaceHeaderAndThinkingKnobAreEmitted() returns error? {
+    // COVERAGE GAP (2026-08-04): the two Claude-only config knobs had NO test.
+    // `anthropicWorkspaceId` (the `anthropic-workspace` cost-scoping header on the
+    // Mantle Messages route) and `thinking` (folded into the additionalModelRequestFields
+    // passthrough) were both wired but unasserted — and an untested request header is
+    // exactly the class that shipped broken before (the Mantle double-header 401).
+    MantleEntry entry = {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC};
+    Route mantleRoute = {
+        family: MANTLE,
+        bareModelId: "anthropic.claude-opus-4-8",
+        geoPrefix: (),
+        effectiveModelId: "anthropic.claude-opus-4-8",
+        region: "us-east-1",
+        partition: "aws",
+        mantleEntry: entry
+    };
+    AnthropicConfig config = {
+        anthropicWorkspaceId: "team-alpha",
+        thinking: {"type": "enabled", "budget_tokens": 1024}
+    };
+
+    // 1) The workspace id becomes the `anthropic-workspace` header, alongside the
+    //    Messages-dialect `anthropic-version`.
+    map<string> headers = buildExtraHeaders(mantleRoute, config, TEST_CREDS);
+    test:assertEquals(headers["anthropic-workspace"], "team-alpha",
+            "anthropicWorkspaceId must be emitted as the anthropic-workspace header");
+    test:assertEquals(headers["anthropic-version"], "2023-06-01");
+
+    // 2) `thinking` is folded into additionalModelRequestFields, which every Anthropic
+    //    codec forwards verbatim.
+    InferenceParams params = resolveParams(500, 1.0d, config);
+    json extra = params?.additionalModelRequestFields;
+    if extra !is map<json> {
+        test:assertFail("thinking must land in additionalModelRequestFields");
+    }
+    test:assertEquals(extra["thinking"], <json>{"type": "enabled", "budget_tokens": 1024});
+
+    // 3) NEGATIVE: with no workspace id the header must NOT appear — no accidental leak.
+    map<string> plain = buildExtraHeaders(mantleRoute, {}, TEST_CREDS);
+    test:assertFalse(plain.hasKey("anthropic-workspace"),
+            "no anthropicWorkspaceId → no anthropic-workspace header");
+}

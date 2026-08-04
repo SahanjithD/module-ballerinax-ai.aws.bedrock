@@ -44,7 +44,7 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
     if !supportsStructuredOutput {
         if td is typedesc<string> {
             // No structured output on Mantle, but a plain-text generation is fine.
-            return plainTextResponse(codec, transport, wireModelId, extraHeaders, params, prompt);
+            return plainTextResponse(family, codec, transport, wireModelId, extraHeaders, params, prompt);
         }
         return error ai:LlmInvalidGenerationError(
             string `Structured output is not supported on the bedrock-mantle route for model ` +
@@ -55,7 +55,7 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
         // A dialect with no tool-calling at all (Mistral text completion). Same
         // shape as the Mantle guard, and reversible the same way.
         if td is typedesc<string> {
-            return plainTextResponse(codec, transport, wireModelId, extraHeaders, params, prompt);
+            return plainTextResponse(family, codec, transport, wireModelId, extraHeaders, params, prompt);
         }
         return error ai:LlmInvalidGenerationError(
             string `Structured output is not supported for model '${wireModelId}': its InvokeModel ` +
@@ -79,7 +79,7 @@ isolated function schemaFor(typedesc<anydata> td) returns map<json>|ai:Error {
 
 // Plain-text generation for the Mantle route when the target type is `string`
 // (amendment). Runs one chat turn and returns the assistant text.
-isolated function plainTextResponse(readonly & ModelCodec codec, BedrockTransport transport,
+isolated function plainTextResponse(ApiFamily family, readonly & ModelCodec codec, BedrockTransport transport,
         string wireModelId, map<string> & readonly extraHeaders, readonly & InferenceParams params,
         ai:Prompt prompt) returns anydata|ai:Error {
     ai:ChatUserMessage userMsg = {role: ai:USER, content: prompt};
@@ -88,7 +88,11 @@ isolated function plainTextResponse(readonly & ModelCodec codec, BedrockTranspor
     if encoded is ai:Error {
         return encoded;
     }
-    json body = injectModel(encoded, wireModelId); // Mantle carries the model in the body
+    // Only Mantle carries the model id in the body; Converse and Invoke carry it in
+    // the URL path. This function also serves the NO_TOOL_CHOICE Mistral InvokeModel
+    // path, which would otherwise get a stray `model` field. Same gate as
+    // `runChat` in provider_common.bal.
+    json body = family == MANTLE ? injectModel(encoded, wireModelId) : encoded;
     TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
     if response is ai:Error {
         return response;
@@ -211,11 +215,21 @@ isolated function extractJson(string content) returns json|error {
     if direct is json {
         return direct;
     }
-    // Fall back to the substring between the first and last brace/bracket.
+    // Fall back to the substring between the first and last brace, then the first
+    // and last bracket — the target type can be an array, so a JSON array wrapped
+    // in prose has to be recoverable too.
     int? objStart = trimmed.indexOf("{");
     int? objEnd = trimmed.lastIndexOf("}");
     if objStart is int && objEnd is int && objEnd > objStart {
         json|error slice = trimmed.substring(objStart, objEnd + 1).fromJsonString();
+        if slice is json {
+            return slice;
+        }
+    }
+    int? arrStart = trimmed.indexOf("[");
+    int? arrEnd = trimmed.lastIndexOf("]");
+    if arrStart is int && arrEnd is int && arrEnd > arrStart {
+        json|error slice = trimmed.substring(arrStart, arrEnd + 1).fromJsonString();
         if slice is json {
             return slice;
         }

@@ -241,7 +241,7 @@ function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
     Route route = check resolveRoute("openai.gpt-oss-120b-1:0", REGION, {apiFamily: CONVERSE});
     Endpoint ep = check buildEndpoint(route);
     test:assertTrue(ep.path.includes("%3A"), "the model id's colon must be encoded on the wire");
-    string canonical = getCanonicalUri(ep.path) ?: "";
+    string canonical = getCanonicalUri(ep.path);
     test:assertTrue(canonical.includes("%253A"), "and double-encoded in the canonical URI");
 }
 

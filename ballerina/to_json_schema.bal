@@ -42,10 +42,9 @@ isolated function generateJsonSchemaForTypedescAsJson(typedesc<json> expectedRes
         returns map<json>|ai:Error =>
     let map<json>? ann = expectedResponseTypedesc.@ai:JsonSchema in ann
                 ?: check generateJsonSchemaForTypedescNative(expectedResponseTypedesc)
-                ?: check generateJsonSchemaForTypedesc(expectedResponseTypedesc,
-                        containsNil(expectedResponseTypedesc));
+                ?: check generateJsonSchemaForTypedesc(expectedResponseTypedesc);
 
-isolated function generateJsonSchemaForTypedesc(typedesc<json> expectedResponseTypedesc, boolean nilableType)
+isolated function generateJsonSchemaForTypedesc(typedesc<json> expectedResponseTypedesc)
         returns JsonSchema|JsonArraySchema|map<json>|ai:Error {
     if isSimpleType(expectedResponseTypedesc) {
         return <JsonSchema>{
@@ -57,9 +56,14 @@ isolated function generateJsonSchemaForTypedesc(typedesc<json> expectedResponseT
 
     if isArray {
         typedesc<json> arrayMemberType = getArrayMemberType(<typedesc<json[]>>expectedResponseTypedesc);
+        // `items` describes the MEMBER type, so its nilability must be derived from
+        // the member. The reference module computed this once from the OUTER
+        // typedesc, which is backwards in both directions: it drops `null` from
+        // `items` for `int?[]` and adds it for `int[]?`.
+        boolean nilableMember = containsNil(arrayMemberType);
         if isSimpleType(arrayMemberType) {
             return <JsonArraySchema>{
-                items: !nilableType ? {
+                items: !nilableMember ? {
                         'type: getStringRepresentation(<typedesc<json>>arrayMemberType)
                     } :
                     {

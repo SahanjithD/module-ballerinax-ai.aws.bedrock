@@ -30,7 +30,7 @@ isolated function resolveRoute(string model, string region, RouteConfig config =
 
     // ---- step 2: ARN dispatch (region + partition are authoritative — §5.2) ----
     if isArn(work) {
-        return resolveArn(work, config, explicitFamily);
+        return resolveArn(work, region, config, explicitFamily);
     }
 
     // ---- bare / CRIS-prefixed id: normalize then walk steps 3-6 ----
@@ -57,13 +57,24 @@ isolated function stripRoutePrefix(string model) returns [ApiFamily?, string] {
 
 // ARN dispatch — the resource-type token gives the family before any call
 // (design §5.1 step 2, §5.2). The ARN's region/partition override `config.region`.
-isolated function resolveArn(string arnStr, RouteConfig config, ApiFamily? explicitFamily) returns Route|error {
+isolated function resolveArn(string arnStr, string region, RouteConfig config, ApiFamily? explicitFamily)
+        returns Route|error {
     ParsedArn arn = check parseArn(arnStr);
+
+    if arn.'service != "bedrock" {
+        return error(string `not a Bedrock ARN: service segment is '${arn.'service}', expected 'bedrock'`);
+    }
+
+    // The ARN's region is authoritative (§5.2) — but it is legitimately EMPTY on
+    // global ARNs such as `arn:aws:bedrock::123:foundation-model/anthropic.claude-v2`.
+    // Copying "" through would build the host `bedrock-runtime..amazonaws.com` and
+    // surface as an opaque DNS failure, so fall back to the caller's region.
+    string arnRegion = arn.region == "" ? region : arn.region;
 
     // `foundation-model/` carries a bare, globally-addressable id — strip to it
     // and fall through to the allowlists (design §5.1 step 2).
     if arn.resourceType == "foundation-model" {
-        return resolveBareId(arn.resourceId, arn.region, arn.partition, config, explicitFamily);
+        return resolveBareId(arn.resourceId, arnRegion, arn.partition, config, explicitFamily);
     }
 
     // `custom-model/` is an artifact, not a deployment — AWS's prose directs
@@ -98,7 +109,7 @@ isolated function resolveArn(string arnStr, RouteConfig config, ApiFamily? expli
         bareModelId: arnStr,
         geoPrefix: (),
         effectiveModelId: arnStr, // opaque ARNs go on the wire verbatim (URL-encoded in endpoint.bal)
-        region: arn.region,
+        region: arnRegion,
         partition: arn.partition,
         mantleEntry
     };

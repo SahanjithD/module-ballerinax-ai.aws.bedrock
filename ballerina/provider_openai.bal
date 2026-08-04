@@ -41,8 +41,19 @@ public enum OpenAIModel {
 # OpenAI-specific configuration (CLAUDE.md §3).
 public type OpenAIConfig record {|
     *CommonModelConfig;
-    # `reasoning_effort` — `low` | `medium` | `high`; trades latency against
-    # reasoning depth on GPT-OSS reasoning models. Forwarded via §9.3 passthrough.
+    # `reasoning_effort` — trades latency and token cost against reasoning depth.
+    # Forwarded verbatim via the §9.3 passthrough, so the ACCEPTED VALUES ARE NOT
+    # THE SAME for the two families this provider serves, and an unsupported value
+    # is rejected by the endpoint rather than caught here:
+    #
+    # - GPT-OSS on `bedrock-runtime` (`GPT_OSS_120B`, `GPT_OSS_20B`):
+    #   `low` | `medium` | `high`.
+    # - GPT-5.x on `bedrock-mantle` (`GPT_5_4`, `GPT_5_5`, `GPT_5_6_*`): the
+    #   Responses API set, which also includes `minimal` on some cards and drops
+    #   values on others — check the model card for the id you are using.
+    #
+    # Left as a `string` rather than an enum precisely because the two sets differ
+    # and both move; leave it unset to use the model's default.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html
     string reasoningEffort?;
 |};

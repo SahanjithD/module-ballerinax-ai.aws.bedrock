@@ -35,7 +35,7 @@ function testCanonicalUriDoubleEncodesWirePath() returns error? {
     // SigV4 non-S3 rule (§9.4): the canonical URI is the wire path encoded again.
     Route route = check resolveRoute(ARN, REGION, {modelSchema: LLAMA});
     Endpoint ep = check buildEndpoint(route);
-    string canonical = getCanonicalUri(ep.path) ?: "";
+    string canonical = getCanonicalUri(ep.path);
     test:assertTrue(canonical.includes("%253A"), "canonical URI must double-encode the colon");
     test:assertTrue(canonical.includes("%252F"), "canonical URI must double-encode the ARN slash");
     test:assertTrue(canonical.startsWith("/model/") && canonical.endsWith("/invoke"),
@@ -159,4 +159,30 @@ function testEveryInvokeCodecSurfacesAFiredGuardrail() returns error? {
         "usage": {"inputTokens": 1, "outputTokens": 1}
     };
     test:assertEquals((check decodeConverse(converse)).guardrailAction, INTERVENED);
+}
+
+// ---- RFC 3986 path-segment encoding (SigV4), not form encoding ----
+
+@test:Config {}
+function testPathSegmentEncoderFollowsRfc3986NotFormEncoding() {
+    // `url:encode` would produce `+` for a space and escape `~`. SigV4 requires
+    // `%20` and leaves every unreserved character literal; getting this wrong is a
+    // SignatureDoesNotMatch with nothing in the message pointing at the encoder.
+    test:assertEquals(encodePathSegment("a b"), "a%20b", "a space must be %20, never '+'");
+    test:assertEquals(encodePathSegment("a~b"), "a~b", "'~' is unreserved and stays literal");
+    test:assertEquals(encodePathSegment("a*b"), "a%2Ab", "'*' is reserved and must be escaped");
+    test:assertEquals(encodePathSegment("a-b._c"), "a-b._c", "unreserved set passes through");
+    test:assertEquals(encodePathSegment("v1:0"), "v1%3A0");
+    test:assertEquals(encodePathSegment("a/b"), "a%2Fb");
+    test:assertEquals(encodePathSegment("%"), "%25", "a literal % must double-encode");
+}
+
+@test:Config {}
+function testCanonicalUriAgreesWithTheWirePathEncoder() returns error? {
+    // The two must use the SAME rule or the server cannot reconstruct what we
+    // signed. A model id with a space is the case that used to diverge.
+    Route r = check resolveRoute("converse/some vendor.model~x", "us-east-1");
+    Endpoint ep = check buildEndpoint(r);
+    test:assertEquals(ep.path, "/model/some%20vendor.model~x/converse");
+    test:assertEquals(getCanonicalUri(ep.path), "/model/some%2520vendor.model~x/converse");
 }

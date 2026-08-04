@@ -33,9 +33,15 @@ public enum QwenModel {
 # Qwen-specific configuration (CLAUDE.md §3).
 public type QwenConfig record {|
     *CommonModelConfig;
-    # Qwen3 hybrid thinking — forwarded as `enable_thinking` via the §9.3
-    # passthrough. Leave unset to use the model's default.
-    boolean showThinking?;
+    # Turns Qwen3's hybrid thinking mode on or off. Qwen3 can reason before
+    # answering; enabling it trades latency and output tokens for quality on
+    # multi-step tasks. Forwarded verbatim as `enable_thinking` via the §9.3
+    # passthrough, so the name matches the wire field. Leave unset to use the
+    # model's own default.
+    #
+    # This is a MODE switch, not a display switch: it controls whether the model
+    # thinks at all, not whether the thinking text is returned.
+    boolean enableThinking?;
 |};
 
 # Qwen models on AWS Bedrock.
@@ -107,9 +113,9 @@ public isolated distinct client class QwenModelProvider {
 isolated function qwenParams(int? maxTokens, decimal? temperature, QwenConfig config)
         returns readonly & InferenceParams {
     map<json> extras = {};
-    boolean? showThinking = config?.showThinking;
-    if showThinking is boolean {
-        extras["enable_thinking"] = showThinking;
+    boolean? enableThinking = config?.enableThinking;
+    if enableThinking is boolean {
+        extras["enable_thinking"] = enableThinking;
     }
     json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
     return buildInferenceParams(maxTokens, temperature, config?.stopSequences,

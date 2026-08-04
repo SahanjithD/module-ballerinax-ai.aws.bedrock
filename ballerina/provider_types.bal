@@ -65,7 +65,7 @@ public type GuardrailConfig record {|
 
 # Retry policy for the transport's throttling/warm-up backoff (design §9.5).
 public type RetryConfig record {|
-    # Max retry attempts for retryable errors (429/408/500/503).
+    # Max retry attempts for retryable errors (408/429/500/502/503/504).
     int maxRetries = 3;
     # Initial backoff delay, seconds.
     decimal initialDelay = 1.0;
@@ -88,7 +88,33 @@ public type CommonModelConfig record {|
     ApiFamily apiFamily = AUTO;
     # REQUIRED for `imported-model/` ARNs.
     ModelSchema modelSchema?;
-    # Extend the routing tables without a release.
+    # Extends the built-in routing tables without waiting for a module release.
+    #
+    # AWS adds models faster than this module can ship. When Bedrock exposes a model
+    # the tables in `constants.bal` do not know about, `resolveRoute` consults this
+    # map at step 3 — before every built-in table — so a new model becomes reachable
+    # with no code change.
+    #
+    # The KEY is the bare model id, after any cross-region-inference geo prefix is
+    # stripped: use `anthropic.claude-x`, never `us.anthropic.claude-x`. For an ARN,
+    # the key is the full ARN string. The VALUE takes one of two shapes:
+    #
+    # - An `ApiFamily` (`CONVERSE` | `INVOKE`) routes the model to `bedrock-runtime`
+    #   on that family:
+    #   `routeOverrides = {"anthropic.claude-x": CONVERSE}`
+    #
+    # - A `MantleEntry` routes it to `bedrock-mantle`, and must carry the per-model
+    #   path, because a Mantle path is DATA — it is not derivable from the vendor
+    #   prefix (GPT-5.5 is on `/openai/v1/responses` while other OpenAI models are
+    #   not). `authHeader` selects `x-api-key` or `Authorization: Bearer`; `codec`
+    #   selects the request/response dialect for that path:
+    #   `routeOverrides = {"openai.gpt-x": {path: "/openai/v1/responses",
+    #                                       authHeader: BEARER, codec: RESPONSES_CODEC}}`
+    #
+    # This outranks `MANTLE_CAPABLE` and the vendor prefix tables, but NOT `apiFamily`
+    # — an explicit `apiFamily` is step 1 and still wins. Note that a Mantle-routed
+    # model has `supportsStructuredOutput = false`, so a typed `generate()` errors on
+    # it; see the `apiFamily` docs above.
     map<ApiFamily|MantleEntry> routeOverrides?;
     # Per-route SigV4 signing name override (§9.4).
     string signingServiceName?;

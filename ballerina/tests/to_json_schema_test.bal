@@ -97,8 +97,16 @@ function testSchemaForRejectsATargetTypeOutsideJson() {
     map<json>|ai:Error result = schemaFor(NonJsonProbe);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
-        test:assertTrue(result.message().includes("json"),
-                "the error should say the type must be a subtype of json; got: " + result.message());
+        // Assert the SUBTYPE and a distinctive phrase, not just "json": schema
+        // derivation fails with the word "json" in it for several unrelated
+        // reasons, so a substring check on that alone passes for the wrong cause.
+        test:assertTrue(result is ai:LlmInvalidGenerationError,
+                "expected ai:LlmInvalidGenerationError; got: " + result.toString());
+        test:assertTrue(result.message().includes("must be a subtype of 'json'") ||
+                        result.message().includes("subtype of 'json'"),
+                "the error must name the subtype-of-json requirement; got: " + result.message());
+        test:assertTrue(result.message().includes("NonJsonProbe"),
+                "the error must name the offending type; got: " + result.message());
     }
 }
 
@@ -107,3 +115,36 @@ function testSchemaForRejectsATargetTypeOutsideJson() {
 type NonJsonProbe record {|
     xml doc;
 |};
+
+// `int?[]` (nilable MEMBER) and `int[]?` (nilable ARRAY) are distinct types that
+// must produce distinct schemas. Both were wrong: `Native.isSimpleType` treated any
+// combined basic-type mask below 0b100000 as simple, so the member type `int?` went
+// to `createSimpleTypeSchema`, whose `getStringRepresentation` has no case for a
+// combined mask and returned null — emitting `{"type": null}`, which is not a valid
+// JSON schema and was handed to the model as the tool's parameter schema.
+type NilableMemberArray int?[];
+
+type NilableArray int[]?;
+
+@test:Config {}
+function testArrayItemsNilabilityComesFromTheMemberType() returns error? {
+    // The MEMBER is nilable -> `items` must offer `null`, and must never be
+    // `{"type": null}`.
+    test:assertEquals(check generateJsonSchemaForTypedescAsJson(NilableMemberArray),
+            <map<json>>{
+                "type": "array",
+                "items": {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+            },
+            "int?[] must describe its nilable member, not emit {\"type\": null}");
+}
+
+@test:Config {}
+function testNilableArrayDoesNotMakeItsMembersNilable() returns error? {
+    // The ARRAY is nilable, the member is not: the nilability belongs at the top
+    // level, and `items` stays a plain integer.
+    test:assertEquals(check generateJsonSchemaForTypedescAsJson(NilableArray),
+            <map<json>>{
+                "anyOf": [{"type": "array", "items": {"type": "integer"}}, {"type": "null"}]
+            },
+            "int[]? must not push 'null' down into its items schema");
+}

@@ -18,7 +18,6 @@ import ballerina/http;
 import ballerina/lang.array;
 import ballerina/lang.runtime;
 import ballerina/time;
-import ballerina/url;
 
 // SigV4 transport — per-route signing (§9.4), retry (§9.5), error mapping (§9.5).
 // SigV4 scaffolding (canonical request, signing-key derivation, base16 hex)
@@ -137,7 +136,10 @@ isolated client class BedrockTransport {
         string detail = self.errorDetail(resp);
         boolean mantle = self.isMantleRoute;
         match status {
-            429|408|500|503 => {
+            // 502/504 come from the load balancers fronting Bedrock rather than the
+            // service itself, so they carry no Bedrock error code — but they are just
+            // as transient as a ThrottlingException and must be retried, not surfaced.
+            429|408|500|502|503|504 => {
                 return error RetryableError(string `Bedrock transient error (HTTP ${status}): ${detail}`);
             }
             400 => {
@@ -209,14 +211,7 @@ isolated client class BedrockTransport {
         [string, string] [amzDate, dateStamp] = fixedClock ?: check amzTimestamps();
         // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule §9.4):
         // the server re-encodes the received (single-encoded) path once to match.
-        // A signing input must never fail open: falling back to the single-encoded
-        // path would sign something AWS cannot reconstruct, turning an encode bug
-        // into an undiagnosable 403 on every request. Fail loudly instead.
-        string? encodedUri = getCanonicalUri(self.wirePath);
-        if encodedUri is () {
-            return error("Failed to percent-encode the canonical URI for signing: " + self.wirePath);
-        }
-        string canonicalUri = encodedUri;
+        string canonicalUri = getCanonicalUri(self.wirePath);
         string payloadHash = array:toBase16(crypto:hashSha256(payload.toBytes())).toLowerAscii();
 
         string accessKey = creds.accessKeyId;
@@ -282,7 +277,7 @@ type TransportResponse record {|
 // Response-header keys captured into `TransportResponse.headers` (design §9.5).
 const REQUEST_ID_HEADER = "requestId";
 
-// A retryable transport outcome (429/408/500/503 or a connection failure — §9.5).
+// A retryable transport outcome (408/429/500/502/503/504 or a connection failure — §9.5).
 // A `distinct error` so it narrows cleanly against `json` and `ai:Error`.
 type RetryableError distinct error;
 
@@ -331,15 +326,15 @@ isolated function pad(int n, int width) returns string {
 }
 
 // Double-encodes the (already single-encoded) wire path for the SigV4 canonical
-// URI (non-S3 rule §9.4): URL-encode again, then restore structural `/` separators
+// URI (non-S3 rule §9.4): encode again, then restore structural `/` separators
 // (their `%2F` maps back to `/`, while a model-id's internal `%2F`→`%252F` stays
-// double-encoded). Returns `()` on encode failure (caller falls back to the input).
-isolated function getCanonicalUri(string wirePath) returns string? {
-    string|error encoded = url:encode(wirePath, "UTF-8");
-    if encoded is error {
-        return ();
-    }
-    return re `%2F`.replaceAll(encoded, "/");
+// double-encoded).
+//
+// Uses the SAME RFC 3986 encoder as `buildEndpoint` — the two must agree
+// character-for-character or the server cannot reconstruct what we signed. Total:
+// `encodePathSegment` has no failure mode, so neither does this.
+isolated function getCanonicalUri(string wirePath) returns string {
+    return re `%2F`.replaceAll(encodePathSegment(wirePath), "/");
 }
 
 // SigV4 signing-key derivation (design §9.4). Identical to aws.dynamodb.

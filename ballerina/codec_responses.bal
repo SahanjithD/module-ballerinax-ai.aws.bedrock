@@ -127,12 +127,17 @@ isolated function decodeResponses(json response) returns DecodedResponse|ai:Erro
                         }
                     }
                     toolCalls.push({name: strField(item, "name") ?: "", arguments: args, id: strField(item, "call_id")});
-                } else {
-                    // message item → collect output_text blocks.
+                } else if itemType == "message" {
+                    // Two gates, both required. `output` also carries `reasoning`
+                    // items, and a `message` item's `content` can hold `refusal`
+                    // blocks — both have a `text` field, so an unfiltered append
+                    // leaks the model's chain-of-thought (and refusal prose) into
+                    // the assistant content returned to the caller.
+                    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
                     json[]? content = arrField(item, "content");
                     if content is json[] {
                         foreach json block in content {
-                            if block is map<json> {
+                            if block is map<json> && strField(block, "type") == "output_text" {
                                 text += strField(block, "text") ?: "";
                             }
                         }

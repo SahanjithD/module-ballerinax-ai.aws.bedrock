@@ -22,6 +22,10 @@ import ballerina/test;
 // To run them, put credentials in `tests/Config.toml`:
 //
 //   [ballerinax.ai.aws.bedrock]
+//   liveTestsEnabled = true          # REQUIRED — every live test carries
+//                                    # `enable: liveTestsEnabled`, which defaults to
+//                                    # false. Omit it and `bal test --groups live`
+//                                    # runs zero tests and reports no failure.
 //   liveAccessKeyId = "AKIA..."
 //   liveSecretAccessKey = "..."
 //   liveRegion = "us-east-1"
