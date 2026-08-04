@@ -82,7 +82,7 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 > `CLAUDE_SONNET_5`, `DEEPSEEK_V3_2`, …), because `AUTO` now prefers Mantle (see [Routing](#routing)). For typed
 > generation on a dual-homed model, force the runtime surface with `apiFamily = bedrock:CONVERSE`. The
 > example above works because `CLAUDE_SONNET_4_6` is runtime-only, so it resolves to Converse.
-
+>
 > It is also unavailable on Mistral's **text-completion** dialect (see below), which has no
 > tool-calling at all. This only bites when you force `apiFamily = INVOKE` on those ids — the default
 > Converse route supports typed generation for every Mistral model.
@@ -244,17 +244,40 @@ A fired guardrail is never silently dropped on either supported route.
 
 ## Building
 
-The `generate()` native shim must be built before `bal build`:
+This is a Gradle multi-project build. Build everything from the repository root:
 
 ```bash
-BAL_HOME=$(bal home)
-mkdir -p native/build/classes native/build/libs
-javac -cp "$BAL_HOME/bre/lib/ballerina-rt-2201.12.0.jar" \
-      -d native/build/classes native/src/main/java/io/ballerina/lib/ai/aws/bedrock/*.java
-(cd native/build/classes && jar cf ../libs/ai.aws.bedrock-native-0.1.0.jar io)
+./gradlew build
+```
 
+That runs, in order:
+
+| Project | Directory | Produces |
+|---|---|---|
+| `:ai.aws.bedrock-native` | `native/` | the `generate()` runtime shim jar |
+| `:ai.aws.bedrock-compiler-plugin` | `compiler-plugin/` | the code-modifier jar (+ its `ballerina-to-openapi` dependency) |
+| `:ai.aws.bedrock-ballerina` | `ballerina/` | the Ballerina package (`bal build` + `bal test`) |
+
+Both Java projects must be built **before** `bal build`: `ballerina/Ballerina.toml` and
+`ballerina/CompilerPlugin.toml` reference their jars by path. To iterate on the Ballerina sources
+alone once the jars exist:
+
+```bash
 cd ballerina && bal build && bal test
 ```
+
+**Why the compiler plugin is required.** `generate()` is declared `external` and returns an inferred
+`typedesc<anydata>`. The plugin (`AiAwsBedrockCodeModifier`) walks every `generate()` call site whose
+receiver is one of this package's seven provider classes, derives the JSON schema of the expected
+return type, and attaches it to that type as an `@ai:JsonSchema` annotation. The runtime shim reads
+that annotation to bind the model's response back into the caller's type. Without the plugin, records
+have no derivable schema and `generate()` fails at runtime. Adding a new provider class means adding
+its name to `MODEL_PROVIDER_CLASS_NAMES` in `GenerateMethodModificationTask` — a class missing from
+that list silently loses type binding, with no compile error at the call site.
+
+Note that `./gradlew build` invokes the `io.ballerina.plugin` Gradle plugin's `commitTomlFiles` task,
+which runs `git commit` on `Ballerina.toml`, `Dependencies.toml` and `CompilerPlugin.toml`. This is
+the standard behaviour for `ballerina-library` connector repos and is used by the release pipeline.
 
 ## Not implemented
 
