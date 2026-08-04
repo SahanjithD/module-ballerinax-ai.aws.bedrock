@@ -55,6 +55,18 @@ isolated function encodeNovaInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[
     json extra = params?.additionalModelRequestFields;
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
+            // Nova is the one codec that nests inference knobs under a body key it
+            // also builds itself. A passthrough `{"inferenceConfig": {"topK": 20}}`
+            // must MERGE — a plain assignment would drop the maxTokens, temperature
+            // and stopSequences resolved above, silently ignoring the caller's
+            // inference settings. Every other key overwrites, as elsewhere.
+            if k == "inferenceConfig" && v is map<json> {
+                foreach [string, json] [nestedKey, nestedValue] in v.entries() {
+                    inferenceConfig[nestedKey] = nestedValue;
+                }
+                body["inferenceConfig"] = inferenceConfig;
+                continue;
+            }
             body[k] = v;
         }
     }

@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import ballerina/url;
-
 // Endpoint construction — host · path · partition · signing name (design §9.1,
 // §9.2, §9.4). L2: runs once, at construction. The model-id path segment is
 // URL-encoded HERE (single-encode): structural `/` stay literal, but the model
@@ -56,11 +54,48 @@ isolated function buildEndpoint(Route route) returns Endpoint|error {
     // Converse / Invoke on `bedrock-runtime`, partition-aware domain (§9.2).
     string host = string `bedrock-runtime.${route.region}.${awsDomain(route.partition)}`;
     // Single-encode the model-id segment (ARNs/`-v1:0` ids carry `:` and `/`).
-    string encodedId = check url:encode(route.effectiveModelId, "UTF-8");
+    string encodedId = encodePathSegment(route.effectiveModelId);
     string path = route.family == CONVERSE
         ? string `/model/${encodedId}/converse` // §9.1
         : string `/model/${encodedId}/invoke`;   // §9.1
     return {host, path, signingService: SIGNING_BEDROCK};
+}
+
+// RFC 3986 unreserved set — the ONLY characters SigV4 leaves literal.
+// https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
+const string RFC3986_UNRESERVED =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+
+final readonly & string[] HEX_DIGITS =
+    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
+
+// Percent-encodes one path segment per RFC 3986, which is what SigV4 requires.
+//
+// `url:encode` is NOT a path-segment encoder — it applies
+// `application/x-www-form-urlencoded` rules, which differ from SigV4's on exactly
+// the characters a model id can contain: a space becomes `+` instead of `%20`, and
+// `~` is escaped even though it is unreserved. Since `getCanonicalUri` re-applies
+// this same function to build the signing input, any such character produced a
+// canonical URI AWS could not reconstruct — a `SignatureDoesNotMatch` on every
+// request, with nothing in the message pointing at the encoder.
+//
+// Total by construction: every byte either passes through or becomes `%XX`, so
+// there is no failure mode for a caller to handle.
+// https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
+isolated function encodePathSegment(string segment) returns string {
+    string encoded = "";
+    foreach string:Char ch in segment {
+        if RFC3986_UNRESERVED.includes(ch) {
+            encoded += ch;
+            continue;
+        }
+        // Percent-encode each UTF-8 byte, uppercase hex (SigV4 requires uppercase).
+        foreach byte b in ch.toBytes() {
+            int value = <int>b;
+            encoded += "%" + HEX_DIGITS[value / 16] + HEX_DIGITS[value % 16];
+        }
+    }
+    return encoded;
 }
 
 // Partition-aware DNS suffix (design §9.2). Route every host through here — n8n's

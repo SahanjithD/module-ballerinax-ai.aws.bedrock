@@ -392,3 +392,83 @@ function testConverseOmitsPerformanceConfigWhenUnsetOrFalse() returns error? {
             {temperature: 0.5, maxTokens: 100, latencyOptimized: false}).ensureType();
     test:assertFalse(off.hasKey("performanceConfig"), "false must not emit a standard value");
 }
+
+// ---- Responses decode: reasoning/refusal must not leak into assistant content ----
+
+@test:Config {}
+function testResponsesDecodeDropsReasoningAndRefusalText() returns error? {
+    // GPT-5.x on Mantle returns `reasoning` items alongside `message` items, and a
+    // `message` item's content can hold a `refusal` block. Both carry a `text`
+    // field. Appending every block's text leaks the model's chain-of-thought into
+    // ai:ChatAssistantMessage.content and hands it back to the caller as output.
+    json canned = {
+        "id": "resp_01",
+        "output": [
+            {
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": "SECRET-THINKING"}]
+            },
+            {
+                "type": "message",
+                "content": [
+                    {"type": "refusal", "text": "SECRET-REFUSAL"},
+                    {"type": "output_text", "text": "Visible answer"}
+                ]
+            }
+        ],
+        "usage": {"input_tokens": 11, "output_tokens": 4},
+        "status": "completed"
+    };
+    DecodedResponse decoded = check decodeResponses(canned);
+    test:assertEquals(decoded.message.content, "Visible answer",
+            "only output_text blocks of message items may reach the assistant content");
+    string content = decoded.message.content ?: "";
+    test:assertFalse(content.includes("SECRET-THINKING"), "reasoning text must never be returned as output");
+    test:assertFalse(content.includes("SECRET-REFUSAL"), "refusal text must never be merged into output");
+    test:assertEquals(decoded.usage.inputTokens, 11);
+    test:assertEquals(decoded.usage.outputTokens, 4);
+}
+
+// ---- Nova passthrough must merge into inferenceConfig, not replace it ----
+
+@test:Config {}
+function testNovaPassthroughMergesIntoInferenceConfig() returns error? {
+    // Nova nests its inference knobs under a body key the codec also builds. A
+    // passthrough entry for that key used to REPLACE it, silently discarding the
+    // caller's maxTokens/temperature/stopSequences.
+    InferenceParams params = {
+        temperature: 0.3,
+        maxTokens: 256,
+        stopSequences: ["STOP"],
+        additionalModelRequestFields: {"inferenceConfig": {"topK": 20}}
+    };
+    map<json> body = check encodeNovaInvoke((), SAMPLE_MESSAGES, [], (), params).ensureType();
+    map<json> inferenceConfig = check body["inferenceConfig"].ensureType();
+    test:assertEquals(inferenceConfig["topK"], 20, "the passthrough key must be merged in");
+    test:assertEquals(inferenceConfig["maxTokens"], 256, "maxTokens must survive the merge");
+    test:assertEquals(inferenceConfig["temperature"], 0.3d, "temperature must survive the merge");
+    test:assertEquals(inferenceConfig["stopSequences"], <json>["STOP"], "stopSequences must survive the merge");
+    test:assertEquals(body["schemaVersion"], "messages-v1");
+}
+
+@test:Config {}
+function testNovaPassthroughStillOverwritesNonNestedKeys() returns error? {
+    // Only `inferenceConfig` merges; every other passthrough key keeps the
+    // existing overwrite behaviour shared with the other codecs.
+    InferenceParams params = {
+        temperature: 0.3,
+        maxTokens: 256,
+        additionalModelRequestFields: {"reasoningConfig": {"type": "enabled"}}
+    };
+    map<json> body = check encodeNovaInvoke((), SAMPLE_MESSAGES, [], (), params).ensureType();
+    test:assertEquals(body["reasoningConfig"], <json>{"type": "enabled"});
+}
+
+// ---- intField must not invent a token count from a fractional decimal ----
+
+@test:Config {}
+function testIntFieldRejectsAFractionalDecimal() {
+    test:assertEquals(intField({"n": 5d}, "n"), 5, "an integral decimal converts faithfully");
+    test:assertEquals(intField({"n": 1.5d}, "n"), (),
+            "a fractional token count is unusable and must be absent, not rounded to 2");
+}

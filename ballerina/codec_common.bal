@@ -75,9 +75,13 @@ isolated function intField(map<json> m, string k) returns int? {
     if v is int {
         return v;
     }
-    // Bedrock sometimes serializes token counts as decimals.
+    // Bedrock sometimes serializes token counts as decimals. `<int>` ROUNDS, so an
+    // integral decimal (`5.0`) converts faithfully but a fractional one (`1.5`)
+    // would silently become `2` — inventing a token count rather than reporting
+    // that the field was unusable. A token count is never fractional, so treat that
+    // as absent.
     if v is decimal {
-        return <int>v;
+        return v == v.round(0) ? <int>v : ();
     }
     return ();
 }

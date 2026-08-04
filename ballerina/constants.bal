@@ -17,7 +17,16 @@
 // `routeOverrides`) with no other code change.
 
 const decimal DEFAULT_TEMPERATURE = 0.7d;
-const int DEFAULT_MAX_TOKEN_COUNT = 512;
+
+// 512 was too low to be a safe default: on adaptive-thinking models (Claude 4.7+,
+// Sonnet 5, Opus 5) thinking tokens count against this ceiling, so the response
+// routinely stopped with `max_tokens` before producing any text — which reads as a
+// module bug, not a config problem. 4096 leaves room for a thinking pass plus an
+// answer while staying under the tightest per-model output cap in the supported set
+// (Nova Pro/Lite/Micro are capped at 5K output tokens, so 8192 would be rejected
+// outright on AmazonModelProvider).
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html
+const int DEFAULT_MAX_TOKEN_COUNT = 4096;
 
 // Cross-region-inference geo prefixes, stripped for lookup then re-applied per
 // family on the wire (design §5.3). List copied from LiteLLM's cross-region
@@ -80,8 +89,9 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
     "anthropic.claude-opus-5": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
     // Sonnet 5 is dual-homed like opus-4-8: bedrock-runtime YES + bedrock-mantle YES,
-    // Messages API on `/anthropic/v1/messages`. Defaults to Converse (richer); this
-    // entry exists so forcing MANTLE works instead of erroring "not on Mantle".
+    // Messages API on `/anthropic/v1/messages`. Like every entry in this block it
+    // resolves to Mantle under AUTO (Amendment 2); pass `apiFamily = CONVERSE` for
+    // the runtime surface.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
     "anthropic.claude-sonnet-5": {path: "/anthropic/v1/messages", authHeader: X_API_KEY, codec: MESSAGES_CODEC},
     // gpt-oss is published under DIFFERENT IDS PER ENDPOINT — `-1:0` on

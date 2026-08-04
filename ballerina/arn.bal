@@ -20,7 +20,10 @@ type ParsedArn record {|
     string partition;
     # e.g. `bedrock`.
     string 'service;
-    # Authoritative region — overrides `config.region` (§5.2).
+    # Authoritative region — overrides `config.region` (§5.2). MAY be empty:
+    # foundation-model ARNs are often written globally, e.g.
+    # `arn:aws:bedrock::123456789012:foundation-model/anthropic.claude-v2`.
+    # `resolveArn` falls back to the caller's region in that case.
     string region;
     string accountId;
     # e.g. `imported-model`, `provisioned-model`, `inference-profile` (§5.1 step 2).
@@ -52,6 +55,16 @@ isolated function parseArn(string arn) returns ParsedArn|error {
         count += 1;
     }
     // fields = ["arn", partition, service, region, account]; `rest` = resource.
+    // Partition and service are structural — an empty one is a malformed ARN and
+    // must be rejected here rather than producing a nonsense host downstream.
+    // (`region` is legitimately empty on global ARNs; `resolveArn` substitutes the
+    // caller's region for those. `accountId` is empty on AWS-owned ARNs.)
+    if fields[1] == "" {
+        return error(string `malformed ARN (empty partition segment): ${arn}`);
+    }
+    if fields[2] == "" {
+        return error(string `malformed ARN (empty service segment): ${arn}`);
+    }
     string res = rest;
     string resourceType;
     string resourceId;

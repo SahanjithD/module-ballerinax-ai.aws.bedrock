@@ -158,7 +158,13 @@ isolated function selectInvokeCodec(string bareModelId, ModelSchema? schema) ret
     if bareModelId.startsWith("anthropic.") {
         return INVOKE_ANTHROPIC_CODEC;
     }
-    if bareModelId.startsWith("amazon.") {
+    // `amazon.` is Amazon's whole first-party namespace, not a Nova-only one: the
+    // Titan text models live there too and take a completely different Invoke body
+    // (`inputText` + `textGenerationConfig`, not `schemaVersion: messages-v1`). Match
+    // Nova exactly and let `amazon.titan-*` fall through to the trailing error, which
+    // already names `modelSchema` and Converse as the remedies.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-text.html
+    if bareModelId.startsWith("amazon.nova") {
         return INVOKE_NOVA_CODEC;
     }
     if bareModelId.startsWith("mistral.") {

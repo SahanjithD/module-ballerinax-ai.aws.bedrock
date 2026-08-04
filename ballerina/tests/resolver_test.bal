@@ -221,12 +221,52 @@ function testChinaPartitionArn() returns error? {
     test:assertEquals(r.region, "cn-north-1");
 }
 
+@test:Config {}
+function testChinaPartitionArnBuildsTheCnHostAndSignsAsBedrock() returns error? {
+    // Partition inference is only half the job — the whole point of tracking the
+    // partition is the DNS suffix, and a hardcoded `.amazonaws.com` would still
+    // pass the resolver assertions above.
+    Route r = check resolveRoute(
+        "arn:aws-cn:bedrock:cn-north-1:123456789012:provisioned-model/xyz", REGION);
+    Endpoint ep = check buildEndpoint(r);
+    test:assertEquals(ep.host, "bedrock-runtime.cn-north-1.amazonaws.com.cn",
+            "aws-cn must use the .com.cn suffix");
+    test:assertEquals(ep.path,
+            "/model/arn%3Aaws-cn%3Abedrock%3Acn-north-1%3A123456789012%3Aprovisioned-model%2Fxyz/converse");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK,
+            "signing name follows the route family, not the partition");
+}
+
+@test:Config {}
+function testMantleIsRejectedOnTheChinaPartitionBeforeAnyIo() {
+    // The `api.aws` Mantle host is not partition-templated (§9.2), so this must be
+    // a construction error rather than a request to a host that cannot exist.
+    Route|error r = resolveRoute("mantle/anthropic.claude-opus-4-8", "cn-north-1");
+    if r is Route {
+        Endpoint|error ep = buildEndpoint(r);
+        test:assertTrue(ep is error, "Mantle must not build an endpoint on aws-cn");
+        if ep is error {
+            test:assertTrue(ep.message().includes("partition"), ep.message());
+        }
+    }
+}
+
 // ---- partition inference for bare ids ----
 
 @test:Config {}
 function testGovCloudRegionInfersPartition() returns error? {
     Route r = check resolveRoute("anthropic.claude-opus-4-8", "us-gov-west-1");
     test:assertEquals(r.partition, "aws-us-gov");
+}
+
+@test:Config {}
+function testGovCloudRouteBuildsACommercialSuffixHost() returns error? {
+    // GovCloud keeps `.amazonaws.com` — only aws-cn differs. Asserted so the
+    // awsDomain() branch cannot be "simplified" into applying to both.
+    Route r = check resolveRoute("converse/anthropic.claude-opus-4-8", "us-gov-west-1");
+    Endpoint ep = check buildEndpoint(r);
+    test:assertEquals(ep.host, "bedrock-runtime.us-gov-west-1.amazonaws.com");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK);
 }
 
 @test:Config {}
@@ -330,4 +370,46 @@ function testForcingMantleOnAnUnknownModelStillErrors() {
     // never a guessed path.
     Route|error route = resolveRoute("acme.totally-new", REGION, {apiFamily: MANTLE});
     test:assertTrue(route is error);
+}
+
+// ---- ARN structural segments ----
+
+@test:Config {}
+function testGlobalArnWithNoRegionFallsBackToTheCallerRegion() returns error? {
+    // Foundation-model ARNs are commonly written without a region. Copying "" into
+    // Route.region built the host `bedrock-runtime..amazonaws.com`, which surfaced
+    // as an opaque DNS failure instead of anything actionable.
+    Route r = check resolveRoute(
+        "arn:aws:bedrock::123456789012:foundation-model/anthropic.claude-sonnet-4-6", "eu-west-1");
+    test:assertEquals(r.region, "eu-west-1", "an empty ARN region must fall back to the caller's");
+    Endpoint ep = check buildEndpoint(r);
+    test:assertEquals(ep.host, "bedrock-runtime.eu-west-1.amazonaws.com");
+}
+
+@test:Config {}
+function testArnRegionStillOverridesTheCallerRegionWhenPresent() returns error? {
+    Route r = check resolveRoute(
+        "arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/apac.anthropic.claude-sonnet-4-6",
+        "us-east-1");
+    test:assertEquals(r.region, "ap-northeast-1", "a present ARN region stays authoritative (§5.2)");
+}
+
+@test:Config {}
+function testMalformedArnWithAnEmptyPartitionIsRejected() {
+    Route|error r = resolveRoute("arn::bedrock:us-east-1:123456789012:provisioned-model/xyz", REGION);
+    test:assertTrue(r is error);
+    if r is error {
+        test:assertTrue(r.message().includes("partition"), r.message());
+    }
+}
+
+@test:Config {}
+function testNonBedrockArnIsRejectedAtConstruction() {
+    // Without this the S3 ARN resolved to CONVERSE and the user learned about it
+    // from an opaque AWS error after a network call.
+    Route|error r = resolveRoute("arn:aws:s3:us-east-1:123456789012:bucket/foo", REGION);
+    test:assertTrue(r is error);
+    if r is error {
+        test:assertTrue(r.message().includes("Bedrock"), r.message());
+    }
 }
