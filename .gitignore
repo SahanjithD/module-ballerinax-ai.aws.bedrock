@@ -19,6 +19,26 @@
 *.tar.gz
 *.rar
 
+# ...except the Gradle wrapper, which MUST be committed so `./gradlew` works on a
+# fresh clone without a preinstalled Gradle.
+!gradle/wrapper/gradle-wrapper.jar
+
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Gradle build artifacts
+.gradle/
+build/
+!build-config/
+!build.gradle
+
+# Ballerina build artifacts
+target/
+
+# Test configuration — carries live AWS credentials for the `live` test group
+# (see ballerina/tests/live_test.bal). Never commit this.
+Config.toml
+
+# macOS
+.DS_Store
