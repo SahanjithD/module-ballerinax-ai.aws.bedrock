@@ -51,7 +51,8 @@ public enum ModelSchema {
 # the CODEC, not the route: Nova on InvokeModel is Converse-shaped, and Mistral's
 # chat dialect looks OpenAI-shaped but forces tools with the bare string `"any"`.
 # Deriving it from `ApiFamily` silently emits the wrong field for those dialects.
-public enum ToolChoiceStyle {
+# Module-private: it lives on the internal `ModelCodec`, never on user config.
+enum ToolChoiceStyle {
     # Converse: `toolConfig.toolChoice = {"tool": {"name": ...}}`.
     CONVERSE_TOOL_CHOICE,
     # Anthropic Messages: `tool_choice = {"type": "tool", "name": ...}`.
@@ -100,7 +101,8 @@ public enum ServiceTier {
 }
 
 # Whether a guardrail intervened on a response (design §9.5).
-public enum GuardrailAction {
+# Module-private: only reachable via the internal `DecodedResponse`.
+enum GuardrailAction {
     INTERVENED,
     NONE
 }
@@ -138,8 +140,8 @@ public enum MantleCodecKey {
 
 # The fully resolved route — produced once by `resolveRoute` at construction
 # (design §5.3, §6). Everything downstream (endpoint, codec, transport) reads
-# from this.
-public type Route record {|
+# from this. Module-private: the resolver's output, mirroring the private `Endpoint`.
+type Route record {|
     # The resolved wire dialect.
     ApiFamily family;
     # Lookup key with any CRIS geo prefix stripped, e.g. `anthropic.claude-opus-4-8`.
@@ -163,8 +165,8 @@ public type Route record {|
 
 # The subset of a vendor `*Config` that `resolveRoute` (pure) needs. Each vendor
 # `init` builds this from its own config record, keeping the resolver decoupled
-# from the seven per-vendor config shapes (design §5.1, §6).
-public type RouteConfig record {|
+# from the seven per-vendor config shapes (design §5.1, §6). Module-private input.
+type RouteConfig record {|
     # Explicit route override — outranks every heuristic (design §5.1 step 1).
     ApiFamily apiFamily?;
     # Required for `imported-model/` ARNs (design §5.4).
