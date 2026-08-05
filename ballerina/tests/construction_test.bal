@@ -56,8 +56,14 @@ function testImportedModelArnWithoutSchemaFailsAtConstruction() {
 
 @test:Config {}
 function testConverseHappyPathConstructsWithoutError() returns error? {
-    // A valid Converse model constructs (no I/O until chat()).
-    AnthropicModelProvider provider = check new (TEST_CREDS, "anthropic.claude-opus-4-8", "us-east-1");
+    // A valid Converse model constructs (no I/O until chat()). Sonnet 4.6 is
+    // runtime-only — absent from MANTLE_CAPABLE — so AUTO resolves it to Converse.
+    // A dual-homed id (e.g. `anthropic.claude-opus-4-8`) would resolve to Mantle
+    // under the Amendment 2 preference order and would not exercise this path.
+    Route route = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
+    test:assertEquals(route.family, CONVERSE, "test must exercise the Converse route");
+
+    AnthropicModelProvider provider = check new (TEST_CREDS, "anthropic.claude-sonnet-4-6", "us-east-1");
     test:assertTrue(provider is AnthropicModelProvider);
 }
 

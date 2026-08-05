@@ -26,6 +26,15 @@ public enum ApiFamily {
     MANTLE
 }
 
+# A CONCRETE wire family — `ApiFamily` minus `AUTO`. `AUTO` is an instruction to the
+# resolver ("pick one"), not a destination, so it is unrepresentable everywhere a
+# family has already been decided: a resolved `Route.family` and a `routeOverrides`
+# value both name where a request actually goes. Typing those as `ApiFamily` let
+# `routeOverrides = {"some.model": AUTO}` reach `buildBareRoute`, which has no `AUTO`
+# case and fell through to a `Route` carrying `family: AUTO` — a route no endpoint
+# builder or codec selector can serve.
+public type RouteFamily CONVERSE|INVOKE|MANTLE;
+
 # Body schema selector for `imported-model/` ARNs, where AWS applies no default
 # chat template and the codec cannot be inferred from the id (design §5.4, §7.2).
 public enum ModelSchema {
@@ -142,8 +151,8 @@ public enum MantleCodecKey {
 # (design §5.3, §6). Everything downstream (endpoint, codec, transport) reads
 # from this. Module-private: the resolver's output, mirroring the private `Endpoint`.
 type Route record {|
-    # The resolved wire dialect.
-    ApiFamily family;
+    # The resolved wire dialect. Never `AUTO` — see `RouteFamily`.
+    RouteFamily family;
     # Lookup key with any CRIS geo prefix stripped, e.g. `anthropic.claude-opus-4-8`.
     string bareModelId;
     # The stripped CRIS geo prefix, re-applied per family on the wire (design §5.3).
@@ -172,5 +181,5 @@ type RouteConfig record {|
     # Required for `imported-model/` ARNs (design §5.4).
     ModelSchema modelSchema?;
     # Extends the routing tables without a release (design §5.1 step 3, §7.3).
-    map<ApiFamily|MantleEntry> routeOverrides?;
+    map<RouteFamily|MantleEntry> routeOverrides?;
 |};
