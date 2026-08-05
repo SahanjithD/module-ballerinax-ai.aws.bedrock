@@ -24,9 +24,13 @@
 isolated function resolveRoute(string model, string region, RouteConfig config = {}) returns Route|error {
     // ---- step 1: explicit override (prefix and/or config.apiFamily) ----
     // AUTO (the config default) means "no forced family" — run the ladder (amendment).
-    [ApiFamily?, string] [prefixFamily, work] = stripRoutePrefix(model);
-    ApiFamily? configFamily = config.apiFamily == AUTO ? () : config.apiFamily;
-    ApiFamily? explicitFamily = configFamily ?: prefixFamily;
+    [RouteFamily?, string] [prefixFamily, work] = stripRoutePrefix(model);
+    // Narrowing to `RouteFamily` IS the AUTO filter: `AUTO` is the one `ApiFamily`
+    // member that is not a destination, so anything that survives the type test is
+    // a forced family.
+    ApiFamily? rawConfigFamily = config.apiFamily;
+    RouteFamily? configFamily = rawConfigFamily is RouteFamily ? rawConfigFamily : ();
+    RouteFamily? explicitFamily = configFamily ?: prefixFamily;
 
     // ---- step 2: ARN dispatch (region + partition are authoritative — §5.2) ----
     if isArn(work) {
@@ -42,7 +46,7 @@ isolated function resolveRoute(string model, string region, RouteConfig config =
 // Splits an optional `mantle/|converse/|invoke/` route prefix off the model
 // string (design §5.1 step 1). Returns the implied family (if any) and the
 // remaining id.
-isolated function stripRoutePrefix(string model) returns [ApiFamily?, string] {
+isolated function stripRoutePrefix(string model) returns [RouteFamily?, string] {
     if model.startsWith("mantle/") {
         return [MANTLE, model.substring("mantle/".length())];
     }
@@ -57,7 +61,7 @@ isolated function stripRoutePrefix(string model) returns [ApiFamily?, string] {
 
 // ARN dispatch — the resource-type token gives the family before any call
 // (design §5.1 step 2, §5.2). The ARN's region/partition override `config.region`.
-isolated function resolveArn(string arnStr, string region, RouteConfig config, ApiFamily? explicitFamily)
+isolated function resolveArn(string arnStr, string region, RouteConfig config, RouteFamily? explicitFamily)
         returns Route|error {
     ParsedArn arn = check parseArn(arnStr);
 
@@ -87,8 +91,8 @@ isolated function resolveArn(string arnStr, string region, RouteConfig config, A
 
     // Every remaining opaque ARN keeps its family through the sink (design §5.1
     // step 6). Default family by resource type; an explicit override outranks it.
-    ApiFamily defaultFamily = arn.resourceType == "imported-model" ? INVOKE : CONVERSE;
-    ApiFamily family = explicitFamily ?: defaultFamily;
+    RouteFamily defaultFamily = arn.resourceType == "imported-model" ? INVOKE : CONVERSE;
+    RouteFamily family = explicitFamily ?: defaultFamily;
 
     // `imported-model/` says nothing about the body schema (design §5.4): AWS
     // applies no default chat template, so INVOKE needs `modelSchema`.
@@ -118,22 +122,22 @@ isolated function resolveArn(string arnStr, string region, RouteConfig config, A
 // Bare/CRIS-prefixed id: normalize (strip geo prefix, keep it) then walk ladder
 // steps 3-6 (design §5.1, §5.3).
 isolated function resolveBareId(string id, string region, string partition, RouteConfig config,
-        ApiFamily? explicitFamily) returns Route|error {
+        RouteFamily? explicitFamily) returns Route|error {
     [string, string?] [bareId, geoPrefix] = normalizeModelId(id);
 
     // step 1 (explicit): outranks the tables.
-    if explicitFamily is ApiFamily {
+    if explicitFamily is RouteFamily {
         return buildBareRoute(explicitFamily, bareId, geoPrefix, region, partition, config);
     }
 
     // step 3: routeOverrides.
-    map<ApiFamily|MantleEntry>? overrides = config.routeOverrides;
-    if overrides is map<ApiFamily|MantleEntry> {
-        ApiFamily|MantleEntry? ov = overrides[bareId];
+    map<RouteFamily|MantleEntry>? overrides = config.routeOverrides;
+    if overrides is map<RouteFamily|MantleEntry> {
+        RouteFamily|MantleEntry? ov = overrides[bareId];
         if ov is MantleEntry {
             return mantleRoute(bareId, geoPrefix, region, partition, ov);
         }
-        if ov is ApiFamily {
+        if ov is RouteFamily {
             return buildBareRoute(ov, bareId, geoPrefix, region, partition, config);
         }
     }
@@ -160,7 +164,7 @@ isolated function resolveBareId(string id, string region, string partition, Rout
 }
 
 // Builds a CONVERSE/INVOKE/MANTLE route from a resolved family + bare id.
-isolated function buildBareRoute(ApiFamily family, string bareId, string? geoPrefix, string region,
+isolated function buildBareRoute(RouteFamily family, string bareId, string? geoPrefix, string region,
         string partition, RouteConfig config) returns Route|error {
     if family == MANTLE {
         // `mantleEntryFor` (override-aware), NOT `mantleEntryForBare`: forcing Mantle
@@ -214,9 +218,9 @@ isolated function mantleEntryForBare(string bareId) returns MantleEntry|error {
 // MANTLE_CAPABLE lookup that also consults `routeOverrides` (for keys — e.g. ARN
 // strings — not present in the static table).
 isolated function mantleEntryFor(string key, RouteConfig config) returns MantleEntry|error {
-    map<ApiFamily|MantleEntry>? overrides = config.routeOverrides;
-    if overrides is map<ApiFamily|MantleEntry> {
-        ApiFamily|MantleEntry? ov = overrides[key];
+    map<RouteFamily|MantleEntry>? overrides = config.routeOverrides;
+    if overrides is map<RouteFamily|MantleEntry> {
+        RouteFamily|MantleEntry? ov = overrides[key];
         if ov is MantleEntry {
             return ov;
         }

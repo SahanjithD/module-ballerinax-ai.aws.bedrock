@@ -99,9 +99,11 @@ public type CommonModelConfig record {|
     # stripped: use `anthropic.claude-x`, never `us.anthropic.claude-x`. For an ARN,
     # the key is the full ARN string. The VALUE takes one of two shapes:
     #
-    # - An `ApiFamily` (`CONVERSE` | `INVOKE`) routes the model to `bedrock-runtime`
+    # - A `RouteFamily` (`CONVERSE` | `INVOKE`) routes the model to `bedrock-runtime`
     #   on that family:
     #   `routeOverrides = {"anthropic.claude-x": CONVERSE}`
+    #   `AUTO` is not accepted here: an override names a destination, and `AUTO` is
+    #   an instruction to the resolver rather than a family it could resolve to.
     #
     # - A `MantleEntry` routes it to `bedrock-mantle`, and must carry the per-model
     #   path, because a Mantle path is DATA — it is not derivable from the vendor
@@ -115,7 +117,7 @@ public type CommonModelConfig record {|
     # — an explicit `apiFamily` is step 1 and still wins. Note that a Mantle-routed
     # model has `supportsStructuredOutput = false`, so a typed `generate()` errors on
     # it; see the `apiFamily` docs above.
-    map<ApiFamily|MantleEntry> routeOverrides?;
+    map<RouteFamily|MantleEntry> routeOverrides?;
     # Per-route SigV4 signing name override (§9.4).
     string signingServiceName?;
 

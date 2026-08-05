@@ -37,11 +37,23 @@ type Endpoint record {|
 // partition (design §9.2, open item #2).
 isolated function buildEndpoint(Route route) returns Endpoint|error {
     if route.family == MANTLE {
-        // Mantle uses the `api.aws` suffix and is NOT partition-templated (§9.2).
-        if route.partition != "aws" {
+        // Mantle is served from the partition-neutral `api.aws` suffix. That suffix
+        // exists in the commercial AND GovCloud partitions — `bedrock-mantle.us-gov-west-1.api.aws`
+        // is real — but has no China analogue: `aws-cn` uses `amazonaws.com.cn`
+        // throughout, so no bedrock-mantle host can be formed there at all (§9.2).
+        //
+        // This is a HOST-SHAPE guard, not an availability oracle. Within an allowed
+        // partition Mantle ships in only a SUBSET of regions (us-west-1, ca-central-1
+        // and us-gov-east-1 are `bedrock-runtime`-only today), and that subset grows as
+        // AWS expands. Encoding the region list here would reject a newly-added Mantle
+        // region until our next release — the exact staleness the routing escape
+        // hatches exist to avoid — so a well-formed but not-yet-served region is left
+        // for AWS to reject at call time with its own diagnosis.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
+        if route.partition != "aws" && route.partition != "aws-us-gov" {
             return error(string `Mantle is not available on partition '${route.partition}': the ` +
-                string `bedrock-mantle 'api.aws' host is not partition-templated (design §9.2). ` +
-                string `Use a commercial ('aws') region.`);
+                string `bedrock-mantle 'api.aws' host has no '${route.partition}' analogue ` +
+                string `(design §9.2). Use a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
         }
         MantleEntry entry = check route.mantleEntry.ensureType();
         return {

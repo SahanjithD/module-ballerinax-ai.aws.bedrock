@@ -60,6 +60,20 @@ function testMantleEndpointHostAndSigningService() returns error? {
     test:assertEquals(ep.signingService, "bedrock-mantle");
 }
 
+// GovCloud is a SUPPORTED Mantle partition — `us-gov-west-1` carries bedrock-mantle
+// per AWS's endpoint availability table — so the partition guard must not reject it.
+// The `api.aws` suffix is partition-neutral, hence no GovCloud-specific host shape.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
+@test:Config {}
+function testMantleEndpointOnGovCloudPartition() returns error? {
+    Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-gov-west-1");
+    test:assertEquals(route.partition, "aws-us-gov");
+
+    Endpoint ep = check buildEndpoint(route);
+    test:assertEquals(ep.host, "bedrock-mantle.us-gov-west-1.api.aws");
+    test:assertEquals(ep.signingService, "bedrock-mantle");
+}
+
 @test:Config {}
 function testConverseSigningServiceIsBedrock() returns error? {
     // nova-pro is Converse-default (not Mantle-capable); opus-4-8 now prefers Mantle
