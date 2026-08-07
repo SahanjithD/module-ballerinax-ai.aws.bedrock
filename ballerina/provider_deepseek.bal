@@ -15,13 +15,13 @@
 import ballerina/ai;
 import ballerina/jballerina.java;
 
-// DeepSeekModelProvider — Converse + Invoke (CLAUDE.md §3).
+// DeepSeekModelProvider — Converse + Invoke.
 //
-// NOTE (design §7.2): DeepSeek requires a cross-region inference-profile id, not a
+// NOTE: DeepSeek requires a cross-region inference-profile id, not a
 // bare model id — e.g. `us.deepseek.r1-v1:0`. We deliberately do NOT hard-fail on a
 // bare id: AWS answers that with a `ValidationException` naming the real problem,
-// and principle 7 reserves construction errors for what AWS cannot tell us. The
-// resolver strips/re-applies the geo prefix for you (§5.3).
+// and construction errors are reserved for what AWS cannot tell us. The
+// resolver strips/re-applies the geo prefix for you.
 
 # Well-known DeepSeek model ids. Any newer id can be passed as a `string`.
 public enum DeepSeekModel {
@@ -41,7 +41,7 @@ public enum DeepSeekModel {
     DEEPSEEK_V3_2 = "deepseek.v3.2"
 }
 
-# DeepSeek-specific configuration (CLAUDE.md §3).
+# DeepSeek-specific configuration.
 public type DeepSeekConfig record {|
     *CommonModelConfig;
 |};
@@ -52,15 +52,29 @@ public isolated distinct client class DeepSeekModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final readonly & ModelCodec codec;
+    private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
     private final map<string> & readonly extraHeaders;
+    // The spine generate() uses. Same objects as the chat spine EXCEPT when AUTO
+    // sent chat to Mantle and the model is also on bedrock-runtime — then these hold
+    // a Converse spine so a typed generate() works instead of erroring.
+    private final ApiFamily genFamily;
+    private final string genModelId;
+    private final readonly & ModelConverter genConverter;
+    private final BedrockTransport genTransport;
+    private final map<string> & readonly genHeaders;
     private final boolean supportsStructuredOutput;
 
-    # + credentials - Static keys, STS, or a Bedrock API key (§9.5)
+    # + credentials - Static keys, STS, or a Bedrock API key
     # + model - A DeepSeek id; use a CRIS inference-profile id (e.g. `us.deepseek.r1-v1:0`)
-    # + region - Default region; an ARN `model`'s region segment overrides it (§5.2)
+    # + region - Default region; an ARN `model`'s region segment overrides it. Also the
+    #            SigV4 signing scope, which a custom `serviceUrl` does NOT change
+    # + serviceUrl - Endpoint origin. The default template resolves per route —
+    #                `{endpoint}` becomes `runtime` or `mantle`, `{region}` and
+    #                `{domain}` follow the resolved route. Pass a concrete URL for a
+    #                FIPS, dual-stack, PrivateLink or gateway host; the route-derived
+    #                request path is still appended
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to omit the
     #                 field entirely and use the model's own default — several current
@@ -71,40 +85,51 @@ public isolated distinct client class DeepSeekModelProvider {
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Model"} DeepSeekModel|string model,
             @display {label: "Region"} string region,
+            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *DeepSeekConfig config)
             returns ai:Error? {
-        RouteConfig routeConfig = {
-            apiFamily: config.apiFamily,
-            modelSchema: config.modelSchema,
-            routeOverrides: config.routeOverrides
-        };
-        [Route, readonly & ModelCodec, BedrockTransport] [route, codec, transport] =
-            check resolveSpine("DeepSeekModelProvider", credentials, model, region, routeConfig,
-                config?.signingServiceName, config?.httpConfig, config?.retryConfig, config?.guardrail);
+        RouteConfig routeConfig = {apiFamily: config.apiFamily};
+        [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
+            check resolveSpine("DeepSeekModelProvider", credentials, model, region, serviceUrl, routeConfig,
+                config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.codec = codec;
+        self.converter = converter;
         self.transport = transport;
-        self.supportsStructuredOutput = route.family != MANTLE; // amendment
+        map<string> chatHeaders = commonExtraHeaders(route, config?.guardrail, credentials);
+        self.extraHeaders = chatHeaders.cloneReadOnly();
+        [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
+            [genFamily, genModelId, genConverter, genTransport, genHeaders] =
+            check resolveGenerateSpine("DeepSeekModelProvider", credentials, model, region, serviceUrl,
+                routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
+                route, converter, transport, chatHeaders);
+        self.genFamily = genFamily;
+        self.genModelId = genModelId;
+        self.genConverter = genConverter;
+        self.genTransport = genTransport;
+        self.genHeaders = genHeaders.cloneReadOnly();
+        self.supportsStructuredOutput = genFamily != MANTLE;
         self.params = buildInferenceParams(maxTokens, temperature, config?.stopSequences,
-            config?.additionalModelRequestFields, config?.additionalModelResponseFieldPaths,
-            config?.serviceTier, config?.latencyOptimized, config?.requestMetadata, config?.guardrail);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
+            config?.additionalModelRequestFields, config?.serviceTier,
+            config?.latencyOptimized, config?.guardrail);
     }
 
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling
-    # + stop - Stop sequence; overrides configured `stopSequences` (§7)
+    # + stop - Stop sequence; overrides configured `stopSequences`
     # + return - The assistant message, or an `ai:Error`
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("DeepSeek", self.family, self.wireModelId, self.codec, self.transport,
+        => runChat("DeepSeek", self.family, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
+    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
+    # chat to Mantle and the model is also served on `bedrock-runtime`.
+    #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type
     # + return - A value of the expected type, or an `ai:Error`

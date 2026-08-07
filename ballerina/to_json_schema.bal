@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// typedesc -> JSON schema for generate()'s expected response type (CLAUDE.md §3).
+// typedesc -> JSON schema for generate()'s expected response type.
 // Ported from the reference module module-ballerinax-ai.openai (`to_json_schema.bal`)
 // so this module owns its schema generation, as its siblings do.
 //

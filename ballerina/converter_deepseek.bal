@@ -14,7 +14,7 @@
 
 import ballerina/ai;
 
-// DeepSeek-R1 on the InvokeModel route (design §7.2).
+// DeepSeek-R1 on the InvokeModel route.
 //
 // R1's Invoke dialect is TEXT COMPLETION, not chat — despite the `choices`
 // wrapper making it look OpenAI-shaped at a glance:
@@ -25,17 +25,17 @@ import ballerina/ai;
 //
 // Note `choices[].text`, NOT `choices[].message.content`; `stop_reason`, NOT
 // `finish_reason`; and NO `usage` object at all. Routing DeepSeek through the
-// OpenAI chat codec sends `messages` (a 400 on encode) and, if it somehow got a
+// OpenAI chat converter sends `messages` (a 400 on encode) and, if it somehow got a
 // response, would read every field from the wrong place.
 //
-// This codec serves R1 ONLY (`usesDeepSeekTextDialect` in codecs.bal). DeepSeek
+// This converter serves R1 ONLY (`usesDeepSeekTextDialect` in converters.bal). DeepSeek
 // V3.1/V3.2 take `{"messages": [...]}` on InvokeModel and go through the OpenAI
-// chat codec instead — sending `prompt` to V3.2 returns `ValidationException ...
+// chat converter instead — sending `prompt` to V3.2 returns `ValidationException ...
 // missing field messages`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
 
-// Encodes a DeepSeek text-completion request body (§7.2).
+// Encodes a DeepSeek text-completion request body.
 isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     if tools.length() > 0 {
@@ -53,12 +53,12 @@ isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMess
     setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {
-        stops = [stop]; // per-call stop overrides configured stopSequences (§7)
+        stops = [stop]; // per-call stop overrides configured stopSequences
     }
     if stops is string[] && stops.length() > 0 {
         body["stop"] = stops;
     }
-    json extra = params?.additionalModelRequestFields;
+    map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
             body[k] = v;
@@ -78,7 +78,7 @@ isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMess
 // placement are NOT specified for this dialect, so the mapping below (system folded
 // ahead of the first user turn; turns alternated with the same delimiters) follows
 // DeepSeek's own chat template. It preserves the module invariant that system is
-// never emitted as a `role: system` message (§7.1).
+// never emitted as a `role: system` message.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
 isolated function deepSeekPrompt(ai:ChatSystemMessage? system, ai:ChatMessage[] messages) returns string {
     string prompt = "<｜begin▁of▁sentence｜>";
@@ -98,7 +98,7 @@ isolated function deepSeekPrompt(ai:ChatSystemMessage? system, ai:ChatMessage[] 
     return prompt;
 }
 
-// Decodes a DeepSeek text-completion response (§7): `choices[].text` +
+// Decodes a DeepSeek text-completion response: `choices[].text` +
 // `choices[].stop_reason`. This dialect returns no token counts and no id.
 isolated function decodeDeepSeekInvoke(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
@@ -119,12 +119,11 @@ isolated function decodeDeepSeekInvoke(json response) returns DecodedResponse|ai
     string text = strField(choice, "text") ?: "";
     return {
         message: {role: ai:ASSISTANT, content: text == "" ? () : text},
-        // AWS documents no usage for this dialect; `usage` stays populated (§7).
+        // AWS documents no usage for this dialect; `usage` stays populated.
         usage: {inputTokens: 0, outputTokens: 0},
         // `stop_reason`, not `finish_reason`.
         stopReason: strField(choice, "stop_reason") ?: "stop",
         responseId: (),
-        guardrailAction: invokeGuardrailAction(r), // body field (§9.5)
-        additionalModelResponseFields: ()
+        guardrailAction: invokeGuardrailAction(r) // body field
     };
 }

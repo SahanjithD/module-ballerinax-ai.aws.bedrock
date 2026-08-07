@@ -15,13 +15,13 @@
 import ballerina/ai;
 import ballerina/test;
 
-// Construction-error tests (design §13.3). `init` fails before any I/O.
+// Construction-error tests. `init` fails before any I/O.
 
 final BedrockCredentials TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
 
 @test:Config {}
 function testGuardrailOnMantleRouteFailsAtConstruction() {
-    // §9.5: guardrail on a Mantle route → error naming ApplyGuardrail.
+    // guardrail on a Mantle route → error naming ApplyGuardrail.
     AnthropicModelProvider|ai:Error provider = new (
         TEST_CREDS, "anthropic.claude-mythos-preview", "us-east-1",
         guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"});
@@ -33,7 +33,7 @@ function testGuardrailOnMantleRouteFailsAtConstruction() {
 
 @test:Config {}
 function testMantleOnChinaPartitionFailsAtConstruction() {
-    // §9.2: Mantle 'api.aws' host is not partition-templated.
+    // Mantle 'api.aws' host is not partition-templated.
     AnthropicModelProvider|ai:Error provider = new (
         TEST_CREDS, "anthropic.claude-mythos-preview", "cn-north-1");
     test:assertTrue(provider is ai:Error);
@@ -44,13 +44,13 @@ function testMantleOnChinaPartitionFailsAtConstruction() {
 }
 
 @test:Config {}
-function testImportedModelArnWithoutSchemaFailsAtConstruction() {
-    // §5.4: imported-model ARN requires modelSchema.
+function testImportedModelArnIsRefusedAtConstruction() {
+    // Custom Model Import is out of scope — refused by name, before any I/O.
     AnthropicModelProvider|ai:Error provider = new (
         TEST_CREDS, "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123", "us-east-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
-        test:assertTrue(provider.message().includes("modelSchema"), provider.message());
+        test:assertTrue(provider.message().includes("imported-model"), provider.message());
     }
 }
 
@@ -59,7 +59,7 @@ function testConverseHappyPathConstructsWithoutError() returns error? {
     // A valid Converse model constructs (no I/O until chat()). Sonnet 4.6 is
     // runtime-only — absent from MANTLE_CAPABLE — so AUTO resolves it to Converse.
     // A dual-homed id (e.g. `anthropic.claude-opus-4-8`) would resolve to Mantle
-    // under the Amendment 2 preference order and would not exercise this path.
+    // under the AUTO preference order and would not exercise this path.
     Route route = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
     test:assertEquals(route.family, CONVERSE, "test must exercise the Converse route");
 

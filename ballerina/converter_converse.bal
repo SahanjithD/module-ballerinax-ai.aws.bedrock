@@ -14,11 +14,11 @@
 
 import ballerina/ai;
 
-// Converse codec — the model-agnostic normalized surface (design §5, §9.3).
+// Converse converter — the model-agnostic normalized surface.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 
 // Encodes a Converse request body. `system` is the top-level `system` field, never
-// a message (§7.1). Forwards the §9.3 passthrough verbatim.
+// a message. Forwards the passthrough verbatim.
 isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] wire = [];
@@ -28,7 +28,7 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
 
     map<json> inferenceConfig = {"maxTokens": params.maxTokens};
     setTemperature(inferenceConfig, params);
-    // Per-call `stop` overrides configured stopSequences outright (design §7).
+    // Per-call `stop` overrides configured stopSequences outright.
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop];
@@ -40,7 +40,7 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
     map<json> body = {"messages": wire, "inferenceConfig": inferenceConfig};
 
     if system is ai:ChatSystemMessage {
-        body["system"] = [{"text": contentToString(system.content)}]; // §7.1
+        body["system"] = [{"text": contentToString(system.content)}];
     }
     if tools.length() > 0 {
         json[] toolSpecs = [];
@@ -52,18 +52,30 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
         body["toolConfig"] = {"tools": toolSpecs};
     }
 
-    // ---- §9.3 passthrough — forwarded verbatim; mandatory for top_k/thinking/reasoning ----
-    json additionalRequest = params?.additionalModelRequestFields;
-    if additionalRequest != () {
-        body["additionalModelRequestFields"] = additionalRequest;
+    // ---- passthrough — forwarded verbatim; mandatory for top_k/thinking/reasoning ----
+    // Converse does not model `thinking`, so it rides the passthrough — merged in
+    // rather than overwriting whatever the caller already put there.
+    AdditionalRequestFields? additionalRequest = params?.additionalModelRequestFields;
+    ThinkingConfig? thinking = params?.thinking;
+    if thinking is ThinkingConfig {
+        additionalRequest = foldRequestFields(additionalRequest, {"thinking": thinkingBody(thinking)});
     }
-    string[]? responsePaths = params.additionalModelResponseFieldPaths;
-    if responsePaths is string[] && responsePaths.length() > 0 {
-        body["additionalModelResponseFieldPaths"] = responsePaths;
+    map<json>? additionalJson = additionalFieldsToJson(additionalRequest);
+    if additionalJson != () {
+        body["additionalModelRequestFields"] = additionalJson;
     }
-    map<string>? metadata = params.requestMetadata;
-    if metadata is map<string> {
-        body["requestMetadata"] = metadata;
+    // `effort` uses the NATIVE Converse `outputConfig` member, not the passthrough.
+    //
+    // TWO FIRST-PARTY SOURCES DISAGREE and this picks one: botocore models
+    // `outputConfig: {textFormat, effort}` on ConverseRequest, while AWS's
+    // adaptive-thinking page routes it through
+    // `additionalModelRequestFields: {"output_config": {"effort": ...}}`. The native
+    // member is the modelled contract, so it wins here — but this is unverified
+    // against a live call. `testLiveConverseEffortIsAccepted` settles it; if Bedrock
+    // rejects this, switch to folding `output_config` into the passthrough above.
+    Effort? effort = params?.effort;
+    if effort is Effort {
+        body["outputConfig"] = {"effort": effort};
     }
     ServiceTier? tier = params.serviceTier;
     if tier is ServiceTier {
@@ -76,11 +88,11 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
     if latencyOptimized == true {
         // `"performanceConfig": { "latency": "optimized" }` — an object, like
         // serviceTier. Only `optimized` is worth emitting; `standard` is the default,
-        // so an unset/false flag sends nothing. Support is per model+region (§9.3).
+        // so an unset/false flag sends nothing. Support is per model+region.
         // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         body["performanceConfig"] = {"latency": "optimized"};
     }
-    // Guardrail is a Converse BODY field (design §9.5).
+    // Guardrail is a Converse BODY field.
     GuardrailConfig? guardrail = params.guardrail;
     if guardrail is GuardrailConfig {
         map<json> gc = {
@@ -97,7 +109,7 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
     return body;
 }
 
-// Maps one `ai:ChatMessage` to a Converse content block (design §7.1).
+// Maps one `ai:ChatMessage` to a Converse content block.
 isolated function converseMessage(ai:ChatMessage m) returns json {
     if m is ai:ChatUserMessage {
         return {"role": "user", "content": [{"text": contentToString(m.content)}]};
@@ -117,7 +129,7 @@ isolated function converseMessage(ai:ChatMessage m) returns json {
         return {"role": "assistant", "content": blocks};
     }
     if m is ai:ChatFunctionMessage {
-        // ai:FUNCTION result → Converse toolResult block (§7.1).
+        // ai:FUNCTION result → Converse toolResult block.
         return {
             "role": "user",
             "content": [{"toolResult": {"toolUseId": m.id ?: m.name, "content": [{"text": m.content ?: ""}]}}]
@@ -127,8 +139,8 @@ isolated function converseMessage(ai:ChatMessage m) returns json {
     return {"role": "user", "content": [{"text": contentToString(m.content)}]};
 }
 
-// Decodes a Converse response (design §7, §9.5). Always populates `usage` and
-// `stopReason`; maps `guardrail_intervened` to `INTERVENED` (§9.5).
+// Decodes a Converse response. Always populates `usage` and
+// `stopReason`; maps `guardrail_intervened` to `INTERVENED`.
 isolated function decodeConverse(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {
@@ -183,8 +195,7 @@ isolated function decodeConverse(json response) returns DecodedResponse|ai:Error
         stopReason,
         responseId: (), // Converse returns the request id in a header, not the body
         // Converse reports it via stopReason; Nova-on-Invoke shares this decoder
-        // but reports it as a body field instead, so check both (§9.5).
-        guardrailAction: stopReason == "guardrail_intervened" ? INTERVENED : invokeGuardrailAction(r),
-        additionalModelResponseFields: r["additionalModelResponseFields"]
+        // but reports it as a body field instead, so check both.
+        guardrailAction: stopReason == "guardrail_intervened" ? INTERVENED : invokeGuardrailAction(r)
     };
 }

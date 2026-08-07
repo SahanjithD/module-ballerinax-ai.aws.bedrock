@@ -15,7 +15,7 @@
 import ballerina/ai;
 
 // generate() — tool-forcing on Converse/Invoke (structured output supported);
-// Mantle has NO structured-output path (amendment): a non-string target type is a
+// Mantle has NO structured-output path: a non-string target type is a
 // clean error, a string target returns text. The external `Generator` shim passes
 // the typedesc and the per-model `supportsStructuredOutput` flag in here; the JSON
 // schema is derived on this side by `to_json_schema.bal`, as in the reference
@@ -23,46 +23,46 @@ import ballerina/ai;
 
 const RESULT_TOOL = "respond_with_result";
 
-// Callback invoked by the external `Generator` shim (design §3, §8; amendment).
+// Callback invoked by the external `Generator` shim.
 // Regular (non-dependent) function returning `anydata`; the Java boundary coerces
 // the result to the caller's `td`. Reads the provider's resolved state as
 // parameters.
 isolated function generateLlmResponse(boolean supportsStructuredOutput, ApiFamily family,
-        readonly & ModelCodec codec, BedrockTransport transport, string wireModelId,
+        readonly & ModelConverter converter, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
         typedesc<anydata> td) returns anydata|ai:Error
-    => structuredGenerate(supportsStructuredOutput, family, codec, transport, wireModelId,
+    => structuredGenerate(supportsStructuredOutput, family, converter, transport, wireModelId,
         extraHeaders, params, prompt, td);
 
-// Dispatches generate() (amendment). Converse/Invoke → tool-forcing. Mantle
+// Dispatches generate(). Converse/Invoke → tool-forcing. Mantle
 // (`supportsStructuredOutput == false`) → text only; a typed target is an error,
 // reversible per-model once a card shows Mantle structured-output support.
 isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily family,
-        readonly & ModelCodec codec, BedrockTransport transport, string wireModelId,
+        readonly & ModelConverter converter, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
         typedesc<anydata> td) returns anydata|ai:Error {
     if !supportsStructuredOutput {
         if td is typedesc<string> {
             // No structured output on Mantle, but a plain-text generation is fine.
-            return plainTextResponse(family, codec, transport, wireModelId, extraHeaders, params, prompt);
+            return plainTextResponse(family, converter, transport, wireModelId, extraHeaders, params, prompt);
         }
         return error ai:LlmInvalidGenerationError(
             string `Structured output is not supported on the bedrock-mantle route for model ` +
             string `'${wireModelId}'; the target type must be 'string'. Use a Converse/Invoke model ` +
             string `for typed generation.`);
     }
-    if codec.toolChoice == NO_TOOL_CHOICE {
+    if converter.toolChoice == NO_TOOL_CHOICE {
         // A dialect with no tool-calling at all (Mistral text completion). Same
         // shape as the Mantle guard, and reversible the same way.
         if td is typedesc<string> {
-            return plainTextResponse(family, codec, transport, wireModelId, extraHeaders, params, prompt);
+            return plainTextResponse(family, converter, transport, wireModelId, extraHeaders, params, prompt);
         }
         return error ai:LlmInvalidGenerationError(
             string `Structured output is not supported for model '${wireModelId}': its InvokeModel ` +
             string `dialect (Mistral text completion) has no tool-calling, so the target type must be ` +
             string `'string'. Use the Converse route (the module default) for typed generation.`);
     }
-    return generateByToolForcing(codec, transport, wireModelId, extraHeaders, params, prompt, td);
+    return generateByToolForcing(converter, transport, wireModelId, extraHeaders, params, prompt, td);
 }
 
 // Derives the expected type's JSON schema (`to_json_schema.bal`). A target type
@@ -77,13 +77,13 @@ isolated function schemaFor(typedesc<anydata> td) returns map<json>|ai:Error {
     return generateJsonSchemaForTypedescAsJson(td);
 }
 
-// Plain-text generation for the Mantle route when the target type is `string`
-// (amendment). Runs one chat turn and returns the assistant text.
-isolated function plainTextResponse(ApiFamily family, readonly & ModelCodec codec, BedrockTransport transport,
+// Plain-text generation for the Mantle route when the target type is `string`.
+// Runs one chat turn and returns the assistant text.
+isolated function plainTextResponse(ApiFamily family, readonly & ModelConverter converter, BedrockTransport transport,
         string wireModelId, map<string> & readonly extraHeaders, readonly & InferenceParams params,
         ai:Prompt prompt) returns anydata|ai:Error {
     ai:ChatUserMessage userMsg = {role: ai:USER, content: prompt};
-    RequestCodec encode = codec.encode;
+    RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode((), [userMsg], [], (), params);
     if encoded is ai:Error {
         return encoded;
@@ -97,7 +97,7 @@ isolated function plainTextResponse(ApiFamily family, readonly & ModelCodec code
     if response is ai:Error {
         return response;
     }
-    ResponseCodec decode = codec.decode;
+    ResponseDecoder decode = converter.decode;
     DecodedResponse|ai:Error decoded = decode(response.body);
     if decoded is ai:Error {
         return decoded;
@@ -106,8 +106,8 @@ isolated function plainTextResponse(ApiFamily family, readonly & ModelCodec code
 }
 
 // Tier 1 — force a single tool whose schema is the expected type; parse the
-// tool-call arguments back into the record (design §8).
-isolated function generateByToolForcing(readonly & ModelCodec codec,
+// tool-call arguments back into the record.
+isolated function generateByToolForcing(readonly & ModelConverter converter,
         BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td)
         returns anydata|ai:Error {
@@ -117,17 +117,17 @@ isolated function generateByToolForcing(readonly & ModelCodec codec,
         parameters: check schemaFor(td)
     };
     ai:ChatUserMessage userMsg = {role: ai:USER, content: prompt};
-    RequestCodec encode = codec.encode;
+    RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode((), [userMsg], [tool], (), params);
     if encoded is ai:Error {
         return encoded;
     }
-    json body = applyToolChoice(encoded, codec.toolChoice, RESULT_TOOL);
+    json body = applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL);
     TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
     if response is ai:Error {
         return response;
     }
-    ResponseCodec decode = codec.decode;
+    ResponseDecoder decode = converter.decode;
     DecodedResponse|ai:Error decoded = decode(response.body);
     if decoded is ai:Error {
         return decoded;
@@ -148,8 +148,8 @@ isolated function generateByToolForcing(readonly & ModelCodec codec,
         string `Model did not return a '${RESULT_TOOL}' tool call for structured output`);
 }
 
-// Forces the single result tool on the encoded body (design §8). Keyed on the
-// CODEC's dialect, not the route family: Nova on InvokeModel is Converse-shaped,
+// Forces the single result tool on the encoded body. Keyed on the
+// CONVERTER's dialect, not the route family: Nova on InvokeModel is Converse-shaped,
 // and Mistral chat forces with a bare string. Deriving this from `ApiFamily` sends
 // Anthropic's `tool_choice` to every non-Converse dialect, which they ignore —
 // the model then answers in prose and `generate()` fails with "no tool call".
@@ -185,7 +185,7 @@ isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolN
     return forced;
 }
 
-// Binds a JSON value to the expected type (design §8).
+// Binds a JSON value to the expected type.
 isolated function bindJson(json data, typedesc<anydata> td) returns anydata|ai:Error {
     anydata|error bound = data.fromJsonWithType(td);
     if bound is error {

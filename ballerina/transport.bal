@@ -19,7 +19,7 @@ import ballerina/lang.array;
 import ballerina/lang.runtime;
 import ballerina/time;
 
-// SigV4 transport — per-route signing (§9.4), retry (§9.5), error mapping (§9.5).
+// SigV4 transport — per-route signing, retry, error mapping.
 // SigV4 scaffolding (canonical request, signing-key derivation, base16 hex)
 // mirrors the ballerinax/aws.dynamodb connector's proven `utils.bal`.
 
@@ -28,7 +28,7 @@ const AWS4_HMAC_SHA256 = "AWS4-HMAC-SHA256";
 const AWS4_REQUEST = "aws4_request";
 
 // Wraps SigV4 signing + an HTTP client + retry/error mapping for one resolved
-// route (design §9.4-9.5). Resolve-once: host, path, and signing scope are fixed.
+// route. Resolve-once: host, path, and signing scope are fixed.
 isolated client class BedrockTransport {
     private final readonly & BedrockCredentials credentials;
     private final string region;
@@ -37,29 +37,28 @@ isolated client class BedrockTransport {
     private final string wirePath; // model-id segment single-encoded (from buildEndpoint)
     private final http:Client httpClient;
     private final readonly & RetryConfig retryConfig;
-    // Whether the RESOLVED ROUTE is Mantle. Derived from the route's own signing
-    // name, never from the `signingServiceName` override — otherwise a user of that
-    // escape hatch silently loses the `bedrock-mantle:CreateInference` hint on a
-    // 403, which is the difference between a solvable and an unsolvable error.
+    // Whether the RESOLVED ROUTE is Mantle — drives the
+    // `bedrock-mantle:CreateInference` hint on a 403.
     private final boolean isMantleRoute;
 
     isolated function init(BedrockCredentials credentials, string region, Endpoint ep,
-            string? signingServiceName = (), http:ClientConfiguration? httpConfig = (),
-            RetryConfig? retryConfig = ()) returns error? {
+            http:ClientConfiguration? httpConfig = (), RetryConfig? retryConfig = ()) returns error? {
         self.credentials = credentials.cloneReadOnly();
         self.region = region;
-        // Signing name defaults per route, overridable without a release (§9.4).
-        self.signingService = signingServiceName ?: ep.signingService;
+        // Signing name comes from the route and only from the route: `bedrock` for
+        // Converse/Invoke, `bedrock-mantle` for Mantle. A custom `serviceUrl` (VPCE,
+        // FIPS, gateway) changes the HOST, never the signing scope.
+        self.signingService = ep.signingService;
         self.isMantleRoute = ep.signingService == SIGNING_BEDROCK_MANTLE;
         self.host = ep.host;
         self.wirePath = ep.path;
-        self.httpClient = check new (string `https://${ep.host}`, httpConfig ?: {});
+        self.httpClient = check new (ep.baseUrl, httpConfig ?: {});
         RetryConfig rc = retryConfig ?: {};
         self.retryConfig = rc.cloneReadOnly();
     }
 
     // POSTs a signed request and returns the JSON response plus the response
-    // headers we care about (design §9.5), retrying transient errors with
+    // headers we care about, retrying transient errors with
     // exponential backoff. `extraHeaders` carry route-specific headers (guardrail,
     // anthropic-version, workspace, api-key) — all of them are signed.
     isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error {
@@ -87,8 +86,8 @@ isolated client class BedrockTransport {
         }
     }
 
-    // A single signed round-trip (design §9.5). The wire path is sent single-
-    // encoded; the canonical URI is double-encoded for the signature (§9.4).
+    // A single signed round-trip. The wire path is sent single-
+    // encoded; the canonical URI is double-encoded for the signature.
     isolated function executeOnce(json body, map<string> extraHeaders)
             returns TransportResponse|RetryableError|ai:Error {
         string payload = body.toJsonString();
@@ -110,7 +109,7 @@ isolated client class BedrockTransport {
         return self.mapResponse(resp);
     }
 
-    // Maps an HTTP response to a `TransportResponse` or a typed error (§9.5 table).
+    // Maps an HTTP response to a `TransportResponse` or a typed error.
     isolated function mapResponse(http:Response resp) returns TransportResponse|RetryableError|ai:Error {
         int status = resp.statusCode;
         if status >= 200 && status < 300 {
@@ -118,10 +117,10 @@ isolated client class BedrockTransport {
             if jsonBody is error {
                 return error ai:LlmInvalidResponseError("Bedrock response was not valid JSON", jsonBody);
             }
-            // Capture the response headers the decoder/provider needs (§9.5).
+            // Capture the response headers the decoder/provider needs.
             //
             // The guardrail-fired signal is NOT here: it is a response BODY field
-            // (`amazon-bedrock-guardrailAction`), read by each Invoke codec via
+            // (`amazon-bedrock-guardrailAction`), read by each Invoke converter via
             // `invokeGuardrailAction`. InvokeModel documents only three response
             // headers, and no guardrail among them — the `X-Amzn-Bedrock-Guardrail*`
             // headers are request-only.
@@ -178,7 +177,7 @@ isolated client class BedrockTransport {
         return string `status ${resp.statusCode}`;
     }
 
-    // Builds the SigV4 (or bearer) headers for one request (design §9.4-9.5).
+    // Builds the SigV4 (or bearer) headers for one request.
     // `fixedClock` exists ONLY for tests: signing is otherwise unobservable without
     // live AWS, and a wall clock makes the output unassertable. Production callers
     // omit it and get `amzTimestamps()`.
@@ -190,7 +189,7 @@ isolated client class BedrockTransport {
         }
         BedrockCredentials creds = self.credentials;
 
-        // Bedrock API key (bearer) — first-class on both endpoints (§9.5): skip SigV4.
+        // Bedrock API key (bearer) — first-class on both endpoints: skip SigV4.
         if creds is BearerToken {
             // Anthropic's Mantle surface REJECTS a request carrying BOTH `Authorization`
             // and `x-api-key` (verified live 2026-08-03: either header alone -> 200, both
@@ -209,7 +208,7 @@ isolated client class BedrockTransport {
 
         // ---- SigV4 (static / STS) ----
         [string, string] [amzDate, dateStamp] = fixedClock ?: check amzTimestamps();
-        // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule §9.4):
+        // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule):
         // the server re-encodes the received (single-encoded) path once to match.
         string canonicalUri = getCanonicalUri(self.wirePath);
         string payloadHash = array:toBase16(crypto:hashSha256(payload.toBytes())).toLowerAscii();
@@ -218,7 +217,7 @@ isolated client class BedrockTransport {
         string secretKey = creds.secretAccessKey;
         string? sessionToken = creds is StsCredentials ? creds.sessionToken : ();
 
-        // Sign EVERY header we send (§9.5), sorted by lowercased name.
+        // Sign EVERY header we send, sorted by lowercased name.
         map<string> toSign = {"content-type": APPLICATION_JSON, "host": self.host, "x-amz-date": amzDate};
         if sessionToken is string {
             toSign["x-amz-security-token"] = sessionToken;
@@ -268,16 +267,16 @@ isolated function hasApiKeyHeader(map<string> headers) returns boolean {
 }
 
 // A successful transport round-trip: the JSON body plus the selected response
-// headers the decoder/provider needs (design §9.5).
+// headers the decoder/provider needs.
 type TransportResponse record {|
     json body;
     map<string> headers;
 |};
 
-// Response-header keys captured into `TransportResponse.headers` (design §9.5).
+// Response-header keys captured into `TransportResponse.headers`.
 const REQUEST_ID_HEADER = "requestId";
 
-// A retryable transport outcome (408/429/500/502/503/504 or a connection failure — §9.5).
+// A retryable transport outcome (408/429/500/502/503/504 or a connection failure).
 // A `distinct error` so it narrows cleanly against `json` and `ai:Error`.
 type RetryableError distinct error;
 
@@ -326,7 +325,7 @@ isolated function pad(int n, int width) returns string {
 }
 
 // Double-encodes the (already single-encoded) wire path for the SigV4 canonical
-// URI (non-S3 rule §9.4): encode again, then restore structural `/` separators
+// URI (non-S3 rule): encode again, then restore structural `/` separators
 // (their `%2F` maps back to `/`, while a model-id's internal `%2F`→`%252F` stays
 // double-encoded).
 //
@@ -337,7 +336,7 @@ isolated function getCanonicalUri(string wirePath) returns string {
     return re `%2F`.replaceAll(encodePathSegment(wirePath), "/");
 }
 
-// SigV4 signing-key derivation (design §9.4). Identical to aws.dynamodb.
+// SigV4 signing-key derivation. Identical to aws.dynamodb.
 isolated function getSignatureKey(string secretKey, string dateStamp, string region, string serviceName)
         returns byte[]|error {
     byte[] kDate = check crypto:hmacSha256(dateStamp.toBytes(), ("AWS4" + secretKey).toBytes());

@@ -22,24 +22,24 @@ cannot reach them at all. That is the reason this module exists.
 - Text embeddings through the `ai:EmbeddingProvider` contract, with order-preserving batching
 - Automatic endpoint, dialect, and SigV4 signing-scope resolution per model id
 - Static keys, STS session credentials, and Bedrock API keys (bearer)
-- Cross-region inference (CRIS) profiles, provisioned/custom-deployment/imported-model ARNs
+- Cross-region inference (CRIS) profiles, provisioned and custom-deployment ARNs
 - Guardrail support on both `bedrock-runtime` inference APIs
 
 ### Providers
 
 The public surface is split **by vendor**. Each class is a thin typed facade over one shared internal
-spine (resolver → endpoint builder → codec → SigV4 transport).
+spine (resolver → endpoint builder → converter → SigV4 transport).
 
 **Chat** — `AnthropicModelProvider`, `OpenAIModelProvider`, `AmazonModelProvider` (Nova),
 `MistralModelProvider`, `QwenModelProvider`, `GoogleModelProvider` (Gemma), `DeepSeekModelProvider`.
 
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider`.
 
-A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Passing
-a raw string skips enum validation, not routing: an id the resolver does not recognise resolves to
-**Converse** and never to Mantle, so a brand-new *Mantle-only* model additionally needs
-`apiFamily = bedrock:MANTLE`, a `mantle/` prefix, or a `routeOverrides` entry. See
-[Escape hatches](#escape-hatches).
+A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Every
+provider takes `<Vendor>Model|string`, so the enums are autocomplete and documentation, never a gate.
+Passing a raw string skips the enum, not the routing: an id the resolver does not recognise resolves to
+**Converse**, never to Mantle. A brand-new *Mantle-only* model is the one case that needs a module
+release, because its request path cannot be derived from its id. See [Escape hatches](#escape-hatches).
 
 > **A vendor is not an endpoint.** Which class you pick does not tell you which endpoint you reach:
 > **Gemma 3** is dual-homed and defaults to `bedrock-mantle` (its Mantle path — `/v1/chat/completions` —
@@ -111,15 +111,23 @@ type Review record {| string sentiment; int score; |};
 Review review = check claude->generate(`Rate this review: ${text}`);
 ```
 
-> **Structured output is not available on the `bedrock-mantle` route.** A provider resolved to Mantle
-> returns an `ai:Error` naming the model when the target type is anything other than `string`; a `string`
-> target returns text normally.
+> **Under `AUTO`, `generate()` falls back to Converse by itself.** A Mantle-capable model routes `chat()`
+> to `bedrock-mantle`, which has no structured output — so when the same model is **also** served on
+> `bedrock-runtime` (`CLAUDE_OPUS_5`, `CLAUDE_OPUS_4_8`, `CLAUDE_SONNET_5`, `CLAUDE_HAIKU_4_5`,
+> `DEEPSEEK_V3_2`, Gemma 3, GLM 5, gpt-oss, Qwen3, Mistral Large 3), a typed `generate()` quietly
+> resolves a second Converse spine and uses that. You do not have to set `apiFamily` yourself.
 >
-> Under `AUTO` this includes **every Mantle-capable model** — the Mantle-only ones (`GPT_5_4`,
-> `CLAUDE_MYTHOS_PREVIEW`, …) **and** the dual-homed ones (`CLAUDE_OPUS_5`, `CLAUDE_OPUS_4_8`,
-> `CLAUDE_SONNET_5`, `DEEPSEEK_V3_2`, …), because `AUTO` prefers Mantle (see [Routing](#routing)). For
-> typed generation on a dual-homed model, force the runtime surface with `apiFamily = bedrock:CONVERSE`.
-> The example above works because `CLAUDE_SONNET_4_6` is runtime-only, so it resolves to Converse.
+> **This means one provider can talk to two endpoints, which need two different IAM permissions:**
+> `bedrock-mantle:CreateInference` for `chat()` and `bedrock:InvokeModel` for a typed `generate()`.
+> Credentials holding only one will see the other path return 403.
+>
+> Two cases still return an `ai:Error` for a non-`string` target:
+> - **Mantle-only models** (`GPT_5_4`, `GPT_5_5`, `CLAUDE_MYTHOS_5`, `CLAUDE_MYTHOS_PREVIEW`, Gemma 4).
+>   There is no `bedrock-runtime` route to fall back to.
+> - **An explicit `apiFamily = bedrock:MANTLE`.** The fallback is an `AUTO` convenience; naming a
+>   destination explicitly is respected rather than silently overridden.
+>
+> A `string` target always returns text normally, and `chat()` is unaffected in every case.
 >
 > It is also unavailable on Mistral's **text-completion** dialect (see below), which has no tool-calling
 > at all. This only bites when you force `apiFamily = INVOKE` on those ids — the default Converse route
@@ -173,7 +181,7 @@ You pick a model; the module picks the wire dialect. The resolver runs once, at 
 
 Under `AUTO` (the default), the preference order is **Mantle → Converse → Invoke**: any model with a
 verified Mantle entry defaults to `bedrock-mantle`; Converse is chosen when the model has no Mantle
-entry; Invoke only for `imported-model/` ARNs.
+entry; Invoke is reached only by asking for it (`apiFamily = bedrock:INVOKE`).
 
 | You pass | Resolves to |
 | --- | --- |
@@ -181,8 +189,8 @@ entry; Invoke only for `imported-model/` ARNs.
 | a CRIS id (`us.anthropic.claude-opus-4-8`) | Converse, prefix re-applied on the wire |
 | a bare id with no Mantle entry (`amazon.nova-pro-v1:0`, `anthropic.claude-sonnet-4-6`) | Converse |
 | `provisioned-model/` · `custom-model-deployment/` · `inference-profile/` ARN | Converse |
-| `imported-model/` ARN | Invoke (**requires `modelSchema`**) |
 | an unknown id | Converse — **never** Mantle |
+| `imported-model/` ARN | **not supported** — construction error |
 
 > **`generate()` with a typed (non-`string`) return errors on any model that `AUTO` sends to Mantle**,
 > because Mantle has no structured-output path. To get typed generation on a dual-homed model such as
@@ -193,13 +201,11 @@ entry; Invoke only for `imported-model/` ARNs.
 A CRIS geo prefix (`us.`, `eu.`, …) is a `bedrock-runtime` concept — Mantle has no geo prefixes — so a
 geo-prefixed id always stays on Converse regardless of the Mantle preference.
 
-Mantle is matched by the `MANTLE_CAPABLE` table or an explicit override only. A model's *absence* from
+Mantle is matched by the `MANTLE_CAPABLE` table only. A model's *absence* from
 that table is never taken as evidence it is a Mantle model: an unknown id sinks to Converse, so a typo
 can never become a cryptic 403 from a different service with a different IAM namespace.
 
 ### Escape hatches
-
-AWS ships models faster than releases are cut, so nothing here is a dead end:
 
 ```ballerina
 // 1. Force a family (default is AUTO, which runs the resolver)
@@ -209,18 +215,40 @@ check new bedrock:AnthropicModelProvider(creds, "anthropic.claude-haiku-4-5", "u
 // 2. Prefix override on the model string
 check new bedrock:AnthropicModelProvider(creds, "mantle/anthropic.claude-haiku-4-5", "us-east-1");
 
-// 3. Teach the tables a brand-new model without a release
-check new bedrock:OpenAIModelProvider(creds, "openai.gpt-6", "us-east-2",
-        routeOverrides = {"openai.gpt-6": {path: "/openai/v1/responses",
-                                           authHeader: bedrock:BEARER,
-                                           codec: bedrock:RESPONSES_CODEC}});
-
-// 4. Any raw model id string is always accepted
+// 3. Any raw model id string is always accepted — the model enums are
+//    conveniences, never a gate. A model AWS shipped after this release works today.
 check new bedrock:AmazonModelProvider(creds, "amazon.nova-something-new-v1:0", "us-east-1");
 ```
 
-A `routeOverrides` value is a `RouteFamily` (`CONVERSE` | `INVOKE`) or a `MantleEntry`. `AUTO` is not
-accepted there: an override names a destination, while `AUTO` is an instruction to the resolver.
+**A brand-new model needs no module release to reach Converse or Invoke** — pass its id as a string.
+The one exception is a brand-new **Mantle** model: its request path is per-model data that cannot be
+derived from the id, so it needs a table entry. Forcing `apiFamily = MANTLE` on a model absent from
+`MANTLE_CAPABLE` returns a construction error rather than guessing a path.
+
+### Custom endpoints (`serviceUrl`)
+
+`serviceUrl` defaults to the template `https://bedrock-{endpoint}.{region}.{domain}`, resolved per route:
+`{endpoint}` becomes `runtime` or `mantle`, and `{region}`/`{domain}` follow the resolved route (including
+`amazonaws.com.cn` in China and `api.aws` for Mantle).
+
+```ballerina
+// FIPS — override one segment, let region and domain resolve themselves.
+// Verified to exist in both the commercial and GovCloud partitions.
+serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}"
+
+// PrivateLink VPC endpoint, or any gateway / mock server — fully literal
+serviceUrl = "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"
+```
+
+> FIPS applies to `bedrock-runtime` only. There is **no** `bedrock-mantle` FIPS host, and Bedrock does
+> **not** publish the `{service}.{region}.api.aws` dual-stack hosts that some AWS services do — the entries
+> in its endpoint rule set are generic boilerplate, and the names do not resolve. Confirm any non-default
+> host resolves before relying on it.
+
+It replaces the **origin only** — the route-derived request path is still appended. `region` stays
+required and remains the SigV4 signing scope: a VPCE, FIPS or gateway host still signs the route's own
+region and service. A placeholder that survives substitution (a typo like `{regoin}`) is a construction
+error, not a DNS failure.
 
 ### Inference parameters
 
@@ -231,7 +259,7 @@ The module deliberately exposes only `maxTokens` and `temperature` as first-clas
 two an integration developer actually reaches for. Anything finer-grained (`top_p`, `top_k`, …) goes
 through `additionalModelRequestFields` rather than cluttering the config record. Note that passthrough is
 honoured on Converse, Nova, OpenAI-chat, Responses, Mistral, and Invoke-DeepSeek, but **not** on the
-Invoke-Anthropic codec.
+Invoke-Anthropic converter.
 
 > **`temperature` has no default, and that is deliberate.** Leave it unset and the field is omitted from
 > the request entirely, so the model applies its own default. This is not a style choice: Anthropic
@@ -258,8 +286,9 @@ Mistral is the one vendor whose `InvokeModel` wire shape cannot be derived from 
 | [chat completion](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-large-2407.html) | **Large 24.07**, newer ids | `messages`/`tools` → `choices[].message` |
 
 Note that `mistral-large-**2402**` and `mistral-large-**2407**` are the same family four months apart and
-speak *opposite* dialects. The module picks by id; an id it has never seen defaults to chat.
-`modelSchema = bedrock:MISTRAL_TEXT` forces the legacy dialect for imported models.
+speak *opposite* dialects. The module picks by id; an id it has never seen defaults to chat. If it guesses wrong, Bedrock returns a
+`ValidationException` — switch to `apiFamily = bedrock:CONVERSE`, which is model-agnostic and sidesteps
+the split entirely.
 
 **Converse (the default) hides all of this** — the split only matters under `apiFamily = INVOKE`.
 
@@ -272,10 +301,8 @@ Same story, split by generation rather than by date:
 | [text completion](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html) | **R1** (`deepseek.r1-v1:0`) | `prompt` (DeepSeek's `<｜User｜>` template) → `choices[].text`; no tools |
 | [chat completion](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html) | **V3.1**, **V3.2**, newer ids | `messages`/`tools` → `choices[].message` |
 
-The module picks by id, and an id it has never seen defaults to chat.
-`modelSchema = bedrock:DEEPSEEK` forces R1's text dialect for imported models;
-`modelSchema = bedrock:OPENAI` forces the chat one. Again, only relevant under `apiFamily = INVOKE` —
-Converse and Mantle are unaffected.
+The module picks by id, and an id it has never seen defaults to chat. Again, only relevant under
+`apiFamily = INVOKE` — Converse and Mantle are unaffected.
 
 ## Guardrails
 
@@ -291,7 +318,9 @@ A fired guardrail is never silently dropped on either supported route.
 
 Construction errors are reserved for what AWS *cannot* diagnose for you:
 
-- an `imported-model/` ARN without `modelSchema` (AWS applies no default chat template)
+- an `imported-model/` ARN (AWS applies no default chat template to imported weights)
+- an unresolved `{placeholder}` left in `serviceUrl`
+- `apiFamily = MANTLE` on a model with no known Mantle request path
 - a guardrail on a Mantle route (the error names the standalone `ApplyGuardrail` API)
 - Mantle on a partition with no `api.aws` host (`aws-cn`); GovCloud **is** supported
 - a `custom-model/` ARN (an artifact, not a deployment)
@@ -302,5 +331,10 @@ Everything AWS *can* tell you — a model unavailable in a region, a bad id — 
 ## Not implemented
 
 Streaming (the codec seam exists, but no `decodeStream`), image/video/audio embeddings and
-`StartAsyncInvoke` (the `ai:Chunk` contract carries text), provisioned-throughput embedding ARNs, and
-Meta/Llama.
+`StartAsyncInvoke` (the `ai:Chunk` contract carries text), provisioned-throughput embedding ARNs,
+Meta/Llama, and Custom Model Import (`imported-model/` ARNs).
+
+Deliberately **not** surfaced as config, because the `ai` contract has nowhere to return them:
+`additionalModelResponseFieldPaths` (its result would be dropped — `ai:ChatAssistantMessage` is
+`{role, content, toolCalls}`) and `requestMetadata` (write-only; it tags invocation logs).
+`top_p`/`top_k` and other fine-grained sampling knobs go through `additionalModelRequestFields`.

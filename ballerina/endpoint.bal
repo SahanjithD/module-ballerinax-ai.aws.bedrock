@@ -12,35 +12,93 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Endpoint construction — host · path · partition · signing name (design §9.1,
-// §9.2, §9.4). L2: runs once, at construction. The model-id path segment is
+// Endpoint construction — host · path · partition · signing name.
+// L2: runs once, at construction. The model-id path segment is
 // URL-encoded HERE (single-encode): structural `/` stay literal, but the model
 // id's `:`/`/` (ARNs, `-v1:0` ids) become `%3A`/`%2F`. This is the WIRE path; the
 // transport double-encodes it for the SigV4 canonical URI (SigV4 non-S3 rule).
 
-const SIGNING_BEDROCK = "bedrock";               // Converse / Invoke — §9.4
-const SIGNING_BEDROCK_MANTLE = "bedrock-mantle"; // Mantle — §9.4
+const SIGNING_BEDROCK = "bedrock";               // Converse / Invoke
+const SIGNING_BEDROCK_MANTLE = "bedrock-mantle"; // Mantle
 
-// The resolved wire endpoint (design §9). `signingService` is the SigV4 scope,
-// not the IAM namespace — they differ inside this service family (§9.4).
+// Mantle is served from the partition-neutral `api.aws` suffix in every partition
+// that has it — it does NOT follow `awsDomain(partition)`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+const MANTLE_DOMAIN = "api.aws";
+
+// The resolved wire endpoint. `signingService` is the SigV4 scope,
+// not the IAM namespace — they differ inside this service family.
 type Endpoint record {|
-    # Host, e.g. `bedrock-runtime.us-east-1.amazonaws.com`.
+    # Origin, e.g. `https://bedrock-runtime.us-east-1.amazonaws.com`.
+    string baseUrl;
+    # Host header / SigV4 canonical host, e.g. `bedrock-runtime.us-east-1.amazonaws.com`.
     string host;
-    # Wire request path with the model-id segment single-encoded (§9.1).
+    # Wire request path with the model-id segment single-encoded.
     string path;
     # SigV4 signing name for this route.
     string signingService;
 |};
 
-// Builds the endpoint for a resolved route (design §9.1-9.4). Pure. Fails before
+// The default `serviceUrl`. A TEMPLATE, not a constant host, because the origin is
+// decided by the resolved route: `bedrock-runtime.{region}.amazonaws.com` on
+// Converse/Invoke, `bedrock-mantle.{region}.api.aws` on Mantle, and
+// `amazonaws.com.cn` in China. One pattern spans all three.
+//
+// Substitution is a no-op on a string containing no placeholders, so a caller who
+// passes a concrete URL needs no sentinel and no "did they override it?" check —
+// their URL simply passes through untouched.
+public const DEFAULT_SERVICE_URL = "https://bedrock-{endpoint}.{region}.{domain}";
+
+// Resolves `serviceUrl` against a route: substitutes the placeholders, or passes a
+// concrete URL through unchanged. Pure.
+//
+// `{region}` and `{domain}` come from the RESOLVED ROUTE, not the raw `region`
+// argument, so an ARN whose region segment overrides `region` still lands correctly.
+// The signing region and signing name are NOT derived from the result — a VPCE,
+// FIPS or gateway host still signs the route's own region/service scope.
+isolated function resolveServiceUrl(string serviceUrl, Route route, string endpointName) returns string|error {
+    string domain = route.family == MANTLE ? MANTLE_DOMAIN : awsDomain(route.partition);
+    string url = re `\{endpoint\}`.replaceAll(serviceUrl, endpointName);
+    url = re `\{region\}`.replaceAll(url, route.region);
+    url = re `\{domain\}`.replaceAll(url, domain);
+
+    // A surviving brace is ALWAYS a typo (`{regoin}`), never a legal host: braces are
+    // not valid in DNS names. Catching it here turns a silent DNS failure into a
+    // construction error that names the mistake.
+    if url.includes("{") || url.includes("}") {
+        return error(string `unresolved placeholder in serviceUrl '${url}'; ` +
+            string `supported placeholders are {endpoint}, {region} and {domain}`);
+    }
+    // Trailing slash would double up against the route-derived path.
+    return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+}
+
+// Extracts the host from an origin for the `Host` header / SigV4 canonical host.
+isolated function hostOf(string baseUrl) returns string {
+    string rest = baseUrl;
+    foreach string scheme in ["https://", "http://"] {
+        if rest.startsWith(scheme) {
+            rest = rest.substring(scheme.length());
+            break;
+        }
+    }
+    int? slash = rest.indexOf("/");
+    return slash is int ? rest.substring(0, slash) : rest;
+}
+
+// Builds the endpoint for a resolved route. Pure. Fails before
 // any I/O for the one host-shape AWS cannot template: Mantle on a non-`aws`
-// partition (design §9.2, open item #2).
-isolated function buildEndpoint(Route route) returns Endpoint|error {
+// partition.
+//
+// `serviceUrl` replaces the ORIGIN only — the route-derived path is still appended,
+// because that path differs per family (`/model/{id}/converse` vs
+// `/anthropic/v1/messages`) and is not the caller's to choose.
+isolated function buildEndpoint(Route route, string serviceUrl = DEFAULT_SERVICE_URL) returns Endpoint|error {
     if route.family == MANTLE {
         // Mantle is served from the partition-neutral `api.aws` suffix. That suffix
         // exists in the commercial AND GovCloud partitions — `bedrock-mantle.us-gov-west-1.api.aws`
         // is real — but has no China analogue: `aws-cn` uses `amazonaws.com.cn`
-        // throughout, so no bedrock-mantle host can be formed there at all (§9.2).
+        // throughout, so no bedrock-mantle host can be formed there at all.
         //
         // This is a HOST-SHAPE guard, not an availability oracle. Within an allowed
         // partition Mantle ships in only a SUBSET of regions (us-west-1, ca-central-1
@@ -52,25 +110,27 @@ isolated function buildEndpoint(Route route) returns Endpoint|error {
         // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
         if route.partition != "aws" && route.partition != "aws-us-gov" {
             return error(string `Mantle is not available on partition '${route.partition}': the ` +
-                string `bedrock-mantle 'api.aws' host has no '${route.partition}' analogue ` +
-                string `(design §9.2). Use a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
+                string `bedrock-mantle 'api.aws' host has no '${route.partition}' analogue. ` +
+                string `Use a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
         }
         MantleEntry entry = check route.mantleEntry.ensureType();
+        string mantleBase = check resolveServiceUrl(serviceUrl, route, "mantle");
         return {
-            host: string `bedrock-mantle.${route.region}.api.aws`,
+            baseUrl: mantleBase,
+            host: hostOf(mantleBase),
             path: entry.path,
             signingService: SIGNING_BEDROCK_MANTLE
         };
     }
 
-    // Converse / Invoke on `bedrock-runtime`, partition-aware domain (§9.2).
-    string host = string `bedrock-runtime.${route.region}.${awsDomain(route.partition)}`;
+    // Converse / Invoke on `bedrock-runtime`, partition-aware domain.
+    string base = check resolveServiceUrl(serviceUrl, route, "runtime");
     // Single-encode the model-id segment (ARNs/`-v1:0` ids carry `:` and `/`).
     string encodedId = encodePathSegment(route.effectiveModelId);
     string path = route.family == CONVERSE
-        ? string `/model/${encodedId}/converse` // §9.1
-        : string `/model/${encodedId}/invoke`;   // §9.1
-    return {host, path, signingService: SIGNING_BEDROCK};
+        ? string `/model/${encodedId}/converse`
+        : string `/model/${encodedId}/invoke`;
+    return {baseUrl: base, host: hostOf(base), path, signingService: SIGNING_BEDROCK};
 }
 
 // RFC 3986 unreserved set — the ONLY characters SigV4 leaves literal.
@@ -110,7 +170,7 @@ isolated function encodePathSegment(string segment) returns string {
     return encoded;
 }
 
-// Partition-aware DNS suffix (design §9.2). Route every host through here — n8n's
-// hardcoded `.amazonaws.com` is a real China bug (§9.2).
+// Partition-aware DNS suffix. Route every host through here — n8n's
+// hardcoded `.amazonaws.com` is a real China bug.
 isolated function awsDomain(string partition) returns string
     => partition == "aws-cn" ? "amazonaws.com.cn" : "amazonaws.com";

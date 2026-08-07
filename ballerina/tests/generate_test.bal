@@ -15,7 +15,7 @@
 import ballerina/ai;
 import ballerina/test;
 
-// generate() tests (CLAUDE.md §4): the tool-forcing path emits the schema as a
+// generate() tests: the tool-forcing path emits the schema as a
 // forced tool and parses the tool-call arguments back into the record; the routes
 // with no structured-output path refuse cleanly.
 //
@@ -50,7 +50,7 @@ final readonly & InferenceParams GEN_PARAMS = {temperature: 0.5, maxTokens: 256}
 function testToolForcingEmitsSchemaAsForcedToolOnConverse() returns error? {
     json encoded = check encodeConverse((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
-    map<json> body = check applyToolChoice(encoded, CONVERSE_CODEC.toolChoice, RESULT_TOOL).ensureType();
+    map<json> body = check applyToolChoice(encoded, CONVERSE_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
 
     map<json> toolConfig = check body["toolConfig"].ensureType();
     // The expected type's schema must reach the wire as the tool's input schema.
@@ -68,7 +68,7 @@ function testToolForcingEmitsSchemaAsForcedToolOnConverse() returns error? {
 function testToolForcingEmitsSchemaAsForcedToolOnInvokeAnthropic() returns error? {
     json encoded = check encodeInvokeAnthropic((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
-    map<json> body = check applyToolChoice(encoded, INVOKE_ANTHROPIC_CODEC.toolChoice, RESULT_TOOL).ensureType();
+    map<json> body = check applyToolChoice(encoded, INVOKE_ANTHROPIC_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
 
     json[] tools = check body["tools"].ensureType();
     test:assertEquals(tools.length(), 1);
@@ -90,7 +90,7 @@ function testNovaOnInvokeForcesToolTheConverseWay() returns error? {
     // Nova's InvokeModel body is Converse-shaped even though the family is INVOKE.
     json encoded = check encodeNovaInvoke((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
-    map<json> body = check applyToolChoice(encoded, INVOKE_NOVA_CODEC.toolChoice, RESULT_TOOL).ensureType();
+    map<json> body = check applyToolChoice(encoded, INVOKE_NOVA_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
     map<json> toolConfig = check body["toolConfig"].ensureType();
     test:assertEquals(toolConfig["toolChoice"], <json>{"tool": {"name": RESULT_TOOL}},
             "Nova is Converse-shaped: it must NOT get Anthropic's tool_choice");
@@ -103,7 +103,7 @@ function testMistralChatForcesToolWithBareAnyString() returns error? {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-chat-completion.html
     json encoded = check encodeMistralChat((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
-    map<json> body = check applyToolChoice(encoded, INVOKE_MISTRAL_CHAT_CODEC.toolChoice, RESULT_TOOL).ensureType();
+    map<json> body = check applyToolChoice(encoded, INVOKE_MISTRAL_CHAT_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
     test:assertEquals(body["tool_choice"], <json>"any", "Mistral's tool_choice is a bare string, not an object");
     json[] tools = check body["tools"].ensureType();
     map<json> fn = check tools[0].'function.ensureType();
@@ -114,7 +114,7 @@ function testMistralChatForcesToolWithBareAnyString() returns error? {
 function testOpenAIChatForcesToolWithFunctionObject() returns error? {
     json encoded = check encodeOpenAIChat((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
-    map<json> body = check applyToolChoice(encoded, INVOKE_OPENAI_CHAT_CODEC.toolChoice, RESULT_TOOL).ensureType();
+    map<json> body = check applyToolChoice(encoded, INVOKE_OPENAI_CHAT_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
     test:assertEquals(body["tool_choice"], <json>{"type": "function", "function": {"name": RESULT_TOOL}});
 }
 
@@ -191,15 +191,15 @@ function testExtractJsonSignalsAbsenceWithAnError() {
 
 function mantleTransport() returns BedrockTransport|error =>
     new (TEST_CREDS, "us-east-1",
-        {host: "bedrock-mantle.us-east-1.api.aws", path: "/openai/v1/responses",
+        {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`, host: "bedrock-mantle.us-east-1.api.aws", path: "/openai/v1/responses",
             signingService: SIGNING_BEDROCK_MANTLE});
 
 @test:Config {}
 function testMantleRefusesStructuredOutputNamingTheModel() returns error? {
     BedrockTransport transport = check mantleTransport();
-    anydata|ai:Error result = structuredGenerate(false, MANTLE, MANTLE_RESPONSES_CODEC, transport,
+    anydata|ai:Error result = structuredGenerate(false, MANTLE, MANTLE_RESPONSES_CONVERTER, transport,
             "openai.gpt-5.4", {}, GEN_PARAMS, `Rate this`, Review);
-    test:assertTrue(result is ai:Error, "a typed target on Mantle must be a clean error (amendment)");
+    test:assertTrue(result is ai:Error, "a typed target on Mantle must be a clean error");
     if result is ai:Error {
         string message = result.message();
         test:assertTrue(message.includes("openai.gpt-5.4"), "the error must name the model; got: " + message);
@@ -211,9 +211,9 @@ function testMantleRefusesStructuredOutputNamingTheModel() returns error? {
 @test:Config {}
 function testMistralTextDialectRefusesStructuredOutput() returns error? {
     // supportsStructuredOutput is true here (INVOKE, not Mantle) — the refusal must
-    // come from the CODEC having no tool-calling at all.
+    // come from the CONVERTER having no tool-calling at all.
     BedrockTransport transport = check mantleTransport();
-    anydata|ai:Error result = structuredGenerate(true, INVOKE, INVOKE_MISTRAL_TEXT_CODEC, transport,
+    anydata|ai:Error result = structuredGenerate(true, INVOKE, INVOKE_MISTRAL_TEXT_CONVERTER, transport,
             "mistral.mistral-7b-instruct-v0:2", {}, GEN_PARAMS, `Rate this`, Review);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {

@@ -18,7 +18,7 @@ import ballerina/test;
 // Settles the SigV4 double-encoding assumption WITHOUT AWS: proves an
 // `http:Client` transmits an already-percent-encoded path verbatim (no `%`→`%25`,
 // no `%2F`→`/`). If this holds, the wire=single / canonical=double split is
-// correct (design §9.4).
+// correct.
 
 isolated string capturedRawPath = "";
 

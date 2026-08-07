@@ -15,10 +15,10 @@
 import ballerina/ai;
 import ballerina/jballerina.java;
 
-// GoogleModelProvider — Gemma (open-weight). Gemini is NOT on Bedrock (CLAUDE.md §3).
+// GoogleModelProvider — Gemma (open-weight). Gemini is NOT on Bedrock.
 //
-// CLAUDE.md §3 asked which endpoint serves Gemma. The answer is BOTH, and it splits
-// by generation — the per-model cards are the only authority:
+// Which endpoint serves Gemma? BOTH, and it splits by generation — the per-model
+// cards are the only authority:
 //
 //   Gemma 3 — dual-homed. Its cards tick bedrock-runtime AND bedrock-mantle, so
 //             the module routes it to Converse (the richer surface). Note AWS's
@@ -32,7 +32,7 @@ import ballerina/jballerina.java;
 //
 // HISTORY: this file previously claimed Gemma was on bedrock-runtime because it
 // appeared "in no Mantle table". That is routing by elimination — the very
-// inference the design forbids (§11 principle 2) — and it was wrong for Gemma 4.
+// inference the design forbids — and it was wrong for Gemma 4.
 // A model's absence from a table is never evidence of its endpoint.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
@@ -54,7 +54,7 @@ public enum GoogleModel {
     GEMMA_4_31B = "google.gemma-4-31b"
 }
 
-# Google-specific configuration (CLAUDE.md §3).
+# Google-specific configuration.
 public type GoogleConfig record {|
     *CommonModelConfig;
 |};
@@ -67,15 +67,29 @@ public isolated distinct client class GoogleModelProvider {
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final readonly & ModelCodec codec;
+    private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
     private final map<string> & readonly extraHeaders;
+    // The spine generate() uses. Same objects as the chat spine EXCEPT when AUTO
+    // sent chat to Mantle and the model is also on bedrock-runtime — then these hold
+    // a Converse spine so a typed generate() works instead of erroring.
+    private final ApiFamily genFamily;
+    private final string genModelId;
+    private final readonly & ModelConverter genConverter;
+    private final BedrockTransport genTransport;
+    private final map<string> & readonly genHeaders;
     private final boolean supportsStructuredOutput;
 
-    # + credentials - Static keys, STS, or a Bedrock API key (§9.5)
+    # + credentials - Static keys, STS, or a Bedrock API key
     # + model - A Gemma id (bare, CRIS-prefixed, ARN, or route-prefixed)
-    # + region - Default region; an ARN `model`'s region segment overrides it (§5.2)
+    # + region - Default region; an ARN `model`'s region segment overrides it. Also the
+    #            SigV4 signing scope, which a custom `serviceUrl` does NOT change
+    # + serviceUrl - Endpoint origin. The default template resolves per route —
+    #                `{endpoint}` becomes `runtime` or `mantle`, `{region}` and
+    #                `{domain}` follow the resolved route. Pass a concrete URL for a
+    #                FIPS, dual-stack, PrivateLink or gateway host; the route-derived
+    #                request path is still appended
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to omit the
     #                 field entirely and use the model's own default — several current
@@ -86,40 +100,51 @@ public isolated distinct client class GoogleModelProvider {
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Model"} GoogleModel|string model,
             @display {label: "Region"} string region,
+            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *GoogleConfig config)
             returns ai:Error? {
-        RouteConfig routeConfig = {
-            apiFamily: config.apiFamily,
-            modelSchema: config.modelSchema,
-            routeOverrides: config.routeOverrides
-        };
-        [Route, readonly & ModelCodec, BedrockTransport] [route, codec, transport] =
-            check resolveSpine("GoogleModelProvider", credentials, model, region, routeConfig,
-                config?.signingServiceName, config?.httpConfig, config?.retryConfig, config?.guardrail);
+        RouteConfig routeConfig = {apiFamily: config.apiFamily};
+        [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
+            check resolveSpine("GoogleModelProvider", credentials, model, region, serviceUrl, routeConfig,
+                config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.codec = codec;
+        self.converter = converter;
         self.transport = transport;
-        self.supportsStructuredOutput = route.family != MANTLE; // amendment
+        map<string> chatHeaders = commonExtraHeaders(route, config?.guardrail, credentials);
+        self.extraHeaders = chatHeaders.cloneReadOnly();
+        [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
+            [genFamily, genModelId, genConverter, genTransport, genHeaders] =
+            check resolveGenerateSpine("GoogleModelProvider", credentials, model, region, serviceUrl,
+                routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
+                route, converter, transport, chatHeaders);
+        self.genFamily = genFamily;
+        self.genModelId = genModelId;
+        self.genConverter = genConverter;
+        self.genTransport = genTransport;
+        self.genHeaders = genHeaders.cloneReadOnly();
+        self.supportsStructuredOutput = genFamily != MANTLE;
         self.params = buildInferenceParams(maxTokens, temperature, config?.stopSequences,
-            config?.additionalModelRequestFields, config?.additionalModelResponseFieldPaths,
-            config?.serviceTier, config?.latencyOptimized, config?.requestMetadata, config?.guardrail);
-        self.extraHeaders = commonExtraHeaders(route, config?.guardrail, credentials).cloneReadOnly();
+            config?.additionalModelRequestFields, config?.serviceTier,
+            config?.latencyOptimized, config?.guardrail);
     }
 
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling
-    # + stop - Stop sequence; overrides configured `stopSequences` (§7)
+    # + stop - Stop sequence; overrides configured `stopSequences`
     # + return - The assistant message, or an `ai:Error`
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Google", self.family, self.wireModelId, self.codec, self.transport,
+        => runChat("Google", self.family, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
+    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
+    # chat to Mantle and the model is also served on `bedrock-runtime`.
+    #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type
     # + return - A value of the expected type, or an `ai:Error`
