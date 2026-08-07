@@ -14,11 +14,11 @@
 
 import ballerina/ai;
 
-// OpenAI Responses wire format on Mantle (design §7.3, §9.1). GPT-5.5/5.4 are
+// OpenAI Responses wire format on Mantle. GPT-5.5/5.4 are
 // Mantle-only and use `/openai/v1/responses`. System text is the `instructions`
 // field; turns are `input` items; the model reply is in `output` items.
 
-// Encodes an OpenAI Responses request body (design §7.3).
+// Encodes an OpenAI Responses request body.
 isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] input = [];
@@ -41,7 +41,7 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
     map<json> body = {"input": input, "max_output_tokens": params.maxTokens};
     setTemperature(body, params);
     if system is ai:ChatSystemMessage {
-        body["instructions"] = contentToString(system.content); // system → instructions (§7.1)
+        body["instructions"] = contentToString(system.content); // system → instructions
     }
     if tools.length() > 0 {
         json[] toolDefs = [];
@@ -50,7 +50,7 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
         }
         body["tools"] = toolDefs;
     }
-    json extra = params?.additionalModelRequestFields;
+    map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
             body[k] = v;
@@ -102,7 +102,7 @@ isolated function responsesInputItems(ai:ChatMessage m) returns json[] {
     return [{"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]}];
 }
 
-// Decodes an OpenAI Responses response (design §7). Always populates `usage` and
+// Decodes an OpenAI Responses response. Always populates `usage` and
 // `stopReason`.
 isolated function decodeResponses(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
@@ -164,7 +164,6 @@ isolated function decodeResponses(json response) returns DecodedResponse|ai:Erro
         usage: {inputTokens, outputTokens},
         stopReason: strField(r, "status") ?: "completed",
         responseId: strField(r, "id"),
-        guardrailAction: (),
-        additionalModelResponseFields: ()
+        guardrailAction: ()
     };
 }

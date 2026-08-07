@@ -14,13 +14,13 @@
 
 import ballerina/ai;
 
-// OpenAI Chat-Completions wire format (design §7.2, §7.3). Shared by the Mantle
+// OpenAI Chat-Completions wire format. Shared by the Mantle
 // Chat Completions route (GLM) and the Invoke route for the OpenAI-shaped vendors
 // (GPT-OSS, Qwen, DeepSeek, Mistral chat). Unlike Converse/Anthropic, THIS format
 // carries `system` as a `role: system` MESSAGE — that is the wire contract here,
 // so the hoisted system is re-added as the leading message.
 
-// Encodes an OpenAI Chat-Completions request body (design §7.2).
+// Encodes an OpenAI Chat-Completions request body.
 isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] wire = [];
@@ -39,7 +39,7 @@ isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[
     setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {
-        stops = [stop]; // per-call stop overrides configured stopSequences (§7)
+        stops = [stop]; // per-call stop overrides configured stopSequences
     }
     if stops is string[] && stops.length() > 0 {
         body["stop"] = stops;
@@ -55,7 +55,7 @@ isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[
         body["tools"] = toolDefs;
     }
     // Vendor passthrough (e.g. Qwen `enable_thinking`) rides additionalModelRequestFields.
-    json extra = params?.additionalModelRequestFields;
+    map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
             body[k] = v;
@@ -64,7 +64,7 @@ isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[
     return body;
 }
 
-// Maps one `ai:ChatMessage` to an OpenAI Chat-Completions message (design §7.1).
+// Maps one `ai:ChatMessage` to an OpenAI Chat-Completions message.
 isolated function openAIMessage(ai:ChatMessage m) returns json {
     if m is ai:ChatUserMessage {
         return {"role": "user", "content": contentToString(m.content)};
@@ -86,13 +86,13 @@ isolated function openAIMessage(ai:ChatMessage m) returns json {
         return msg;
     }
     if m is ai:ChatFunctionMessage {
-        // ai:FUNCTION result → OpenAI role:tool message (§7.1).
+        // ai:FUNCTION result → OpenAI role:tool message.
         return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
     }
     return {"role": "user", "content": contentToString(m.content)};
 }
 
-// Decodes an OpenAI Chat-Completions response (design §7). Always populates
+// Decodes an OpenAI Chat-Completions response. Always populates
 // `usage` and `stopReason`.
 isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
@@ -153,7 +153,6 @@ isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Err
         usage: {inputTokens, outputTokens},
         stopReason,
         responseId: strField(r, "id"),
-        guardrailAction: invokeGuardrailAction(r), // body field (§9.5)
-        additionalModelResponseFields: ()
+        guardrailAction: invokeGuardrailAction(r) // body field
     };
 }

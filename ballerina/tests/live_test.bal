@@ -15,7 +15,7 @@
 import ballerina/ai;
 import ballerina/test;
 
-// Live integration tests (CLAUDE.md §4). These call real AWS and cost real money,
+// Live integration tests. These call real AWS and cost real money,
 // so they are inert by default: with no credentials configured every test returns
 // immediately. `bal test` on a clean checkout runs the other suites unchanged.
 //
@@ -42,9 +42,15 @@ configurable string liveSecretAccessKey = "";
 configurable string liveSessionToken = "";
 configurable string liveRegion = "us-east-1";
 
-// A US cross-region inference-profile ARN (design §5.2). Left empty by default
+// A US cross-region inference-profile ARN. Left empty by default
 // because the account id makes it caller-specific.
 configurable string liveConverseModelArn = "";
+
+// Whether to exercise the FIPS endpoint. Separate from `liveTestsEnabled` because
+// FIPS is a per-region deployment: `bedrock-runtime-fips.{region}.{domain}` resolves
+// in the commercial and GovCloud partitions, but the MODEL must also be served there.
+// A failure here is an availability fact about your region, not a module defect.
+configurable boolean liveFipsEnabled = false;
 
 // Whether the account has bedrock-mantle access. Mantle needs the separate
 // `bedrock-mantle:CreateInference` IAM action, so an account with working
@@ -71,7 +77,7 @@ function testLiveConverseViaCrisInferenceProfileArn() returns error? {
     if creds is () || liveConverseModelArn == "" {
         return;
     }
-    // The ARN exercises the SigV4 path-encoding split (§9.4): its `:` and `/`
+    // The ARN exercises the SigV4 path-encoding split: its `:` and `/`
     // characters are single-encoded on the wire and double-encoded in the
     // signature. Get that wrong and this is a 403 — no golden test can catch it.
     ai:ModelProvider provider = check new AnthropicModelProvider(creds, liveConverseModelArn, liveRegion);
@@ -140,7 +146,7 @@ function testLiveMantleRefusesStructuredOutputButReturnsText() returns error? {
     }
     OpenAIModelProvider provider = check new (creds, GPT_5_4, liveRegion);
 
-    // A typed target must be refused locally, without spending a call (amendment).
+    // A typed target must be refused locally, without spending a call.
     LiveFruit|ai:Error typed = provider->generate(`Name one common fruit and its colour.`);
     test:assertTrue(typed is ai:Error, "Mantle must refuse a typed target");
 
@@ -200,4 +206,103 @@ function testLiveCohereEmbeddingPreservesOrderAcrossWindows() returns error? {
     } else {
         test:assertFail("Cohere must return dense vectors");
     }
+}
+
+
+// ---- serviceUrl: FIPS endpoint ----
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveFipsEndpointAcceptsASignedRequest() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () || !liveFipsEnabled {
+        return;
+    }
+    // The ONE thing no offline test can settle: whether AWS ACCEPTS a request to the
+    // FIPS host. DNS proves the name exists and the mock-server test proves we send
+    // the right bytes to whatever origin we are given — but only a real call proves
+    // the signature validates against a host we did not derive ourselves.
+    //
+    // The invariant under test: the host changes, the signing scope does NOT. If
+    // `serviceUrl` leaked into the SigV4 credential scope this returns 403
+    // SignatureDoesNotMatch, which is exactly the regression worth paying for.
+    ai:ModelProvider provider = check new AnthropicModelProvider(
+            creds, "anthropic.claude-sonnet-4-6", liveRegion,
+            serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}");
+    ai:ChatAssistantMessage response = check provider->chat([
+        {role: ai:USER, content: "Reply with the single word: ok"}
+    ]);
+    string content = response.content ?: "";
+    test:assertTrue(content.trim().length() > 0, "live FIPS Converse returned empty content");
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveDefaultAndFipsEndpointsAgree() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () || !liveFipsEnabled {
+        return;
+    }
+    // Same prompt, same model, two origins. Both must succeed — this catches a FIPS
+    // host that resolves and authenticates but does not actually serve the model in
+    // this region, which would otherwise surface only to the first customer to try it.
+    ai:ModelProvider dflt = check new AnthropicModelProvider(
+            creds, "anthropic.claude-sonnet-4-6", liveRegion);
+    ai:ModelProvider fips = check new AnthropicModelProvider(
+            creds, "anthropic.claude-sonnet-4-6", liveRegion,
+            serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}");
+    ai:ChatMessage[] prompt = [{role: ai:USER, content: "Reply with the single word: ok"}];
+    ai:ChatAssistantMessage a = check dflt->chat(prompt);
+    ai:ChatAssistantMessage b = check fips->chat(prompt);
+    test:assertTrue((a.content ?: "").trim().length() > 0);
+    test:assertTrue((b.content ?: "").trim().length() > 0);
+}
+
+
+// ---- effort: which Converse mechanism does Bedrock actually honour? ----
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveConverseEffortIsAccepted() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () {
+        return;
+    }
+    // UNRESOLVED, and this is the test that resolves it. Two first-party sources
+    // disagree on how `effort` reaches Converse:
+    //
+    //   botocore  -> a native `outputConfig: {effort}` member on ConverseRequest
+    //   AWS docs  -> additionalModelRequestFields: {"output_config": {"effort": ...}}
+    //
+    // `converter_converse.bal` emits the NATIVE member. If Bedrock returns a 400
+    // ValidationException here, that choice is wrong: switch to folding
+    // `output_config` into the passthrough instead.
+    ai:ModelProvider provider = check new AnthropicModelProvider(
+            creds, "anthropic.claude-sonnet-4-6", liveRegion,
+            apiFamily = CONVERSE,
+            thinking = {mode: ADAPTIVE},
+            effort = EFFORT_LOW);
+    ai:ChatAssistantMessage response = check provider->chat([
+        {role: ai:USER, content: "Reply with the single word: ok"}
+    ]);
+    test:assertTrue((response.content ?: "").trim().length() > 0,
+            "Converse rejected the native outputConfig.effort member — use the passthrough form");
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveAdaptiveThinkingOnTheMessagesDialect() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () || !liveMantleEnabled {
+        return;
+    }
+    // The regression this whole change exists for: `thinking` used to be folded into
+    // `additionalModelRequestFields`, which the Anthropic Messages encoder ignores —
+    // so the knob was silently dropped on this exact route. It is now a top-level
+    // body field, and `output_config.effort` rides beside it.
+    ai:ModelProvider provider = check new AnthropicModelProvider(
+            creds, "anthropic.claude-haiku-4-5", liveRegion,
+            apiFamily = MANTLE,
+            thinking = {mode: ADAPTIVE},
+            effort = EFFORT_LOW);
+    ai:ChatAssistantMessage response = check provider->chat([
+        {role: ai:USER, content: "Reply with the single word: ok"}
+    ]);
+    test:assertTrue((response.content ?: "").trim().length() > 0);
 }

@@ -14,49 +14,54 @@
 
 import ballerina/ai;
 
-// TitanEmbeddingProvider (CLAUDE.md §3; embedding design §7, §8).
+// TitanEmbeddingProvider.
 
 const string TITAN_EMBED_PREFIX = "amazon.titan-embed";
 
 # Amazon Titan text embeddings on AWS Bedrock (InvokeModel only).
 #
 # NOTE: Titan's `inputText` is a single string, so there is no batch input at all —
-# `batchEmbed` of n chunks is n sequential round trips (embedding design §7). That
-# is Bedrock's constraint, not ours; for large corpora AWS's own recommendation is
-# an asynchronous batch-inference job, which is outside the `ai:EmbeddingProvider`
+# `batchEmbed` of n chunks is n sequential round trips. That is Bedrock's
+# constraint, not ours; for large corpora AWS's own recommendation is an
+# asynchronous batch-inference job, which is outside the `ai:EmbeddingProvider`
 # contract.
 public distinct isolated client class TitanEmbeddingProvider {
     *ai:EmbeddingProvider;
 
     private final string wireModelId;
-    private final readonly & EmbeddingCodec codec;
+    private final readonly & EmbeddingConverter converter;
     private final BedrockTransport transport;
     private final readonly & EmbeddingParams params;
 
-    # + credentials - Static keys, STS, or a Bedrock API key (§9.5)
+    # + credentials - Static keys, STS, or a Bedrock API key
     # + model - A Titan embedding id, or a raw id for a model AWS ships before we update the enum
-    # + region - The AWS region
+    # + region - The AWS region; also the SigV4 signing scope, which a custom
+    #            `serviceUrl` does NOT change
+    # + serviceUrl - Endpoint origin. The default template resolves to
+    #                `bedrock-runtime.{region}.{domain}` — embeddings are InvokeModel-only.
+    #                Pass a concrete URL for a FIPS, dual-stack or PrivateLink host
     # + config - `dimensions`, `normalize`, retry, and HTTP settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Model"} TitanEmbeddingModel|string model,
             @display {label: "Region"} string region,
+            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Embedding Configuration"} *TitanEmbeddingConfig config)
             returns ai:Error? {
         [string, BedrockTransport] [wireModelId, transport] =
-            check resolveEmbeddingSpine("TitanEmbeddingProvider", credentials, model, region,
-                TITAN_EMBED_PREFIX, TITAN_EMBED_TEXT_V2, config?.signingServiceName,
+            check resolveEmbeddingSpine("TitanEmbeddingProvider", credentials, model, region, serviceUrl,
+                TITAN_EMBED_PREFIX, TITAN_EMBED_TEXT_V2,
                 config?.httpConfig, config?.retryConfig);
 
         self.wireModelId = wireModelId;
-        self.codec = TITAN_EMBED_CODEC;
+        self.converter = TITAN_EMBED_CONVERTER;
         self.transport = transport;
 
         EmbeddingParams params = {};
         int? dimensions = config?.dimensions;
         if dimensions is int {
-            // Fail at construction, not per call (embedding design §8). Titan V2
+            // Fail at construction, not per call. Titan V2
             // accepts exactly three widths; V1 has no such parameter at all.
             // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
             // Normalize first: `wireModelId` may carry a CRIS geo prefix, and a raw
@@ -76,7 +81,7 @@ public distinct isolated client class TitanEmbeddingProvider {
         if normalize is boolean {
             params.normalize = normalize;
         }
-        json additional = config?.additionalModelRequestFields;
+        AdditionalRequestFields? additional = config?.additionalModelRequestFields;
         if additional != () {
             params.additionalModelRequestFields = additional;
         }
@@ -88,12 +93,12 @@ public distinct isolated client class TitanEmbeddingProvider {
     # + chunk - The chunk to convert; must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embedding vector, or an `ai:Error`
     isolated remote function embed(ai:Chunk chunk) returns ai:Embedding|ai:Error
-        => runEmbed("Amazon", self.wireModelId, self.codec, self.transport, self.params, chunk);
+        => runEmbed("Amazon", self.wireModelId, self.converter, self.transport, self.params, chunk);
 
     # Converts a batch of chunks into vector embeddings, preserving input order.
     #
     # + chunks - The chunks to convert; each must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embeddings in input order, or an `ai:Error`
     isolated remote function batchEmbed(ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error
-        => runBatchEmbed("Amazon", self.wireModelId, self.codec, self.transport, self.params, chunks);
+        => runBatchEmbed("Amazon", self.wireModelId, self.converter, self.transport, self.params, chunks);
 }

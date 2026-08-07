@@ -42,3 +42,13 @@ Config.toml
 
 # macOS
 .DS_Store
+
+
+
+
+# Local-only working docs — never push
+CLAUDE.md
+modelProviderDesign.md
+embeddingProviderDesign.md
+awsAuthMigrationPlan.md
+simplificationDecisions.md

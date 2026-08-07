@@ -15,11 +15,11 @@
 import ballerina/ai;
 import ballerina/jballerina.java;
 
-// AnthropicModelProvider — a thin typed facade over the shared spine (CLAUDE.md
-// §3). Claude on Converse (default) / Mantle (Mythos, Haiku) / Invoke-Anthropic.
+// AnthropicModelProvider — a thin typed facade over the shared spine.
+// Claude on Converse (default) / Mantle (Mythos, Haiku) / Invoke-Anthropic.
 
 # Well-known Claude model ids. Any newer Claude is reachable by passing its id as
-# a `string` (design §5.5, principle 4).
+# a `string`.
 public enum AnthropicModel {
     # Claude Opus 5 — Anthropic's most advanced Opus (1M context, 128K max output,
     # adaptive thinking on by default). Converse + Invoke + Messages; dual-homed
@@ -50,34 +50,49 @@ public enum AnthropicModel {
     CLAUDE_MYTHOS_5 = "anthropic.claude-mythos-5"
 }
 
-# Anthropic-specific configuration (CLAUDE.md §3). Includes the shared
-# `CommonModelConfig` and adds Claude-only knobs. `thinking` is folded
-# into the Converse `additionalModelRequestFields` passthrough (design §9.3).
+# Anthropic-specific configuration. Includes the shared `CommonModelConfig` and
+# adds Claude-only knobs.
 public type AnthropicConfig record {|
     *CommonModelConfig;
-    # Extended-thinking config, forwarded verbatim (§9.3).
-    json thinking?;
-    # `anthropic-workspace` header for per-application cost scoping on Mantle (§7.3).
-    string anthropicWorkspaceId?;
+    # Extended/adaptive thinking. A typed record rather than raw `json`: the wire
+    # spelling and the mode/budget pairing rules are enforced at construction.
+    ThinkingConfig thinking?;
+    # Reasoning depth, emitted as `output_config.effort`. The ONLY depth control on
+    # the adaptive-only models (Mythos 5, Fable 5, Opus 4.7, Mythos Preview).
+    Effort effort?;
 |};
 
 # Claude on AWS Bedrock. Routes to Converse, Mantle (Messages), or Invoke-Anthropic
-# at construction (design §5, §6).
+# at construction.
 public isolated distinct client class AnthropicModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily family;
     private final string wireModelId;
-    private final readonly & ModelCodec codec;
+    private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
     private final readonly & InferenceParams params;
     private final map<string> & readonly extraHeaders;
-    // Structured output (generate() typed target) is unavailable on Mantle (amendment).
+    // Structured output (generate() typed target) is unavailable on Mantle.
+    // The spine generate() uses. Same objects as the chat spine EXCEPT when AUTO
+    // sent chat to Mantle and the model is also on bedrock-runtime — then these hold
+    // a Converse spine so a typed generate() works instead of erroring.
+    private final ApiFamily genFamily;
+    private final string genModelId;
+    private final readonly & ModelConverter genConverter;
+    private final BedrockTransport genTransport;
+    private final map<string> & readonly genHeaders;
     private final boolean supportsStructuredOutput;
 
-    # + credentials - Static keys, STS, or a Bedrock API key (§9.5)
+    # + credentials - Static keys, STS, or a Bedrock API key
     # + model - A Claude id (bare, CRIS-prefixed, ARN, or `mantle/|converse/|invoke/` prefixed)
-    # + region - Default region; an ARN `model`'s region segment overrides it (§5.2)
+    # + region - Default region; an ARN `model`'s region segment overrides it. Also the
+    #            SigV4 signing scope, which a custom `serviceUrl` does NOT change
+    # + serviceUrl - Endpoint origin. The default template resolves per route —
+    #                `{endpoint}` becomes `runtime` or `mantle`, `{region}` and
+    #                `{domain}` follow the resolved route. Pass a concrete URL for a
+    #                FIPS, dual-stack, PrivateLink or gateway host; the route-derived
+    #                request path is still appended
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to omit the
     #                 field entirely and use the model's own default — several current
@@ -88,47 +103,57 @@ public isolated distinct client class AnthropicModelProvider {
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Model"} AnthropicModel|string model,
             @display {label: "Region"} string region,
+            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AnthropicConfig config)
             returns ai:Error? {
         // ---- shared spine (identical in every vendor provider) ----
-        RouteConfig routeConfig = {
-            apiFamily: config.apiFamily,
-            modelSchema: config.modelSchema,
-            routeOverrides: config.routeOverrides
-        };
-        [Route, readonly & ModelCodec, BedrockTransport] [route, codec, transport] =
-            check resolveSpine("AnthropicModelProvider", credentials, model, region, routeConfig,
-                config?.signingServiceName, config?.httpConfig, config?.retryConfig, config?.guardrail);
+        RouteConfig routeConfig = {apiFamily: config.apiFamily};
+        [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
+            check resolveSpine("AnthropicModelProvider", credentials, model, region, serviceUrl, routeConfig,
+                config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
-        self.codec = codec;
+        self.converter = converter;
         self.transport = transport;
-        self.supportsStructuredOutput = route.family != MANTLE; // amendment
-        self.params = resolveParams(maxTokens, temperature, config);
-        self.extraHeaders = buildExtraHeaders(route, config, credentials).cloneReadOnly();
+        map<string> chatHeaders = buildExtraHeaders(route, config, credentials);
+        self.extraHeaders = chatHeaders.cloneReadOnly();
+        [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
+            [genFamily, genModelId, genConverter, genTransport, genHeaders] =
+            check resolveGenerateSpine("AnthropicModelProvider", credentials, model, region, serviceUrl,
+                routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
+                route, converter, transport, chatHeaders);
+        self.genFamily = genFamily;
+        self.genModelId = genModelId;
+        self.genConverter = genConverter;
+        self.genTransport = genTransport;
+        self.genHeaders = genHeaders.cloneReadOnly();
+        self.supportsStructuredOutput = genFamily != MANTLE;
+        self.params = check resolveParams(maxTokens, temperature, config);
     }
 
-    # Sends a chat request (design §3, §7). Opens an observe span and closes it on
-    # every path (§3.2).
+    # Sends a chat request. Opens an observe span and closes it on every path.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling
-    # + stop - Stop sequence; overrides configured `stopSequences` (§7)
+    # + stop - Stop sequence; overrides configured `stopSequences`
     # + return - The assistant message, or an `ai:Error`
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Anthropic", self.family, self.wireModelId, self.codec, self.transport,
+        => runChat("Anthropic", self.family, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
     # Generates a value of the expected type by forcing a single tool whose schema
-    # is that type (design §8). Available on the Converse and Invoke routes; a
-    # Mantle-routed model returns an `ai:Error` for any target type other than
-    # `string`. External Java per the platform convention (§3); the shim calls back
-    # into `generateLlmResponse`, passing this provider's resolved state.
+    # is that type. Available on the Converse and Invoke routes; a Mantle-routed
+    # model returns an `ai:Error` for any target type other than `string`.
+    # External Java per the platform convention; the shim calls back into
+    # `generateLlmResponse`, passing this provider's resolved state.
+    #
+    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
+    # chat to Mantle and the model is also served on `bedrock-runtime`.
     #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type
@@ -140,40 +165,60 @@ public isolated distinct client class AnthropicModelProvider {
     } external;
 }
 
-// Resolves inference params once at construction (design §6, §7). Folds the
+// Resolves inference params once at construction. Folds the
 // Claude `thinking` knob into the `additionalModelRequestFields`
-// passthrough (§9.3), which every Anthropic codec forwards.
+// passthrough, which every Anthropic converter forwards.
 isolated function resolveParams(int? maxTokens, decimal? temperature, AnthropicConfig config)
-        returns readonly & InferenceParams {
-    map<json> extras = {};
-    json thinking = config?.thinking;
-    if thinking != () {
-        extras["thinking"] = thinking;
+        returns readonly & InferenceParams|ai:Error {
+    int resolvedMaxTokens = maxTokens ?: DEFAULT_MAX_TOKEN_COUNT;
+    ThinkingConfig? thinking = config?.thinking;
+    if thinking is ThinkingConfig {
+        check validateThinking(thinking, resolvedMaxTokens);
     }
-    json additional = foldRequestFields(config?.additionalModelRequestFields, extras);
     return buildInferenceParams(maxTokens, temperature, config?.stopSequences,
-        additional, config?.additionalModelResponseFieldPaths, config?.serviceTier, config?.latencyOptimized,
-        config?.requestMetadata, config?.guardrail);
+        config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
+        config?.guardrail, thinking, config?.effort);
 }
 
-// Route-specific headers computed once (design §7.3, §9.5): the common Invoke
+// The budget rules AWS enforces with a 400. Checked before any I/O so the message
+// names the actual mistake instead of surfacing as an opaque ValidationException.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
+isolated function validateThinking(ThinkingConfig thinking, int maxTokens) returns ai:Error? {
+    int? budget = thinking?.budgetTokens;
+    if thinking.mode != ENABLED {
+        if budget is int {
+            return error ai:Error(string `'budgetTokens' is only valid with 'mode = ENABLED'; mode is ` +
+                string `'${thinking.mode}'. Adaptive thinking is steered with 'effort' instead.`);
+        }
+        return;
+    }
+    if budget is () {
+        return error ai:Error("'mode = ENABLED' requires 'budgetTokens' — manual extended thinking " +
+            "has no default budget. Use 'mode = ADAPTIVE' to let the model decide.");
+    }
+    if budget < MIN_THINKING_BUDGET_TOKENS {
+        return error ai:Error(string `'budgetTokens' must be at least ` +
+            string `${MIN_THINKING_BUDGET_TOKENS}; got ${budget}.`);
+    }
+    if budget >= maxTokens {
+        return error ai:Error(string `'budgetTokens' (${budget}) must be less than 'maxTokens' ` +
+            string `(${maxTokens}) — the thinking budget is drawn from the same ceiling.`);
+    }
+}
+
+// Route-specific headers computed once: the common Invoke
 // guardrail and Mantle api-key headers, plus Anthropic's own Mantle Messages
-// version/workspace headers.
+// version header.
 isolated function buildExtraHeaders(Route route, AnthropicConfig config, BedrockCredentials creds)
         returns map<string> {
-    // `x-api-key` is emitted by `commonExtraHeaders` for every vendor whose Mantle
-    // entry declares X_API_KEY — it is table data, not an Anthropic special case.
+    // `x-api-key` is emitted by `commonExtraHeaders` for every Mantle Messages path —
+    // it follows the path, not the vendor.
     map<string> headers = commonExtraHeaders(route, config?.guardrail, creds);
     MantleEntry? entry = route.mantleEntry;
-    if route.family == MANTLE && entry is MantleEntry {
-        if entry.codec == MESSAGES_CODEC {
-            // Different value AND mechanism from the Invoke body field (§7.3).
-            headers["anthropic-version"] = "2023-06-01";
-        }
-        string? workspace = config?.anthropicWorkspaceId;
-        if workspace is string {
-            headers["anthropic-workspace"] = workspace;
-        }
+    if route.family == MANTLE && entry is MantleEntry && usesApiKeyHeader(entry.path) {
+        // Different value AND mechanism from the Invoke body field.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+        headers["anthropic-version"] = "2023-06-01";
     }
     return headers;
 }
