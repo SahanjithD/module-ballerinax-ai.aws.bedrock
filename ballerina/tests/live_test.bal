@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerina/lang.array;
 import ballerina/test;
 
 // Live integration tests. These call real AWS and cost real money,
@@ -80,7 +81,7 @@ function testLiveConverseViaCrisInferenceProfileArn() returns error? {
     // The ARN exercises the SigV4 path-encoding split: its `:` and `/`
     // characters are single-encoded on the wire and double-encoded in the
     // signature. Get that wrong and this is a 403 — no golden test can catch it.
-    ai:ModelProvider provider = check new AnthropicModelProvider(liveConverseModelArn, liveRegion, creds);
+    ai:ModelProvider provider = check new AnthropicModelProvider(liveConverseModelArn, creds, liveRegion);
     ai:ChatAssistantMessage response = check provider->chat([
         {role: ai:SYSTEM, content: "Answer with exactly one word."},
         {role: ai:USER, content: "What colour is the sky on a clear day?"}
@@ -95,7 +96,7 @@ function testLiveConverseWithABareModelId() returns error? {
     if creds is () {
         return;
     }
-    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, liveRegion, creds);
+    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, creds, liveRegion);
     ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0);
 }
@@ -116,7 +117,7 @@ function testLiveGenerateOnConverseReturnsTheRecord() returns error? {
     // Proves the forced-tool round trip end to end: the derived JSON schema is
     // accepted as a tool by AWS, and the model's tool-call arguments bind back
     // into the record.
-    AnthropicModelProvider provider = check new (CLAUDE_SONNET_4_6, liveRegion, creds);
+    AnthropicModelProvider provider = check new (CLAUDE_SONNET_4_6, creds, liveRegion);
     LiveFruit fruit = check provider->generate(`Name one common fruit and its colour.`);
     test:assertTrue(fruit.name.trim().length() > 0, "generate() returned an empty name");
     test:assertTrue(fruit.colour.trim().length() > 0, "generate() returned an empty colour");
@@ -133,7 +134,7 @@ function testLiveMantleChat() returns error? {
     // Mantle is a different host, a different wire dialect, a different SigV4
     // signing scope, and a different IAM namespace. Nothing about this path is
     // shared with Converse except the credentials.
-    ai:ModelProvider provider = check new OpenAIModelProvider(GPT_5_4, liveRegion, creds);
+    ai:ModelProvider provider = check new OpenAIModelProvider(GPT_5_4, creds, liveRegion);
     ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0);
 }
@@ -144,7 +145,7 @@ function testLiveMantleRefusesStructuredOutputButReturnsText() returns error? {
     if creds is () || !liveMantleEnabled {
         return;
     }
-    OpenAIModelProvider provider = check new (GPT_5_4, liveRegion, creds);
+    OpenAIModelProvider provider = check new (GPT_5_4, creds, liveRegion);
 
     // A typed target must be refused locally, without spending a call.
     LiveFruit|ai:Error typed = provider->generate(`Name one common fruit and its colour.`);
@@ -164,7 +165,7 @@ function testLiveTitanEmbedding() returns error? {
         return;
     }
     ai:EmbeddingProvider provider = check new TitanEmbeddingProvider(
-        TITAN_EMBED_TEXT_V2, liveRegion, creds, dimensions = 1024);
+        TITAN_EMBED_TEXT_V2, creds, liveRegion, dimensions = 1024);
     ai:Embedding embedding = check provider->embed({content: "hello world", 'type: "text-chunk"});
     test:assertTrue(embedding is float[], "Titan must return a dense vector");
     if embedding is float[] {
@@ -185,7 +186,7 @@ function testLiveCohereEmbeddingPreservesOrderAcrossWindows() returns error? {
         chunks.push({content: string `item number ${i}`, 'type: "text-chunk"});
     }
     ai:EmbeddingProvider provider = check new CohereEmbeddingProvider(
-        COHERE_EMBED_ENGLISH_V3, liveRegion, creds, inputType = SEARCH_DOCUMENT);
+        COHERE_EMBED_ENGLISH_V3, creds, liveRegion, inputType = SEARCH_DOCUMENT);
     ai:Embedding[] embeddings = check provider->batchEmbed(chunks);
     test:assertEquals(embeddings.length(), 100, "one embedding per input, in input order");
 
@@ -226,7 +227,7 @@ function testLiveFipsEndpointAcceptsASignedRequest() returns error? {
     // `serviceUrl` leaked into the SigV4 credential scope this returns 403
     // SignatureDoesNotMatch, which is exactly the regression worth paying for.
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            "anthropic.claude-sonnet-4-6", liveRegion, creds,
+            "anthropic.claude-sonnet-4-6", creds, liveRegion,
             serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}");
     ai:ChatAssistantMessage response = check provider->chat([
         {role: ai:USER, content: "Reply with the single word: ok"}
@@ -245,11 +246,11 @@ function testLiveDefaultAndFipsEndpointsAgree() returns error? {
     // host that resolves and authenticates but does not actually serve the model in
     // this region, which would otherwise surface only to the first customer to try it.
     ai:ModelProvider dflt = check new AnthropicModelProvider(
-            "anthropic.claude-sonnet-4-6", liveRegion, creds);
+            "anthropic.claude-sonnet-4-6", creds, liveRegion);
     // `fips` rather than a hand-written template: the host now comes from AWS SDK
     // endpoint metadata, so this also confirms the metadata's spelling is real.
     ai:ModelProvider fips = check new AnthropicModelProvider(
-            "anthropic.claude-sonnet-4-6", liveRegion, creds, config = {fips: true});
+            "anthropic.claude-sonnet-4-6", creds, liveRegion, config = {fips: true});
     ai:ChatMessage[] prompt = [{role: ai:USER, content: "Reply with the single word: ok"}];
     ai:ChatAssistantMessage a = check dflt->chat(prompt);
     ai:ChatAssistantMessage b = check fips->chat(prompt);
@@ -276,7 +277,7 @@ function testLiveConverseEffortIsAccepted() returns error? {
     // ValidationException here, that choice is wrong: switch to folding
     // `output_config` into the passthrough instead.
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            "anthropic.claude-sonnet-4-6", liveRegion, creds,
+            "anthropic.claude-sonnet-4-6", creds, liveRegion,
             apiFamily = CONVERSE,
             thinking = {mode: ADAPTIVE},
             effort = EFFORT_LOW);
@@ -298,12 +299,169 @@ function testLiveAdaptiveThinkingOnTheMessagesDialect() returns error? {
     // so the knob was silently dropped on this exact route. It is now a top-level
     // body field, and `output_config.effort` rides beside it.
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            "anthropic.claude-haiku-4-5", liveRegion, creds,
+            "anthropic.claude-haiku-4-5", creds, liveRegion,
             apiFamily = MANTLE,
             thinking = {mode: ADAPTIVE},
             effort = EFFORT_LOW);
     ai:ChatAssistantMessage response = check provider->chat([
         {role: ai:USER, content: "Reply with the single word: ok"}
     ]);
+    test:assertTrue((response.content ?: "").trim().length() > 0);
+}
+
+// ---- Images: does each route actually accept what this module emits? ----
+//
+// These exist because no first-party source states whether the OpenAI-shaped Mantle
+// and Invoke dialects accept image parts. Crucially they go THROUGH THE MODULE, so
+// what is validated is the exact body it builds — hand-written JSON would only prove
+// that the hand-written JSON works.
+//
+// Converse and Anthropic run by default. The other three need
+// `enableUnverifiedImageRoutes = true` in Config.toml, since the module refuses them
+// otherwise; a PASS there is the signal to flip that default permanently.
+
+// A real 1x1 PNG. Must be a decodable image, not a signature stub: the model has to
+// look at it, so AWS will reject anything malformed before the model ever sees it.
+const string ONE_PX_PNG_B64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+function onePixelPng() returns ai:ImageDocument|error =>
+    {content: check array:fromBase64(ONE_PX_PNG_B64), metadata: {mimeType: "image/png"}};
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveConverseAcceptsAnImage() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () {
+        return;
+    }
+    // The CONTROL. Converse image support is documented, so a failure here means the
+    // encoding is wrong — not that the route lacks support.
+    ai:ImageDocument img = check onePixelPng();
+    ai:ModelProvider provider = check new AnthropicModelProvider(
+            CLAUDE_SONNET_4_6, creds, liveRegion, config = {apiFamily: CONVERSE});
+    ai:ChatAssistantMessage response = check provider->chat({
+        role: ai:USER,
+        content: `Does this contain an image? Answer yes or no. ${img}`
+    });
+    test:assertTrue((response.content ?: "").trim().length() > 0, "Converse rejected the image block");
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveInvokeAnthropicAcceptsAnImage() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () {
+        return;
+    }
+    // Confirms the base64 `source` shape on the Anthropic Messages dialect, and that
+    // Bedrock really does refuse nothing about it.
+    ai:ImageDocument img = check onePixelPng();
+    ai:ModelProvider provider = check new AnthropicModelProvider(
+            CLAUDE_SONNET_4_6, creds, liveRegion, config = {apiFamily: INVOKE});
+    ai:ChatAssistantMessage response = check provider->chat({
+        role: ai:USER,
+        content: `Does this contain an image? Answer yes or no. ${img}`
+    });
+    test:assertTrue((response.content ?: "").trim().length() > 0, "Invoke-Anthropic rejected the image");
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveMantleResponsesImageSupportIsUnknown() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () || !liveMantleEnabled || !enableUnverifiedImageRoutes {
+        return;
+    }
+    // UNVERIFIED. A 400 here is a RESULT, not a defect — it tells us the default
+    // refusal is correct. A pass tells us to remove it.
+    ai:ImageDocument img = check onePixelPng();
+    ai:ModelProvider provider = check new OpenAIModelProvider(GPT_5_4, creds, liveRegion);
+    ai:ChatAssistantMessage|ai:Error response = provider->chat({
+        role: ai:USER,
+        content: `Does this contain an image? Answer yes or no. ${img}`
+    });
+    if response is ai:Error {
+        test:assertFail(string `Mantle Responses REJECTED the image — keep the default refusal. ` +
+            string `Error: ${response.message()}`);
+    }
+    test:assertTrue((response.content ?: "").trim().length() > 0);
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveMantleChatCompletionsImageSupportIsUnknown() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () || !liveMantleEnabled || !enableUnverifiedImageRoutes {
+        return;
+    }
+    ai:ImageDocument img = check onePixelPng();
+    ai:ModelProvider provider = check new GoogleModelProvider(GEMMA_3_27B_IT, creds, liveRegion);
+    ai:ChatAssistantMessage|ai:Error response = provider->chat({
+        role: ai:USER,
+        content: `Does this contain an image? Answer yes or no. ${img}`
+    });
+    if response is ai:Error {
+        test:assertFail(string `Mantle chat-completions REJECTED the image — keep the default ` +
+            string `refusal. Error: ${response.message()}`);
+    }
+    test:assertTrue((response.content ?: "").trim().length() > 0);
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveInvokeMistralChatImageSupportIsContested() returns error? {
+    BedrockCredentials? creds = liveCredentials();
+    if creds is () || !enableUnverifiedImageRoutes {
+        return;
+    }
+    // AWS documents this dialect's `content` as a string; Mistral's own API documents
+    // image chunks. This call settles which one describes Bedrock.
+    ai:ImageDocument img = check onePixelPng();
+    ai:ModelProvider provider = check new MistralModelProvider(
+            MISTRAL_LARGE_3, creds, liveRegion, config = {apiFamily: INVOKE});
+    ai:ChatAssistantMessage|ai:Error response = provider->chat({
+        role: ai:USER,
+        content: `Does this contain an image? Answer yes or no. ${img}`
+    });
+    if response is ai:Error {
+        test:assertFail(string `Invoke-Mistral REJECTED the image — AWS's docs are right and the ` +
+            string `default refusal stays. Error: ${response.message()}`);
+    }
+    test:assertTrue((response.content ?: "").trim().length() > 0);
+}
+
+// ---- Credential chain (ballerinax/aws.auth) ----
+//
+// The whole credential path was replaced: `auth:CredentialProvider` now resolves and
+// refreshes, and `getCredentials()` is called per request rather than once at
+// construction. Every other live test pins static keys, so NONE of them exercise the
+// chain. These do.
+
+// An IAM role to assume, e.g. "arn:aws:iam::222222222222:role/BedrockCaller".
+// Empty by default: the account id makes it caller-specific.
+configurable string liveAssumeRoleArn = "";
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveDefaultCredentialChainCanCallBedrock() returns error? {
+    // No credentials argument at all — the whole point of the migration. Resolves
+    // from whatever the environment offers: env vars, an EC2 instance profile, an ECS
+    // task role, EKS IRSA, SSO, or ~/.aws/credentials.
+    //
+    // A failure here means the chain did not find usable credentials in THIS
+    // environment; run it on the target compute (EC2/ECS/EKS) to prove the case that
+    // matters. It is the only test that covers construction with no credentials.
+    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, region = liveRegion);
+    ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
+    test:assertTrue((response.content ?: "").trim().length() > 0,
+            "DEFAULT_CREDENTIALS resolved but the call failed");
+}
+
+@test:Config {groups: ["live"], enable: liveTestsEnabled}
+function testLiveAssumeRoleCredentialsCanCallBedrock() returns error? {
+    if liveAssumeRoleArn == "" {
+        return;
+    }
+    // Cross-account access, which the module could not express at all before this
+    // migration. Also the first path where credentials EXPIRE, so it exercises
+    // refresh in a way static keys never can.
+    BedrockCredentials assumed = {roleArn: liveAssumeRoleArn, stsRegion: liveRegion};
+    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, assumed, liveRegion);
+    ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0);
 }

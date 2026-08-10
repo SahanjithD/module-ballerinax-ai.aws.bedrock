@@ -19,10 +19,13 @@ import ballerina/ai;
 // field; turns are `input` items; the model reply is in `output` items.
 
 // Encodes an OpenAI Responses request body.
-isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeResponses(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
+    // UNVERIFIED: image support on the Mantle /openai/v1/responses path is not stated
+    // by any first-party source. Refuse rather than guess — see README.
+    check rejectImagesIn(messages, "the OpenAI Responses dialect", true);
     json[] input = [];
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         input.push(...responsesInputItems(m));
     }
     // The Responses dialect has NO stop-sequence parameter — it is absent from the
@@ -40,8 +43,8 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
 
     map<json> body = {"input": input, "max_output_tokens": params.maxTokens};
     setTemperature(body, params);
-    if system is ai:ChatSystemMessage {
-        body["instructions"] = contentToString(system.content); // system → instructions
+    if system is string {
+        body["instructions"] = system; // system → instructions
     }
     if tools.length() > 0 {
         json[] toolDefs = [];
@@ -59,7 +62,7 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
     return body;
 }
 
-// Maps one `ai:ChatMessage` to one or more Responses `input` items.
+// Maps one resolved message to one or more Responses `input` items.
 //
 // An assistant turn that made tool calls MUST expand to a `function_call` item per
 // call, carrying its `call_id`: the Responses API pairs every `function_call_output`
@@ -68,9 +71,9 @@ isolated function encodeResponses(ai:ChatSystemMessage? system, ai:ChatMessage[]
 // with 400 "No tool call found for function call output with call_id …", so the agent
 // loop never completes (verified live 2026-08-03). One assistant message can carry
 // several tool calls, which is why this returns json[].
-isolated function responsesInputItems(ai:ChatMessage m) returns json[] {
-    if m is ai:ChatUserMessage {
-        return [{"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]}];
+isolated function responsesInputItems(ResolvedMessage m) returns json[] {
+    if m is ResolvedUserMessage {
+        return [{"role": "user", "content": responsesContentParts(m.parts)}];
     }
     if m is ai:ChatAssistantMessage {
         json[] items = [];
@@ -96,10 +99,7 @@ isolated function responsesInputItems(ai:ChatMessage m) returns json[] {
         }
         return items;
     }
-    if m is ai:ChatFunctionMessage {
-        return [{"type": "function_call_output", "call_id": m.id ?: m.name, "output": m.content ?: ""}];
-    }
-    return [{"role": "user", "content": [{"type": "input_text", "text": contentToString(m.content)}]}];
+    return [{"type": "function_call_output", "call_id": m.id ?: m.name, "output": m.content ?: ""}];
 }
 
 // Decodes an OpenAI Responses response. Always populates `usage` and

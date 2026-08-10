@@ -18,8 +18,14 @@ import ballerina/test;
 // Golden-file converter tests. Fixed messages in → asserted body out;
 // canned response in → asserted DecodedResponse out.
 
-final ai:ChatMessage[] SAMPLE_MESSAGES = [{role: ai:USER, content: "Hello"}];
-final ai:ChatSystemMessage SAMPLE_SYSTEM = {role: ai:SYSTEM, content: "Be brief"};
+final ResolvedMessage[] & readonly SAMPLE_MESSAGES = [{parts: [{text: "Hello"}]}];
+final string SAMPLE_SYSTEM = "Be brief";
+
+// Encoders take ALREADY-RESOLVED messages (see content_parts.bal), so the golden
+// tests build them directly — no network, no credentials, exactly as before.
+isolated function userText(string text) returns ResolvedUserMessage => {parts: [{text}]};
+isolated function userImage(string mimeType, byte[] data) returns ResolvedUserMessage =>
+    {parts: [{mimeType, data}]};
 
 // ---- Converse encode ----
 
@@ -203,10 +209,10 @@ function testMistralTextFoldsSystemIntoTheFirstInstructionBlock() returns error?
 
 @test:Config {}
 function testMistralTextRendersMultiTurnTemplate() returns error? {
-    ai:ChatMessage[] messages = [
-        {role: ai:USER, content: "First?"},
+    ResolvedMessage[] messages = [
+        userText("First?"),
         {role: ai:ASSISTANT, content: "Answer."},
-        {role: ai:USER, content: "Second?"}
+        userText("Second?")
     ];
     map<json> body = check encodeMistralText((), messages, [], (),
             {temperature: 0.5, maxTokens: 100}).ensureType();

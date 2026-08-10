@@ -48,7 +48,7 @@ final readonly & InferenceParams GEN_PARAMS = {temperature: 0.5, maxTokens: 256}
 
 @test:Config {}
 function testToolForcingEmitsSchemaAsForcedToolOnConverse() returns error? {
-    json encoded = check encodeConverse((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
+    json encoded = check encodeConverse((), [userText("Rate this")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     map<json> body = check applyToolChoice(encoded, CONVERSE_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
 
@@ -66,7 +66,7 @@ function testToolForcingEmitsSchemaAsForcedToolOnConverse() returns error? {
 
 @test:Config {}
 function testToolForcingEmitsSchemaAsForcedToolOnInvokeAnthropic() returns error? {
-    json encoded = check encodeInvokeAnthropic((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
+    json encoded = check encodeInvokeAnthropic((), [userText("Rate this")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     map<json> body = check applyToolChoice(encoded, INVOKE_ANTHROPIC_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
 
@@ -88,7 +88,7 @@ function testToolForcingEmitsSchemaAsForcedToolOnInvokeAnthropic() returns error
 @test:Config {}
 function testNovaOnInvokeForcesToolTheConverseWay() returns error? {
     // Nova's InvokeModel body is Converse-shaped even though the family is INVOKE.
-    json encoded = check encodeNovaInvoke((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
+    json encoded = check encodeNovaInvoke((), [userText("Rate this")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     map<json> body = check applyToolChoice(encoded, INVOKE_NOVA_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
     map<json> toolConfig = check body["toolConfig"].ensureType();
@@ -101,7 +101,7 @@ function testNovaOnInvokeForcesToolTheConverseWay() returns error? {
 function testMistralChatForcesToolWithBareAnyString() returns error? {
     // Mistral cannot name the forced tool: tool_choice is the bare string "any".
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-chat-completion.html
-    json encoded = check encodeMistralChat((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
+    json encoded = check encodeMistralChat((), [userText("Rate this")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     map<json> body = check applyToolChoice(encoded, INVOKE_MISTRAL_CHAT_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
     test:assertEquals(body["tool_choice"], <json>"any", "Mistral's tool_choice is a bare string, not an object");
@@ -112,7 +112,7 @@ function testMistralChatForcesToolWithBareAnyString() returns error? {
 
 @test:Config {}
 function testOpenAIChatForcesToolWithFunctionObject() returns error? {
-    json encoded = check encodeOpenAIChat((), [{role: ai:USER, content: "Rate this"}], [RESULT_TOOL_DEF], (),
+    json encoded = check encodeOpenAIChat((), [userText("Rate this")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     map<json> body = check applyToolChoice(encoded, INVOKE_OPENAI_CHAT_CONVERTER.toolChoice, RESULT_TOOL).ensureType();
     test:assertEquals(body["tool_choice"], <json>{"type": "function", "function": {"name": RESULT_TOOL}});
@@ -227,7 +227,7 @@ function testMistralTextDialectRefusesStructuredOutput() returns error? {
 
 @test:Config {}
 function testMistralTextDialectRejectsToolsRatherThanDroppingThem() {
-    json|ai:Error encoded = encodeMistralText((), [{role: ai:USER, content: "Hi"}], [RESULT_TOOL_DEF], (),
+    json|ai:Error encoded = encodeMistralText((), [userText("Hi")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     test:assertTrue(encoded is ai:Error, "tools on a dialect with no tool support must fail loudly");
 }

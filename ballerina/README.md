@@ -25,6 +25,7 @@ cannot reach them at all. That is the reason this module exists.
   `ballerinax/aws.auth` — zero credential configuration on AWS compute — plus Bedrock API keys (bearer)
 - Cross-region inference (CRIS) profiles, provisioned and custom-deployment ARNs
 - Guardrail support on both `bedrock-runtime` inference APIs
+- Image input on Converse and Anthropic Messages; a named error, never a silent drop, elsewhere
 
 ### Providers
 
@@ -83,13 +84,14 @@ to the AWS credential chain — so on AWS compute this is the whole thing:
 final ai:ModelProvider claude = check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6);
 ```
 
-Every vendor follows the same shape — `(model, region?, credentials?, serviceUrl?, maxTokens?,
-temperature?, *Config)`:
+Every vendor follows the same shape — `(model, credentials?, region?, serviceUrl?, maxTokens?,
+temperature?, *Config)`. Only `model` is positional-required, so pass `region` by name when
+you are not also passing credentials:
 
 ```ballerina
-final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(bedrock:NOVA_PRO, "us-east-1");
-final ai:ModelProvider gpt = check new bedrock:OpenAIModelProvider(bedrock:GPT_5_4, "us-east-2");
-final ai:ModelProvider gemma = check new bedrock:GoogleModelProvider(bedrock:GEMMA_3_27B_IT, "us-east-1");
+final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(bedrock:NOVA_PRO, region = "us-east-1");
+final ai:ModelProvider gpt = check new bedrock:OpenAIModelProvider(bedrock:GPT_5_4, region = "us-east-2");
+final ai:ModelProvider gemma = check new bedrock:GoogleModelProvider(bedrock:GEMMA_3_27B_IT, region = "us-east-1");
 ```
 
 ### Credentials
@@ -121,7 +123,7 @@ bedrock:BedrockCredentials profile = {profileName: "prod"};
 bedrock:BedrockCredentials apiKey = {apiKey: "..."};
 
 final ai:ModelProvider claude =
-    check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, "us-east-1", role);
+    check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, "us-east-1");
 ```
 
 ### Step 3: Invoke chat completion
@@ -167,7 +169,7 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 
 ```ballerina
 final ai:EmbeddingProvider titan = check new bedrock:TitanEmbeddingProvider(
-    bedrock:TITAN_EMBED_TEXT_V2, "us-east-1", creds, dimensions = 1024);
+    bedrock:TITAN_EMBED_TEXT_V2, creds, "us-east-1", dimensions = 1024);
 
 ai:Embedding vector = check titan->embed({content: "hello", 'type: "text-chunk"});
 ```
@@ -195,11 +197,11 @@ for your queries**, constructing one provider per role:
 ```ballerina
 // Ingest side
 final ai:EmbeddingProvider ingest = check new bedrock:CohereEmbeddingProvider(
-    bedrock:COHERE_EMBED_ENGLISH_V3, "us-east-1", creds, inputType = bedrock:SEARCH_DOCUMENT);
+    bedrock:COHERE_EMBED_ENGLISH_V3, creds, "us-east-1", inputType = bedrock:SEARCH_DOCUMENT);
 
 // Query side
 final ai:EmbeddingProvider query = check new bedrock:CohereEmbeddingProvider(
-    bedrock:COHERE_EMBED_ENGLISH_V3, "us-east-1", creds, inputType = bedrock:SEARCH_QUERY);
+    bedrock:COHERE_EMBED_ENGLISH_V3, creds, "us-east-1", inputType = bedrock:SEARCH_QUERY);
 ```
 
 The `ai:EmbeddingProvider` contract carries no query-vs-document signal, which is exactly why this is
@@ -239,15 +241,15 @@ can never become a cryptic 403 from a different service with a different IAM nam
 
 ```ballerina
 // 1. Force a family (default is AUTO, which runs the resolver)
-check new bedrock:AnthropicModelProvider("anthropic.claude-haiku-4-5", "us-east-1", creds,
+check new bedrock:AnthropicModelProvider("anthropic.claude-haiku-4-5", creds, "us-east-1",
         apiFamily = bedrock:MANTLE);
 
 // 2. Prefix override on the model string
-check new bedrock:AnthropicModelProvider("mantle/anthropic.claude-haiku-4-5", "us-east-1", creds);
+check new bedrock:AnthropicModelProvider("mantle/anthropic.claude-haiku-4-5", creds, "us-east-1");
 
 // 3. Any raw model id string is always accepted — the model enums are
 //    conveniences, never a gate. A model AWS shipped after this release works today.
-check new bedrock:AmazonModelProvider("amazon.nova-something-new-v1:0", "us-east-1", creds);
+check new bedrock:AmazonModelProvider("amazon.nova-something-new-v1:0", creds, "us-east-1");
 ```
 
 **A brand-new model needs no module release to reach Converse or Invoke** — pass its id as a string.
@@ -369,20 +371,77 @@ Construction errors are reserved for what AWS *cannot* diagnose for you:
 Everything AWS *can* tell you — a model unavailable in a region, a bad id — is left to Bedrock's own
 `ValidationException`, so this module never becomes a release dependency for AWS's catalogue.
 
+## Images
+
+Pass an `ai:ImageDocument` inside a prompt and it is sent as a real image, not as text:
+
+```ballerina
+byte[] png = check io:fileReadBytes("invoice.png");
+ai:ImageDocument invoice = {content: png, metadata: {mimeType: "image/png"}};
+
+ai:ChatAssistantMessage answer = check claude->chat({
+    role: ai:USER,
+    content: `Extract the total from this invoice: ${invoice}`
+});
+```
+
+**Supported on the routes below.** Everywhere else an image is a **construction-time
+`ai:Error` naming the dialect** — never silently dropped into the prompt text.
+
+| Route | Images | Notes |
+| --- | --- | --- |
+| Converse (and Nova on InvokeModel) | ✅ | Native `image` content block |
+| Anthropic Messages (InvokeModel **and** Mantle) | ✅ | base64 source |
+| OpenAI chat completions (Mantle + GPT-OSS Invoke) | ❌ | unverified — see below |
+| OpenAI Responses (Mantle, GPT-5.x) | ❌ | unverified — see below |
+| Mistral chat (InvokeModel) | ❌ | sources disagree — see below |
+| Mistral instruct / DeepSeek-R1 | ❌ | single prompt string; no content-part array |
+| Any `ChatSystemMessage` | ❌ | `system` is text-only on every Bedrock route |
+
+`mimeType` comes from `metadata.mimeType` when set, otherwise from the download's
+`Content-Type`, otherwise from the file's magic bytes. If none of those identify it,
+construction fails with a named error rather than guessing — both Converse's `format`
+and Anthropic's `media_type` are required fields with no wildcard, so a guess is a
+guaranteed 400. Only **png, jpeg, gif and webp** are accepted.
+
+An `ai:Url` image is **downloaded by the connector** and sent as bytes, because
+Bedrock never fetches on your behalf: Converse has no URL source at all, and
+Anthropic-on-Bedrock accepts base64 only. Only `http(s)` URLs are fetched, redirects
+are followed manually so every hop is re-checked, and the download is capped at 20 MiB.
+
+> **Verifying a refused route.** The emitters for the OpenAI-shaped and Mistral chat
+> dialects are written and unit-tested — only the refusal is in the way. Set
+> `enableUnverifiedImageRoutes = true` in `Config.toml` and run `bal test --groups live`
+> to push a real image through the module and see what AWS says. If the route accepts
+> the body this module builds, the default flips permanently.
+>
+> **Why some routes refuse.** Image support is enabled only where a primary source
+> confirms the wire shape. AWS's Mantle pages are JS-rendered and state nothing about
+> image parts, and for Mistral's InvokeModel dialect AWS documents `content` as a
+> string while Mistral's own API documents image chunks — two first-party sources
+> disagreeing. Rather than guess and ship the silent-wrong-answer bug this feature
+> exists to fix, those routes refuse. Each is a one-line change once a live call
+> settles it.
+
+Images are redacted in the observability span (`[image image/png, 12043 bytes]`), so
+the payload never reaches your telemetry backend.
+
 ## Migrating from 0.9.x
 
 Credentials moved to [`ballerinax/aws.auth`](https://central.ballerina.io/ballerinax/aws/latest), which
 required reordering `init` — Ballerina requires required parameters before defaultable ones, and both
 `region` and `credentials` are now defaultable.
 
-**Argument order changed on all nine providers:**
+**Argument order changed on all nine providers.** `model` is the only required parameter —
+Ballerina requires required parameters before defaultable ones, so `credentials` had to move
+after it in order to keep its default:
 
 ```ballerina
 // 0.9.x
 check new bedrock:AnthropicModelProvider(creds, bedrock:CLAUDE_SONNET_4_6, "us-east-1");
 
 // now — model first, credentials optional
-check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, "us-east-1", creds);
+check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, "us-east-1");
 ```
 
 **`StaticCredentials` and `StsCredentials` were removed.** Both collapse into
@@ -400,7 +459,8 @@ in-module.
 
 ## Not implemented
 
-Streaming (the codec seam exists, but no `decodeStream`), image/video/audio embeddings and
+Streaming (the codec seam exists, but no `decodeStream`), document/video/audio content blocks
+(Converse models all three — see [Images](#images) for the image scope line), image/video/audio embeddings and
 `StartAsyncInvoke` (the `ai:Chunk` contract carries text), provisioned-throughput embedding ARNs,
 Meta/Llama, and Custom Model Import (`imported-model/` ARNs).
 

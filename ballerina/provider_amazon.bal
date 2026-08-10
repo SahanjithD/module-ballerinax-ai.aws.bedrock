@@ -53,19 +53,28 @@ public isolated distinct client class AmazonModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A Nova id (bare, CRIS-prefixed, ARN, or route-prefixed)
-    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it. Also the SigV4 signing scope, which a custom
-    #            `serviceUrl` does NOT change
     # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
     #                 SSO, shared config, `credential_process`, ECS container credentials,
     #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
     #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
     #                 source, or a `BearerToken` for a Bedrock API key
-    # + serviceUrl - Endpoint origin. The default template resolves per route —
-    #                `{endpoint}` becomes `runtime` or `mantle`, `{region}` and
-    #                `{domain}` follow the resolved route. Pass a concrete URL for a
-    #                PrivateLink or gateway host; the route-derived request path is
-    #                still appended. Use `config.fips` for FIPS endpoints
+    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
+    #            segment overrides it. Also the SigV4 signing scope, which a custom
+    #            `serviceUrl` does NOT change
+    # + serviceUrl - Endpoint origin. The default template resolves per route from AWS
+    #                SDK endpoint metadata, which already covers every partition
+    #                (`amazonaws.com`, `amazonaws.com.cn`) and Mantle's `api.aws`.
+    #                Override it only for a host AWS cannot derive:
+    #                `https://vpce-0abc123.bedrock-runtime.us-east-1.vpce.amazonaws.com`
+    #                (PrivateLink / VPC endpoint), `https://bedrock-gw.internal.corp`
+    #                (an egress gateway or proxy), or `http://localhost:4566`
+    #                (LocalStack, a mock server, or a recorded fixture in tests).
+    #                The placeholders `{endpoint}` (`runtime`|`mantle`), `{region}` and
+    #                `{domain}` are substituted, so a partial override such as
+    #                `https://bedrock-{endpoint}.{region}.{domain}` keeps region and
+    #                domain automatic. It replaces the ORIGIN only — the route-derived
+    #                request path is still appended — and never changes the SigV4
+    #                signing scope. For FIPS use `config.fips`, not a hand-written host
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to omit the
     #                 field entirely and use the model's own default — several current
@@ -74,8 +83,8 @@ public isolated distinct client class AmazonModelProvider {
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} AmazonModel|string model,
-            @display {label: "Region"} string region = defaultRegion(),
             @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
+            @display {label: "Region"} string region = defaultRegion(),
             @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),

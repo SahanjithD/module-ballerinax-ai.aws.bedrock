@@ -160,7 +160,7 @@ function testPartitioningPreservesInputOrder() {
 
 @test:Config {}
 function testTitanRejectsACohereModelId() {
-    TitanEmbeddingProvider|ai:Error provider = new ("cohere.embed-english-v3", REGION, TEST_CREDS);
+    TitanEmbeddingProvider|ai:Error provider = new ("cohere.embed-english-v3", TEST_CREDS, REGION);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("amazon.titan-embed"), provider.message());
@@ -169,7 +169,7 @@ function testTitanRejectsACohereModelId() {
 
 @test:Config {}
 function testCohereRejectsATitanModelId() {
-    CohereEmbeddingProvider|ai:Error provider = new ("amazon.titan-embed-text-v2:0", REGION, TEST_CREDS);
+    CohereEmbeddingProvider|ai:Error provider = new ("amazon.titan-embed-text-v2:0", TEST_CREDS, REGION);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("cohere.embed"), provider.message());
@@ -180,7 +180,7 @@ function testCohereRejectsATitanModelId() {
 function testEmbeddingArnIsRejectedAtConstruction() {
     // v1: ARNs are out of scope — an ARN carries no vendor prefix.
     TitanEmbeddingProvider|ai:Error provider = new (
-        "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc", REGION, TEST_CREDS);
+        "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc", TEST_CREDS, REGION);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("ARN"), provider.message());
@@ -189,11 +189,11 @@ function testEmbeddingArnIsRejectedAtConstruction() {
 
 @test:Config {}
 function testEmbeddingProvidersConstructAndNormalizeCris() returns error? {
-    TitanEmbeddingProvider titan = check new (TITAN_EMBED_TEXT_V2, REGION, TEST_CREDS);
-    CohereEmbeddingProvider cohere = check new (COHERE_EMBED_ENGLISH_V3, REGION, TEST_CREDS,
+    TitanEmbeddingProvider titan = check new (TITAN_EMBED_TEXT_V2, TEST_CREDS, REGION);
+    CohereEmbeddingProvider cohere = check new (COHERE_EMBED_ENGLISH_V3, TEST_CREDS, REGION,
         inputType = SEARCH_QUERY);
     // Cohere Embed v4 is offered cross-region, so a CRIS-prefixed id must resolve.
-    CohereEmbeddingProvider cris = check new ("us.cohere.embed-v4:0", REGION, TEST_CREDS);
+    CohereEmbeddingProvider cris = check new ("us.cohere.embed-v4:0", TEST_CREDS, REGION);
     test:assertTrue(titan is TitanEmbeddingProvider);
     test:assertTrue(cohere is CohereEmbeddingProvider);
     test:assertTrue(cris is CohereEmbeddingProvider);
@@ -204,7 +204,7 @@ function testEmbeddingProvidersConstructAndNormalizeCris() returns error? {
 @test:Config {}
 function testNonTextChunkReturnsCleanErrorFromEmbedAndBatchEmbed() returns error? {
     // The guard fires before any I/O, so this needs no AWS.
-    TitanEmbeddingProvider titan = check new (TITAN_EMBED_TEXT_V2, REGION, TEST_CREDS);
+    TitanEmbeddingProvider titan = check new (TITAN_EMBED_TEXT_V2, TEST_CREDS, REGION);
     ai:Chunk imageChunk = {'type: "image", content: "not-text"};
 
     ai:Embedding|ai:Error single = titan->embed(imageChunk);
@@ -222,7 +222,7 @@ function testNonTextChunkReturnsCleanErrorFromEmbedAndBatchEmbed() returns error
 
 @test:Config {}
 function testNonTextChunkRejectedByCohereToo() returns error? {
-    CohereEmbeddingProvider cohere = check new (COHERE_EMBED_ENGLISH_V3, REGION, TEST_CREDS);
+    CohereEmbeddingProvider cohere = check new (COHERE_EMBED_ENGLISH_V3, TEST_CREDS, REGION);
     ai:Chunk imageChunk = {'type: "image", content: "not-text"};
     ai:Embedding[]|ai:Error batch = cohere->batchEmbed([imageChunk]);
     test:assertTrue(batch is ai:Error);
@@ -286,40 +286,40 @@ function testCohereVersionIsSelectedByModelId() {
 
 @test:Config {}
 function testTitanRejectsAnUnsupportedDimensions() {
-    TitanEmbeddingProvider|ai:Error provider = new (TITAN_EMBED_TEXT_V2, "us-east-1", TEST_CREDS, dimensions = 999);
+    TitanEmbeddingProvider|ai:Error provider = new (TITAN_EMBED_TEXT_V2, TEST_CREDS, "us-east-1", dimensions = 999);
     test:assertTrue(provider is ai:Error, "999 is not one of Titan V2's accepted widths");
 }
 
 @test:Config {}
 function testTitanV1RejectsDimensionsEntirely() {
-    TitanEmbeddingProvider|ai:Error provider = new (TITAN_EMBED_TEXT_V1, "us-east-1", TEST_CREDS, dimensions = 512);
+    TitanEmbeddingProvider|ai:Error provider = new (TITAN_EMBED_TEXT_V1, TEST_CREDS, "us-east-1", dimensions = 512);
     test:assertTrue(provider is ai:Error, "Titan V1 has no dimensions parameter");
 }
 
 @test:Config {}
 function testTitanAcceptsItsThreeSupportedWidths() returns error? {
     foreach int d in [256, 512, 1024] {
-        TitanEmbeddingProvider _ = check new (TITAN_EMBED_TEXT_V2, "us-east-1", TEST_CREDS, dimensions = d);
+        TitanEmbeddingProvider _ = check new (TITAN_EMBED_TEXT_V2, TEST_CREDS, "us-east-1", dimensions = d);
     }
 }
 
 @test:Config {}
 function testCohereV3RejectsDimensionsBecauseTheModelHasNone() {
-    CohereEmbeddingProvider|ai:Error provider = new (COHERE_EMBED_ENGLISH_V3, "us-east-1", TEST_CREDS,
+    CohereEmbeddingProvider|ai:Error provider = new (COHERE_EMBED_ENGLISH_V3, TEST_CREDS, "us-east-1",
             dimensions = 256);
     test:assertTrue(provider is ai:Error, "v3 has no output-size parameter — must not be silently dropped");
 }
 
 @test:Config {}
 function testCohereV4RejectsAnUnsupportedDimensions() {
-    CohereEmbeddingProvider|ai:Error provider = new (COHERE_EMBED_V4, "us-east-1", TEST_CREDS, dimensions = 999);
+    CohereEmbeddingProvider|ai:Error provider = new (COHERE_EMBED_V4, TEST_CREDS, "us-east-1", dimensions = 999);
     test:assertTrue(provider is ai:Error);
 }
 
 @test:Config {}
 function testCohereV4AcceptsItsSupportedWidths() returns error? {
     foreach int d in [256, 512, 1024, 1536] {
-        CohereEmbeddingProvider _ = check new (COHERE_EMBED_V4, "us-east-1", TEST_CREDS, dimensions = d);
+        CohereEmbeddingProvider _ = check new (COHERE_EMBED_V4, TEST_CREDS, "us-east-1", dimensions = d);
     }
 }
 
@@ -348,5 +348,5 @@ function testTitanV1GuardSurvivesACrisGeoPrefix() {
 function testCrisPrefixedCohereV4StillGetsTheV4Converter() returns error? {
     // End-to-end through construction: a geo-prefixed v4 id must accept `dimensions`
     // (v3 rejects it) and reach the wire as `output_dimension`.
-    CohereEmbeddingProvider _ = check new ("us.cohere.embed-v4:0", "us-east-1", TEST_CREDS, dimensions = 256);
+    CohereEmbeddingProvider _ = check new ("us.cohere.embed-v4:0", TEST_CREDS, "us-east-1", dimensions = 256);
 }

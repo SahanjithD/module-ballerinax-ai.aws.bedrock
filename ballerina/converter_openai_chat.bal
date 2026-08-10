@@ -21,14 +21,17 @@ import ballerina/ai;
 // so the hoisted system is re-added as the leading message.
 
 // Encodes an OpenAI Chat-Completions request body.
-isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
+    // UNVERIFIED: no first-party source states whether Bedrock's OpenAI-compatible
+    // dialects accept image content parts. Refuse rather than guess — see README.
+    check rejectImagesIn(messages, "the OpenAI chat-completions dialect", true);
     json[] wire = [];
-    if system is ai:ChatSystemMessage {
+    if system is string {
         // OpenAI's wire format DOES use a role:system message (not a top-level field).
-        wire.push({"role": "system", "content": contentToString(system.content)});
+        wire.push({"role": "system", "content": system});
     }
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         wire.push(openAIMessage(m));
     }
 
@@ -64,10 +67,10 @@ isolated function encodeOpenAIChat(ai:ChatSystemMessage? system, ai:ChatMessage[
     return body;
 }
 
-// Maps one `ai:ChatMessage` to an OpenAI Chat-Completions message.
-isolated function openAIMessage(ai:ChatMessage m) returns json {
-    if m is ai:ChatUserMessage {
-        return {"role": "user", "content": contentToString(m.content)};
+// Maps one resolved message to an OpenAI Chat-Completions message.
+isolated function openAIMessage(ResolvedMessage m) returns json {
+    if m is ResolvedUserMessage {
+        return {"role": "user", "content": openAIContentParts(m.parts)};
     }
     if m is ai:ChatAssistantMessage {
         map<json> msg = {"role": "assistant", "content": m.content};
@@ -85,11 +88,8 @@ isolated function openAIMessage(ai:ChatMessage m) returns json {
         }
         return msg;
     }
-    if m is ai:ChatFunctionMessage {
-        // ai:FUNCTION result → OpenAI role:tool message.
-        return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
-    }
-    return {"role": "user", "content": contentToString(m.content)};
+    // ai:FUNCTION result → OpenAI role:tool message.
+    return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
 }
 
 // Decodes an OpenAI Chat-Completions response. Always populates

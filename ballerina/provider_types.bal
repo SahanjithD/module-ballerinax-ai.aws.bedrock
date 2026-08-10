@@ -55,8 +55,6 @@ public type GuardrailConfig record {|
     string guardrailIdentifier;
     # `guardrailVersion`.
     string guardrailVersion;
-    # Optional `trace` mode (`enabled` | `disabled` | `enabled_full`).
-    string trace?;
 |};
 
 # Retry policy for the transport's throttling/warm-up backoff.
@@ -179,9 +177,14 @@ type DecodedResponse record {|
 
 # Encode: system is hoisted out of `messages` into the signature so
 # no converter can emit it as a `role: system` message. Module-private converter plumbing.
+#
+# Messages arrive ALREADY RESOLVED (`ResolvedMessage`): any `ai:Prompt` has been
+# flattened to `ContentPart`s and any image URL fetched, by `resolveMessages`. That
+# keeps every encoder pure — no network, no credentials — so the golden-file tests can
+# drive them directly. See the header of content_parts.bal.
 type RequestEncoder isolated function (
-        ai:ChatSystemMessage? system,
-        ai:ChatMessage[] messages,
+        string? system,
+        ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools,
         string? stop,
         InferenceParams params) returns json|ai:Error;

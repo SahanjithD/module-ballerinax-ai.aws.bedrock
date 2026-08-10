@@ -36,8 +36,10 @@ import ballerina/ai;
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
 
 // Encodes a DeepSeek text-completion request body.
-isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeDeepSeekInvoke(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
+    // Text-only by construction: the whole conversation is one prompt string.
+    check rejectImagesIn(messages, "the DeepSeek-R1 prompt dialect");
     if tools.length() > 0 {
         // Fail loudly rather than drop them: this dialect models no tools, so a
         // silent no-op would look like the model ignoring the tool.
@@ -80,17 +82,17 @@ isolated function encodeDeepSeekInvoke(ai:ChatSystemMessage? system, ai:ChatMess
 // DeepSeek's own chat template. It preserves the module invariant that system is
 // never emitted as a `role: system` message.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
-isolated function deepSeekPrompt(ai:ChatSystemMessage? system, ai:ChatMessage[] messages) returns string {
+isolated function deepSeekPrompt(string? system, ResolvedMessage[] messages) returns string {
     string prompt = "<｜begin▁of▁sentence｜>";
-    if system is ai:ChatSystemMessage {
-        prompt += contentToString(system.content);
+    if system is string {
+        prompt += system;
     }
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         if m is ai:ChatAssistantMessage {
             prompt += string `<｜Assistant｜>${m.content ?: ""}`;
             continue;
         }
-        string text = m is ai:ChatFunctionMessage ? (m.content ?: "") : contentToString(m.content);
+        string text = m is ai:ChatFunctionMessage ? (m.content ?: "") : partsText(m.parts);
         prompt += string `<｜User｜>${text}`;
     }
     // Hand the turn to the model, opening its reasoning channel as AWS's example does.
