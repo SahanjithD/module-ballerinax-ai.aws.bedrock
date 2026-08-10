@@ -14,39 +14,35 @@
 
 import ballerina/ai;
 import ballerina/http;
+import ballerinax/aws.auth;
 
 // ============================================================================
-// Credentials. A union; bearer (Bedrock API key) is first-class
-// on both endpoints (https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html).
+// Credentials. SigV4 sources come from `ballerinax/aws.auth`; the bearer
+// (Bedrock API key) is module-local because `auth:AuthConfig` is SigV4-only.
+// (https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html)
 // ============================================================================
-
-# Long-lived IAM access keys.
-public type StaticCredentials record {|
-    # AWS access key id.
-    string accessKeyId;
-    # AWS secret access key.
-    string secretAccessKey;
-|};
-
-# Temporary STS credentials — the required `sessionToken` distinguishes this from
-# `StaticCredentials` and is emitted as `X-Amz-Security-Token`.
-public type StsCredentials record {|
-    # AWS access key id.
-    string accessKeyId;
-    # AWS secret access key.
-    string secretAccessKey;
-    # STS session token, sent as `X-Amz-Security-Token`.
-    string sessionToken;
-|};
 
 # A Bedrock API key (bearer token) — first-class on both endpoints.
+#
+# Module-local rather than an `auth:AuthConfig` member: every `auth:AuthConfig`
+# variant resolves to `auth:Credentials` (access key + secret + optional session
+# token), which cannot carry an opaque key. A bearer bypasses SigV4 entirely.
 public type BearerToken record {|
-    # The Bedrock API key, sent as `Authorization: Bearer`.
+    # The Bedrock API key, sent as `Authorization: Bearer` — or as `x-api-key` on a
+    # Mantle Messages path, where the two headers are mutually exclusive.
     string apiKey;
 |};
 
 # The credential union accepted by every provider.
-public type BedrockCredentials StaticCredentials|StsCredentials|BearerToken;
+#
+# `auth:AuthConfig` covers static keys (`auth:StaticAuthConfig`, whose optional
+# `sessionToken` also carries temporary STS credentials), `auth:AssumeRoleConfig`
+# for cross-account, `auth:WebIdentityConfig` for EKS IRSA, plus SSO, named
+# profiles and `credential_process`. Its default member, `auth:DEFAULT_CREDENTIALS`,
+# walks the full chain — env vars, web identity, SSO, shared config, external
+# process, ECS container credentials, EC2 IMDSv2 — so nothing needs configuring on
+# EC2, ECS, EKS or Lambda. Expiry and refresh are handled by `auth:CredentialProvider`.
+public type BedrockCredentials auth:AuthConfig|BearerToken;
 
 // ============================================================================
 // Guardrails / retry.
@@ -86,6 +82,13 @@ public type CommonModelConfig record {|
     # Route selection: `AUTO` (default) runs the resolver; `CONVERSE`/`INVOKE`/
     # `MANTLE` force that family. The escape hatch — outranks every heuristic.
     ApiFamily apiFamily = AUTO;
+
+    # Use the FIPS 140-validated endpoint variant (`bedrock-runtime-fips.{region}...`),
+    # resolved from AWS SDK endpoint metadata. Required for FedRAMP and GovCloud.
+    # Changes only which HOST is dialled — never the SigV4 signing scope, the request
+    # path, or the body. Ignored when `serviceUrl` is a concrete URL, and rejected at
+    # construction on a MANTLE route (no `bedrock-mantle-fips` host exists).
+    boolean fips = false;
 
     // --- Inference ---
     # Provider-level stop sequences; a per-call `stop` overrides these.

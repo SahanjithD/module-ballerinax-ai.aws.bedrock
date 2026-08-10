@@ -21,7 +21,8 @@ cannot reach them at all. That is the reason this module exists.
 - Structured output (`generate()`) with native tool-forcing on Converse and InvokeModel
 - Text embeddings through the `ai:EmbeddingProvider` contract, with order-preserving batching
 - Automatic endpoint, dialect, and SigV4 signing-scope resolution per model id
-- Static keys, STS session credentials, and Bedrock API keys (bearer)
+- The full AWS credential chain (IMDSv2, ECS, EKS IRSA, SSO, profiles, `AssumeRole`) via
+  `ballerinax/aws.auth` — zero credential configuration on AWS compute — plus Bedrock API keys (bearer)
 - Cross-region inference (CRIS) profiles, provisioned and custom-deployment ARNs
 - Guardrail support on both `bedrock-runtime` inference APIs
 
@@ -54,7 +55,9 @@ Before using this module in your Ballerina application, complete the following:
 1. Create an [AWS account](https://portal.aws.amazon.com/billing/signup).
 2. [Request access to the Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
    you intend to use, in the region you intend to call.
-3. Obtain credentials — either IAM access keys (optionally with an STS session token) or a
+3. Arrange credentials. On EC2, ECS, EKS or Lambda there is **nothing to do** — the default
+   credential chain picks up the instance profile, task role, or IRSA service account. Elsewhere,
+   supply IAM access keys, an assumed role, a named profile, or a
    [Bedrock API key](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html).
 4. Attach the IAM permissions for the endpoint you will reach: `bedrock:InvokeModel` for
    Converse/InvokeModel, and **additionally `bedrock-mantle:CreateInference`** for Mantle routes. See
@@ -73,25 +76,52 @@ import ballerinax/ai.aws.bedrock;
 
 ### Step 2: Initialize the model provider
 
+Only the model is required. Region falls back to `AWS_REGION`/`AWS_DEFAULT_REGION`, and credentials
+to the AWS credential chain — so on AWS compute this is the whole thing:
+
 ```ballerina
-final ai:ModelProvider claude = check new bedrock:AnthropicModelProvider(
-    {accessKeyId, secretAccessKey}, bedrock:CLAUDE_SONNET_4_6, "us-east-1");
+final ai:ModelProvider claude = check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6);
 ```
 
-Every vendor follows the same shape — `(credentials, model, region, maxTokens?, temperature?, *Config)`:
+Every vendor follows the same shape — `(model, region?, credentials?, serviceUrl?, maxTokens?,
+temperature?, *Config)`:
 
 ```ballerina
-final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(creds, bedrock:NOVA_PRO, "us-east-1");
-final ai:ModelProvider gpt = check new bedrock:OpenAIModelProvider(creds, bedrock:GPT_5_4, "us-east-2");
-final ai:ModelProvider gemma = check new bedrock:GoogleModelProvider(creds, bedrock:GEMMA_3_27B_IT, "us-east-1");
+final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(bedrock:NOVA_PRO, "us-east-1");
+final ai:ModelProvider gpt = check new bedrock:OpenAIModelProvider(bedrock:GPT_5_4, "us-east-2");
+final ai:ModelProvider gemma = check new bedrock:GoogleModelProvider(bedrock:GEMMA_3_27B_IT, "us-east-1");
 ```
 
-Credentials are a union — static keys, STS, or a Bedrock API key:
+### Credentials
+
+`credentials` defaults to `auth:DEFAULT_CREDENTIALS`, which walks the standard AWS chain —
+environment variables, EKS IRSA web identity, IAM Identity Center (SSO), the shared config file,
+`credential_process`, ECS container credentials, then EC2 IMDSv2 — with expiry and refresh handled
+for you. **On EC2, ECS, EKS and Lambda you do not configure credentials at all.**
+
+To be explicit, pass any [`ballerinax/aws.auth`](https://central.ballerina.io/ballerinax/aws/latest)
+config, or a Bedrock API key:
 
 ```ballerina
-bedrock:BedrockCredentials staticKeys = {accessKeyId: "...", secretAccessKey: "..."};
-bedrock:BedrockCredentials sts = {accessKeyId: "...", secretAccessKey: "...", sessionToken: "..."};
-bedrock:BedrockCredentials apiKey = {apiKey: "..."};   // Bedrock API key (bearer)
+import ballerinax/aws.auth;
+
+// Long-lived keys (add `sessionToken` for temporary STS credentials).
+bedrock:BedrockCredentials keys = {accessKeyId: "...", secretAccessKey: "..."};
+
+// Cross-account: assume a role in another account.
+bedrock:BedrockCredentials role = {
+    roleArn: "arn:aws:iam::222222222222:role/IntegratorRole",
+    externalId: "optional-for-third-party-access"
+};
+
+// A named profile from ~/.aws/credentials.
+bedrock:BedrockCredentials profile = {profileName: "prod"};
+
+// A Bedrock API key (bearer) — bypasses SigV4 entirely.
+bedrock:BedrockCredentials apiKey = {apiKey: "..."};
+
+final ai:ModelProvider claude =
+    check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, "us-east-1", role);
 ```
 
 ### Step 3: Invoke chat completion
@@ -137,7 +167,7 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 
 ```ballerina
 final ai:EmbeddingProvider titan = check new bedrock:TitanEmbeddingProvider(
-    creds, bedrock:TITAN_EMBED_TEXT_V2, "us-east-1", dimensions = 1024);
+    bedrock:TITAN_EMBED_TEXT_V2, "us-east-1", creds, dimensions = 1024);
 
 ai:Embedding vector = check titan->embed({content: "hello", 'type: "text-chunk"});
 ```
@@ -165,11 +195,11 @@ for your queries**, constructing one provider per role:
 ```ballerina
 // Ingest side
 final ai:EmbeddingProvider ingest = check new bedrock:CohereEmbeddingProvider(
-    creds, bedrock:COHERE_EMBED_ENGLISH_V3, "us-east-1", inputType = bedrock:SEARCH_DOCUMENT);
+    bedrock:COHERE_EMBED_ENGLISH_V3, "us-east-1", creds, inputType = bedrock:SEARCH_DOCUMENT);
 
 // Query side
 final ai:EmbeddingProvider query = check new bedrock:CohereEmbeddingProvider(
-    creds, bedrock:COHERE_EMBED_ENGLISH_V3, "us-east-1", inputType = bedrock:SEARCH_QUERY);
+    bedrock:COHERE_EMBED_ENGLISH_V3, "us-east-1", creds, inputType = bedrock:SEARCH_QUERY);
 ```
 
 The `ai:EmbeddingProvider` contract carries no query-vs-document signal, which is exactly why this is
@@ -209,15 +239,15 @@ can never become a cryptic 403 from a different service with a different IAM nam
 
 ```ballerina
 // 1. Force a family (default is AUTO, which runs the resolver)
-check new bedrock:AnthropicModelProvider(creds, "anthropic.claude-haiku-4-5", "us-east-1",
+check new bedrock:AnthropicModelProvider("anthropic.claude-haiku-4-5", "us-east-1", creds,
         apiFamily = bedrock:MANTLE);
 
 // 2. Prefix override on the model string
-check new bedrock:AnthropicModelProvider(creds, "mantle/anthropic.claude-haiku-4-5", "us-east-1");
+check new bedrock:AnthropicModelProvider("mantle/anthropic.claude-haiku-4-5", "us-east-1", creds);
 
 // 3. Any raw model id string is always accepted — the model enums are
 //    conveniences, never a gate. A model AWS shipped after this release works today.
-check new bedrock:AmazonModelProvider(creds, "amazon.nova-something-new-v1:0", "us-east-1");
+check new bedrock:AmazonModelProvider("amazon.nova-something-new-v1:0", "us-east-1", creds);
 ```
 
 **A brand-new model needs no module release to reach Converse or Invoke** — pass its id as a string.
@@ -225,30 +255,41 @@ The one exception is a brand-new **Mantle** model: its request path is per-model
 derived from the id, so it needs a table entry. Forcing `apiFamily = MANTLE` on a model absent from
 `MANTLE_CAPABLE` returns a construction error rather than guessing a path.
 
-### Custom endpoints (`serviceUrl`)
+### FIPS endpoints
 
-`serviceUrl` defaults to the template `https://bedrock-{endpoint}.{region}.{domain}`, resolved per route:
-`{endpoint}` becomes `runtime` or `mantle`, and `{region}`/`{domain}` follow the resolved route (including
-`amazonaws.com.cn` in China and `api.aws` for Mantle).
+Set `fips` and the host comes from AWS SDK endpoint metadata — no host-name guessing:
 
 ```ballerina
-// FIPS — override one segment, let region and domain resolve themselves.
-// Verified to exist in both the commercial and GovCloud partitions.
-serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}"
-
-// PrivateLink VPC endpoint, or any gateway / mock server — fully literal
-serviceUrl = "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"
+check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, "us-gov-west-1",
+    config = {fips: true});
+// → https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com
 ```
 
-> FIPS applies to `bedrock-runtime` only. There is **no** `bedrock-mantle` FIPS host, and Bedrock does
-> **not** publish the `{service}.{region}.api.aws` dual-stack hosts that some AWS services do — the entries
-> in its endpoint rule set are generic boilerplate, and the names do not resolve. Confirm any non-default
-> host resolves before relying on it.
+> FIPS applies to `bedrock-runtime` only. There is **no** `bedrock-mantle` FIPS host, so `fips` on a
+> Mantle-resolved model is a **construction error** rather than a DNS failure at call time. Use
+> `apiFamily = bedrock:CONVERSE` (or `INVOKE`) for a FIPS-compliant call.
 
-It replaces the **origin only** — the route-derived request path is still appended. `region` stays
-required and remains the SigV4 signing scope: a VPCE, FIPS or gateway host still signs the route's own
-region and service. A placeholder that survives substitution (a typo like `{regoin}`) is a construction
-error, not a DNS failure.
+It changes only the host dialled. The SigV4 signing scope, the request path, and the body are untouched.
+
+### Custom endpoints (`serviceUrl`)
+
+`serviceUrl` defaults to the template `https://bedrock-{endpoint}.{region}.{domain}`. Left at its
+default, the origin is resolved entirely from AWS SDK endpoint metadata — every partition, the
+FIPS variants, and per-service exceptions, with a standard-pattern fallback for regions newer than the
+bundled metadata. That covers `amazonaws.com.cn` in China and `api.aws` for Mantle automatically.
+
+```ballerina
+// PrivateLink VPC endpoint, or any gateway / mock server — fully literal
+serviceUrl = "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"
+
+// Partial override: pin the service segment, let region and domain resolve
+serviceUrl = "https://bedrock-{endpoint}.{region}.{domain}"
+```
+
+It replaces the **origin only** — the route-derived request path is still appended — and it never
+changes the SigV4 scope: a VPCE or gateway host still signs the route's own region and service. A
+placeholder that survives substitution (a typo like `{regoin}`) is a construction error, not a DNS
+failure.
 
 ### Inference parameters
 
@@ -328,11 +369,48 @@ Construction errors are reserved for what AWS *cannot* diagnose for you:
 Everything AWS *can* tell you — a model unavailable in a region, a bad id — is left to Bedrock's own
 `ValidationException`, so this module never becomes a release dependency for AWS's catalogue.
 
+## Migrating from 0.9.x
+
+Credentials moved to [`ballerinax/aws.auth`](https://central.ballerina.io/ballerinax/aws/latest), which
+required reordering `init` — Ballerina requires required parameters before defaultable ones, and both
+`region` and `credentials` are now defaultable.
+
+**Argument order changed on all nine providers:**
+
+```ballerina
+// 0.9.x
+check new bedrock:AnthropicModelProvider(creds, bedrock:CLAUDE_SONNET_4_6, "us-east-1");
+
+// now — model first, credentials optional
+check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, "us-east-1", creds);
+```
+
+**`StaticCredentials` and `StsCredentials` were removed.** Both collapse into
+`auth:StaticAuthConfig`, whose `sessionToken` is optional. Inline record literals are unchanged —
+`{accessKeyId, secretAccessKey}` and `{accessKeyId, secretAccessKey, sessionToken}` both still work;
+only code that named those types needs editing. `BearerToken` is unchanged.
+
+**FIPS moved from a `serviceUrl` template to `config = {fips: true}`.** The old
+`"https://bedrock-{endpoint}-fips.{region}.{domain}"` still works, but the flag takes the host from SDK
+metadata and rejects FIPS-on-Mantle at construction.
+
+Nothing else moved. `serviceUrl`, `DEFAULT_SERVICE_URL` and all three placeholders behave as before,
+and SigV4 signing is unchanged — see [Not implemented](#not-implemented) for why signing stayed
+in-module.
+
 ## Not implemented
 
 Streaming (the codec seam exists, but no `decodeStream`), image/video/audio embeddings and
 `StartAsyncInvoke` (the `ai:Chunk` contract carries text), provisioned-throughput embedding ARNs,
 Meta/Llama, and Custom Model Import (`imported-model/` ARNs).
+
+**SigV4 signing is not delegated to `aws.auth`,** though credential resolution and endpoint metadata
+are. `auth:getSignedHeaders` builds its canonical URI by double-encoding while always treating `/` as a
+path separator, so for a model-id ARN it produces `...inference-profile/us.anthropic...` where AWS
+expects `...inference-profile%252Fus.anthropic...`. No input fixes this — a literal `/` survives both
+passes, and a pre-encoded `%2F` becomes `%25252F` — so every provisioned-model, inference-profile and
+custom-model-deployment ARN would fail with `SignatureDoesNotMatch`. Verified against `ballerinax/aws`
+1.0.1 on 2026-08-09.
 
 Deliberately **not** surfaced as config, because the `ai` contract has nowhere to return them:
 `additionalModelResponseFieldPaths` (its result would be dropped — `ai:ChatAssistantMessage` is

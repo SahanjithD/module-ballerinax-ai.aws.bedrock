@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerinax/aws.auth;
 import ballerina/jballerina.java;
 
 // MistralModelProvider — Converse (default) + Invoke-Mistral.
@@ -67,15 +68,20 @@ public isolated distinct client class MistralModelProvider {
     private final map<string> & readonly genHeaders;
     private final boolean supportsStructuredOutput;
 
-    # + credentials - Static keys, STS, or a Bedrock API key
     # + model - A Mistral id (bare, CRIS-prefixed, ARN, or route-prefixed)
-    # + region - Default region; an ARN `model`'s region segment overrides it. Also the
-    #            SigV4 signing scope, which a custom `serviceUrl` does NOT change
+    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
+    #            segment overrides it. Also the SigV4 signing scope, which a custom
+    #            `serviceUrl` does NOT change
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
+    #                 SSO, shared config, `credential_process`, ECS container credentials,
+    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
+    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
+    #                 source, or a `BearerToken` for a Bedrock API key
     # + serviceUrl - Endpoint origin. The default template resolves per route —
     #                `{endpoint}` becomes `runtime` or `mantle`, `{region}` and
     #                `{domain}` follow the resolved route. Pass a concrete URL for a
-    #                FIPS, dual-stack, PrivateLink or gateway host; the route-derived
-    #                request path is still appended
+    #                PrivateLink or gateway host; the route-derived request path is
+    #                still appended. Use `config.fips` for FIPS endpoints
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to omit the
     #                 field entirely and use the model's own default — several current
@@ -83,9 +89,9 @@ public isolated distinct client class MistralModelProvider {
     # + config - Routing overrides, guardrails, Converse passthrough
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Model"} MistralModel|string model,
-            @display {label: "Region"} string region,
+            @display {label: "Region"} string region = defaultRegion(),
+            @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
             @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
@@ -94,7 +100,7 @@ public isolated distinct client class MistralModelProvider {
         RouteConfig routeConfig = {apiFamily: config.apiFamily};
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
             check resolveSpine("MistralModelProvider", credentials, model, region, serviceUrl, routeConfig,
-                config?.httpConfig, config?.retryConfig, config?.guardrail);
+                config?.httpConfig, config?.retryConfig, config?.guardrail, config.fips);
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
@@ -106,7 +112,7 @@ public isolated distinct client class MistralModelProvider {
             [genFamily, genModelId, genConverter, genTransport, genHeaders] =
             check resolveGenerateSpine("MistralModelProvider", credentials, model, region, serviceUrl,
                 routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
-                route, converter, transport, chatHeaders);
+                route, converter, transport, chatHeaders, config.fips);
         self.genFamily = genFamily;
         self.genModelId = genModelId;
         self.genConverter = genConverter;

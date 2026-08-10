@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerinax/aws.auth;
 
 // TitanEmbeddingProvider.
 
@@ -33,26 +34,31 @@ public distinct isolated client class TitanEmbeddingProvider {
     private final BedrockTransport transport;
     private final readonly & EmbeddingParams params;
 
-    # + credentials - Static keys, STS, or a Bedrock API key
     # + model - A Titan embedding id, or a raw id for a model AWS ships before we update the enum
-    # + region - The AWS region; also the SigV4 signing scope, which a custom
+    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. Also the SigV4 signing scope, which a custom
     #            `serviceUrl` does NOT change
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
+    #                 SSO, shared config, `credential_process`, ECS container credentials,
+    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
+    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
+    #                 source, or a `BearerToken` for a Bedrock API key
     # + serviceUrl - Endpoint origin. The default template resolves to
-    #                `bedrock-runtime.{region}.{domain}` — embeddings are InvokeModel-only.
-    #                Pass a concrete URL for a FIPS, dual-stack or PrivateLink host
+    #                `bedrock-runtime.{region}.{domain}` from AWS SDK endpoint metadata —
+    #                embeddings are InvokeModel-only. Pass a concrete URL for a
+    #                PrivateLink or gateway host; use `config.fips` for FIPS
     # + config - `dimensions`, `normalize`, retry, and HTTP settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Model"} TitanEmbeddingModel|string model,
-            @display {label: "Region"} string region,
+            @display {label: "Region"} string region = defaultRegion(),
+            @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
             @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Embedding Configuration"} *TitanEmbeddingConfig config)
             returns ai:Error? {
         [string, BedrockTransport] [wireModelId, transport] =
             check resolveEmbeddingSpine("TitanEmbeddingProvider", credentials, model, region, serviceUrl,
                 TITAN_EMBED_PREFIX, TITAN_EMBED_TEXT_V2,
-                config?.httpConfig, config?.retryConfig);
+                config?.httpConfig, config?.retryConfig, config.fips);
 
         self.wireModelId = wireModelId;
         self.converter = TITAN_EMBED_CONVERTER;

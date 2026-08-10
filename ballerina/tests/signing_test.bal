@@ -34,7 +34,8 @@ final [string, string] FIXED_CLOCK = ["20260717T120000Z", "20260717"];
 
 function transportFor(string host, string path, string signingService, string region)
         returns BedrockTransport|error =>
-    new (TEST_CREDS_SIGNING, region, {baseUrl: string `https://${host}`, host, path, signingService});
+    new (TEST_CREDS_SIGNING, region,
+        {baseUrl: string `https://${host}`, host, path, signingService});
 
 // Kept separate from TEST_CREDS so the golden signatures never move if that changes.
 final BedrockCredentials TEST_CREDS_SIGNING = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};

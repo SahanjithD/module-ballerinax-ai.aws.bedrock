@@ -269,3 +269,55 @@ function testServiceUrlTrailingSlashIsTrimmed() returns error? {
     Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
     test:assertEquals((check buildEndpoint(r, "https://gw.corp/")).baseUrl, "https://gw.corp");
 }
+
+// ---------------------------------------------------------------------------
+// SDK endpoint metadata (ballerinax/aws). The default template now defers wholly
+// to `aws:resolveEndpoint`; the tests above already pin the three host shapes it
+// must keep producing. These pin the parts that are NEW.
+// ---------------------------------------------------------------------------
+
+@test:Config {}
+function testFipsResolvesToTheFipsHostFromSdkMetadata() returns error? {
+    // The host spelling is AWS's, not ours — that is the whole point of routing
+    // this through SDK metadata rather than string-building `-fips` ourselves.
+    Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
+    Endpoint ep = check buildEndpoint(r, DEFAULT_SERVICE_URL, true);
+    test:assertEquals(ep.baseUrl, "https://bedrock-runtime-fips.us-east-1.amazonaws.com");
+    test:assertEquals(ep.host, "bedrock-runtime-fips.us-east-1.amazonaws.com");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK,
+            "FIPS changes the HOST only — never the SigV4 signing scope");
+}
+
+@test:Config {}
+function testFipsIsRejectedOnAMantleRouteBeforeAnyIo() returns error? {
+    // There is no `bedrock-mantle-fips` host. Without this guard the SDK fallback
+    // would synthesise one and the failure would surface as an opaque DNS error.
+    Route mantle = check resolveRoute("openai.gpt-5.4", "us-east-1");
+    Endpoint|error ep = buildEndpoint(mantle, DEFAULT_SERVICE_URL, true);
+    test:assertTrue(ep is error);
+    if ep is error {
+        test:assertTrue(ep.message().includes("fips"), ep.message());
+        test:assertTrue(ep.message().includes("Mantle"), ep.message());
+    }
+}
+
+@test:Config {}
+function testMantleRequiresTheDualstackVariantToReachApiAws() returns error? {
+    // REGRESSION GUARD. `aws:resolveEndpoint("bedrock-mantle", region)` WITHOUT
+    // dualstack returns `bedrock-mantle.{region}.amazonaws.com`, which does not
+    // resolve — `api.aws` is modelled as the dualstack suffix. If someone drops
+    // the `dualstack: mantle` flag in resolveServiceUrl, every Mantle call breaks
+    // at DNS, and this is the only thing that would catch it.
+    Route mantle = check resolveRoute("openai.gpt-5.4", "us-east-1");
+    test:assertEquals((check buildEndpoint(mantle)).baseUrl,
+            "https://bedrock-mantle.us-east-1.api.aws");
+}
+
+@test:Config {}
+function testCustomTemplateStillTakesItsDomainFromSdkMetadata() returns error? {
+    // The `{domain}` placeholder is no longer a hardcoded suffix table; it is
+    // derived from the resolved host, so China still lands on `.com.cn`.
+    Route cn = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1");
+    Endpoint ep = check buildEndpoint(cn, "https://bedrock-{endpoint}.{region}.{domain}");
+    test:assertEquals(ep.baseUrl, "https://bedrock-runtime.cn-north-1.amazonaws.com.cn");
+}

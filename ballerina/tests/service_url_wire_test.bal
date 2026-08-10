@@ -66,7 +66,7 @@ function testCustomServiceUrlIsHonouredOnTheWire() returns error? {
     // Point the provider at the local server. `http://` (not https) also proves the
     // override is taken verbatim rather than forced onto a scheme.
     AnthropicModelProvider provider = check new (
-            TEST_CREDS, "anthropic.claude-sonnet-4-6", "us-east-1",
+            "anthropic.claude-sonnet-4-6", "us-east-1", TEST_CREDS,
             serviceUrl = string `http://localhost:${port}`);
     _ = check provider->chat([{role: "user", content: "hi"}]);
     check mockListener.gracefulStop();

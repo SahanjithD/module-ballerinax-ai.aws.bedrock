@@ -80,7 +80,7 @@ function testLiveConverseViaCrisInferenceProfileArn() returns error? {
     // The ARN exercises the SigV4 path-encoding split: its `:` and `/`
     // characters are single-encoded on the wire and double-encoded in the
     // signature. Get that wrong and this is a 403 — no golden test can catch it.
-    ai:ModelProvider provider = check new AnthropicModelProvider(creds, liveConverseModelArn, liveRegion);
+    ai:ModelProvider provider = check new AnthropicModelProvider(liveConverseModelArn, liveRegion, creds);
     ai:ChatAssistantMessage response = check provider->chat([
         {role: ai:SYSTEM, content: "Answer with exactly one word."},
         {role: ai:USER, content: "What colour is the sky on a clear day?"}
@@ -95,7 +95,7 @@ function testLiveConverseWithABareModelId() returns error? {
     if creds is () {
         return;
     }
-    ai:ModelProvider provider = check new AnthropicModelProvider(creds, CLAUDE_SONNET_4_6, liveRegion);
+    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, liveRegion, creds);
     ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0);
 }
@@ -116,7 +116,7 @@ function testLiveGenerateOnConverseReturnsTheRecord() returns error? {
     // Proves the forced-tool round trip end to end: the derived JSON schema is
     // accepted as a tool by AWS, and the model's tool-call arguments bind back
     // into the record.
-    AnthropicModelProvider provider = check new (creds, CLAUDE_SONNET_4_6, liveRegion);
+    AnthropicModelProvider provider = check new (CLAUDE_SONNET_4_6, liveRegion, creds);
     LiveFruit fruit = check provider->generate(`Name one common fruit and its colour.`);
     test:assertTrue(fruit.name.trim().length() > 0, "generate() returned an empty name");
     test:assertTrue(fruit.colour.trim().length() > 0, "generate() returned an empty colour");
@@ -133,7 +133,7 @@ function testLiveMantleChat() returns error? {
     // Mantle is a different host, a different wire dialect, a different SigV4
     // signing scope, and a different IAM namespace. Nothing about this path is
     // shared with Converse except the credentials.
-    ai:ModelProvider provider = check new OpenAIModelProvider(creds, GPT_5_4, liveRegion);
+    ai:ModelProvider provider = check new OpenAIModelProvider(GPT_5_4, liveRegion, creds);
     ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0);
 }
@@ -144,7 +144,7 @@ function testLiveMantleRefusesStructuredOutputButReturnsText() returns error? {
     if creds is () || !liveMantleEnabled {
         return;
     }
-    OpenAIModelProvider provider = check new (creds, GPT_5_4, liveRegion);
+    OpenAIModelProvider provider = check new (GPT_5_4, liveRegion, creds);
 
     // A typed target must be refused locally, without spending a call.
     LiveFruit|ai:Error typed = provider->generate(`Name one common fruit and its colour.`);
@@ -164,7 +164,7 @@ function testLiveTitanEmbedding() returns error? {
         return;
     }
     ai:EmbeddingProvider provider = check new TitanEmbeddingProvider(
-        creds, TITAN_EMBED_TEXT_V2, liveRegion, dimensions = 1024);
+        TITAN_EMBED_TEXT_V2, liveRegion, creds, dimensions = 1024);
     ai:Embedding embedding = check provider->embed({content: "hello world", 'type: "text-chunk"});
     test:assertTrue(embedding is float[], "Titan must return a dense vector");
     if embedding is float[] {
@@ -185,7 +185,7 @@ function testLiveCohereEmbeddingPreservesOrderAcrossWindows() returns error? {
         chunks.push({content: string `item number ${i}`, 'type: "text-chunk"});
     }
     ai:EmbeddingProvider provider = check new CohereEmbeddingProvider(
-        creds, COHERE_EMBED_ENGLISH_V3, liveRegion, inputType = SEARCH_DOCUMENT);
+        COHERE_EMBED_ENGLISH_V3, liveRegion, creds, inputType = SEARCH_DOCUMENT);
     ai:Embedding[] embeddings = check provider->batchEmbed(chunks);
     test:assertEquals(embeddings.length(), 100, "one embedding per input, in input order");
 
@@ -226,7 +226,7 @@ function testLiveFipsEndpointAcceptsASignedRequest() returns error? {
     // `serviceUrl` leaked into the SigV4 credential scope this returns 403
     // SignatureDoesNotMatch, which is exactly the regression worth paying for.
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            creds, "anthropic.claude-sonnet-4-6", liveRegion,
+            "anthropic.claude-sonnet-4-6", liveRegion, creds,
             serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}");
     ai:ChatAssistantMessage response = check provider->chat([
         {role: ai:USER, content: "Reply with the single word: ok"}
@@ -245,10 +245,11 @@ function testLiveDefaultAndFipsEndpointsAgree() returns error? {
     // host that resolves and authenticates but does not actually serve the model in
     // this region, which would otherwise surface only to the first customer to try it.
     ai:ModelProvider dflt = check new AnthropicModelProvider(
-            creds, "anthropic.claude-sonnet-4-6", liveRegion);
+            "anthropic.claude-sonnet-4-6", liveRegion, creds);
+    // `fips` rather than a hand-written template: the host now comes from AWS SDK
+    // endpoint metadata, so this also confirms the metadata's spelling is real.
     ai:ModelProvider fips = check new AnthropicModelProvider(
-            creds, "anthropic.claude-sonnet-4-6", liveRegion,
-            serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}");
+            "anthropic.claude-sonnet-4-6", liveRegion, creds, config = {fips: true});
     ai:ChatMessage[] prompt = [{role: ai:USER, content: "Reply with the single word: ok"}];
     ai:ChatAssistantMessage a = check dflt->chat(prompt);
     ai:ChatAssistantMessage b = check fips->chat(prompt);
@@ -275,7 +276,7 @@ function testLiveConverseEffortIsAccepted() returns error? {
     // ValidationException here, that choice is wrong: switch to folding
     // `output_config` into the passthrough instead.
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            creds, "anthropic.claude-sonnet-4-6", liveRegion,
+            "anthropic.claude-sonnet-4-6", liveRegion, creds,
             apiFamily = CONVERSE,
             thinking = {mode: ADAPTIVE},
             effort = EFFORT_LOW);
@@ -297,7 +298,7 @@ function testLiveAdaptiveThinkingOnTheMessagesDialect() returns error? {
     // so the knob was silently dropped on this exact route. It is now a top-level
     // body field, and `output_config.effort` rides beside it.
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            creds, "anthropic.claude-haiku-4-5", liveRegion,
+            "anthropic.claude-haiku-4-5", liveRegion, creds,
             apiFamily = MANTLE,
             thinking = {mode: ADAPTIVE},
             effort = EFFORT_LOW);
