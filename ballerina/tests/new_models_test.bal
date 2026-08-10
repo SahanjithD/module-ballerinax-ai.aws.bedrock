@@ -115,10 +115,10 @@ function testClaudeSonnet5AcceptsItsUsCrisProfile() returns error? {
 
 @test:Config {}
 function testNewModelProvidersConstruct() returns error? {
-    _ = check new AnthropicModelProvider(TEST_CREDS, CLAUDE_SONNET_5, REGION);
-    _ = check new MistralModelProvider(TEST_CREDS, MISTRAL_LARGE_3, REGION);
-    _ = check new QwenModelProvider(TEST_CREDS, QWEN3_CODER_480B, REGION);
-    _ = check new DeepSeekModelProvider(TEST_CREDS, DEEPSEEK_V3_2, REGION);
+    _ = check new AnthropicModelProvider(CLAUDE_SONNET_5, REGION, TEST_CREDS);
+    _ = check new MistralModelProvider(MISTRAL_LARGE_3, REGION, TEST_CREDS);
+    _ = check new QwenModelProvider(QWEN3_CODER_480B, REGION, TEST_CREDS);
+    _ = check new DeepSeekModelProvider(DEEPSEEK_V3_2, REGION, TEST_CREDS);
 }
 
 // ---- The sharp edge: generate() on an AUTO-routed Mantle model ----
@@ -148,7 +148,7 @@ function testTypedGenerateStillErrorsOnAMantleOnlyModel() returns error? {
     // GPT-5.4 is Mantle-ONLY (Responses; no Converse, no Invoke). There is no
     // bedrock-runtime route to fall back to, so the clean local error stays — far
     // better than sending the request to an endpoint that does not serve the model.
-    OpenAIModelProvider provider = check new (TEST_CREDS, "openai.gpt-5.4", REGION);
+    OpenAIModelProvider provider = check new ("openai.gpt-5.4", REGION, TEST_CREDS);
     FruitShape|ai:Error typed = provider->generate(`Name a fruit.`);
     test:assertTrue(typed is ai:Error, "a Mantle-only model cannot do structured output");
     if typed is ai:Error {

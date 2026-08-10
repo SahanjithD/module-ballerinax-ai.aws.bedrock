@@ -11,6 +11,15 @@ license = ["Apache-2.0"]
 [build-options]
 observabilityIncluded = true
 
+# Credential resolution (`aws.auth`) and endpoint metadata (`aws`). Signing stays
+# in-module: `auth:getSignedHeaders` always treats `/` as a path separator, so it
+# cannot produce the `%252F` a Bedrock model-id ARN needs in the canonical URI.
+# See the note above `signedHeaders` in transport.bal.
+[[dependency]]
+org = "ballerinax"
+name = "aws"
+version = "1.0.1"
+
 [platform.java21]
 graalvmCompatible = true
 

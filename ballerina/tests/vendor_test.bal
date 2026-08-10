@@ -158,12 +158,12 @@ function testAllVendorProvidersConstruct() returns error? {
     // Smoke test: every vendor facade constructs (no I/O). Note routing varies —
     // qwen3-32b and gpt-oss now resolve to Mantle under AUTO — but
     // construction succeeds on any route.
-    AmazonModelProvider amazon = check new (TEST_CREDS, "amazon.nova-pro-v1:0", REGION);
-    MistralModelProvider mistral = check new (TEST_CREDS, "mistral.mistral-large-2407-v1:0", REGION);
-    QwenModelProvider qwen = check new (TEST_CREDS, "qwen.qwen3-32b-v1:0", REGION);
-    GoogleModelProvider google = check new (TEST_CREDS, "google.gemma-3-27b-it", REGION);
-    DeepSeekModelProvider deepseek = check new (TEST_CREDS, "us.deepseek.r1-v1:0", REGION);
-    OpenAIModelProvider openai = check new (TEST_CREDS, "openai.gpt-oss-120b-1:0", REGION);
+    AmazonModelProvider amazon = check new ("amazon.nova-pro-v1:0", REGION, TEST_CREDS);
+    MistralModelProvider mistral = check new ("mistral.mistral-large-2407-v1:0", REGION, TEST_CREDS);
+    QwenModelProvider qwen = check new ("qwen.qwen3-32b-v1:0", REGION, TEST_CREDS);
+    GoogleModelProvider google = check new ("google.gemma-3-27b-it", REGION, TEST_CREDS);
+    DeepSeekModelProvider deepseek = check new ("us.deepseek.r1-v1:0", REGION, TEST_CREDS);
+    OpenAIModelProvider openai = check new ("openai.gpt-oss-120b-1:0", REGION, TEST_CREDS);
     test:assertTrue(amazon is AmazonModelProvider);
     test:assertTrue(mistral is MistralModelProvider);
     test:assertTrue(qwen is QwenModelProvider);
@@ -224,7 +224,7 @@ function testGemma4IsMantleOnlyNotConverse() returns error? {
 @test:Config {}
 function testGemma4CannotDoStructuredOutput() returns error? {
     // Falls out of being Mantle-only: no Converse route means no forced tools.
-    GoogleModelProvider provider = check new (TEST_CREDS, GEMMA_4_31B, REGION);
+    GoogleModelProvider provider = check new (GEMMA_4_31B, REGION, TEST_CREDS);
     LiveFruitShape|ai:Error result = provider->generate(`Name a fruit.`);
     test:assertTrue(result is ai:Error, "Gemma 4 must refuse a typed target (Mantle route)");
 }

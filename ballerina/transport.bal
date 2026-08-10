@@ -18,10 +18,19 @@ import ballerina/http;
 import ballerina/lang.array;
 import ballerina/lang.runtime;
 import ballerina/time;
+import ballerinax/aws.auth;
 
 // SigV4 transport — per-route signing, retry, error mapping.
-// SigV4 scaffolding (canonical request, signing-key derivation, base16 hex)
-// mirrors the ballerinax/aws.dynamodb connector's proven `utils.bal`.
+//
+// CREDENTIAL RESOLUTION is delegated to `auth:CredentialProvider` (the full AWS
+// chain, with expiry/refresh owned by the provider). SIGNING stays here, and must:
+// `auth:getSignedHeaders` builds its canonical URI by double-encoding while always
+// treating `/` as a structural separator, so for a model-id ARN it emits
+// `...inference-profile/us.anthropic...` where AWS expects
+// `...inference-profile%252Fus.anthropic...`. No input string fixes that — `/`
+// survives both passes unchanged and a pre-encoded `%2F` becomes `%25252F` — so
+// every provisioned-model / inference-profile / custom-model-deployment ARN would
+// fail with SignatureDoesNotMatch. Verified 2026-08-09 against aws 1.0.1.
 
 const APPLICATION_JSON = "application/json";
 const AWS4_HMAC_SHA256 = "AWS4-HMAC-SHA256";
@@ -30,7 +39,10 @@ const AWS4_REQUEST = "aws4_request";
 // Wraps SigV4 signing + an HTTP client + retry/error mapping for one resolved
 // route. Resolve-once: host, path, and signing scope are fixed.
 isolated client class BedrockTransport {
-    private final readonly & BedrockCredentials credentials;
+    // Exactly one of these is set. A bearer bypasses SigV4, so it never reaches
+    // `CredentialProvider`; every other credential source resolves through it.
+    private final auth:CredentialProvider? credProvider;
+    private final readonly & BearerToken? bearer;
     private final string region;
     private final string signingService;
     private final string host;
@@ -43,7 +55,15 @@ isolated client class BedrockTransport {
 
     isolated function init(BedrockCredentials credentials, string region, Endpoint ep,
             http:ClientConfiguration? httpConfig = (), RetryConfig? retryConfig = ()) returns error? {
-        self.credentials = credentials.cloneReadOnly();
+        if credentials is BearerToken {
+            self.bearer = credentials.cloneReadOnly();
+            self.credProvider = ();
+        } else {
+            self.bearer = ();
+            // Resolves eagerly, so a bad profile/role surfaces at construction rather
+            // than on the first chat() call.
+            self.credProvider = check new (credentials);
+        }
         self.region = region;
         // Signing name comes from the route and only from the route: `bedrock` for
         // Converse/Invoke, `bedrock-mantle` for Mantle. A custom `serviceUrl` (VPCE,
@@ -187,10 +207,10 @@ isolated client class BedrockTransport {
         foreach [string, string] [k, v] in extraHeaders.entries() {
             headers[k] = v;
         }
-        BedrockCredentials creds = self.credentials;
+        BearerToken? bearerCreds = self.bearer;
 
         // Bedrock API key (bearer) — first-class on both endpoints: skip SigV4.
-        if creds is BearerToken {
+        if bearerCreds is BearerToken {
             // Anthropic's Mantle surface REJECTS a request carrying BOTH `Authorization`
             // and `x-api-key` (verified live 2026-08-03: either header alone -> 200, both
             // -> 401 `authentication_error: "request must not include both 'authorization'
@@ -200,13 +220,18 @@ isolated client class BedrockTransport {
             // a routeOverrides entry using a different casing (e.g. `X-Api-Key`) cannot
             // slip past and resurrect the collision.
             if !hasApiKeyHeader(headers) {
-                headers["Authorization"] = string `Bearer ${creds.apiKey}`;
+                headers["Authorization"] = string `Bearer ${bearerCreds.apiKey}`;
             }
             headers["Content-Type"] = APPLICATION_JSON;
             return headers;
         }
 
-        // ---- SigV4 (static / STS) ----
+        // ---- SigV4 ----
+        // Credentials come from the chain on EVERY request, not once at construction:
+        // IMDS/ECS/IRSA/AssumeRole credentials expire, and the provider refreshes them
+        // behind its own lock. Nothing mutable lives in this class.
+        auth:CredentialProvider provider = check self.credProvider.ensureType();
+        auth:Credentials creds = check provider.getCredentials();
         [string, string] [amzDate, dateStamp] = fixedClock ?: check amzTimestamps();
         // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule):
         // the server re-encodes the received (single-encoded) path once to match.
@@ -215,7 +240,9 @@ isolated client class BedrockTransport {
 
         string accessKey = creds.accessKeyId;
         string secretKey = creds.secretAccessKey;
-        string? sessionToken = creds is StsCredentials ? creds.sessionToken : ();
+        // Present for every temporary-credential source (STS, AssumeRole, IRSA, IMDS,
+        // SSO), absent for long-lived access keys.
+        string? sessionToken = creds?.sessionToken;
 
         // Sign EVERY header we send, sorted by lowercased name.
         map<string> toSign = {"content-type": APPLICATION_JSON, "host": self.host, "x-amz-date": amzDate};

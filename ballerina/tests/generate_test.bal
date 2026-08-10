@@ -191,7 +191,8 @@ function testExtractJsonSignalsAbsenceWithAnError() {
 
 function mantleTransport() returns BedrockTransport|error =>
     new (TEST_CREDS, "us-east-1",
-        {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`, host: "bedrock-mantle.us-east-1.api.aws", path: "/openai/v1/responses",
+        {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`,
+            host: "bedrock-mantle.us-east-1.api.aws", path: "/openai/v1/responses",
             signingService: SIGNING_BEDROCK_MANTLE});
 
 @test:Config {}

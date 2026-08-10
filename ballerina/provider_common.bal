@@ -15,6 +15,7 @@
 import ballerina/ai;
 import ballerina/ai.observe;
 import ballerina/http;
+import ballerina/os;
 
 // Shared facade machinery: every vendor provider is a thin class
 // over these. `runChat` is the whole `chat()` body; `buildInferenceParams`
@@ -22,6 +23,16 @@ import ballerina/http;
 // route-specific headers common to all vendors. Only the model enum, config
 // extras (folded into `additionalModelRequestFields`), and Invoke-converter choice
 // differ per vendor.
+
+// The default `region` for every provider. `ballerinax/aws` does not resolve a
+// region — both `CredentialProvider` and `resolveEndpoint` take it as an argument —
+// so mirror the SDK's own environment lookup here. Returns "" when neither is set,
+// which `resolveSpine` turns into a named construction error UNLESS the model is an
+// ARN carrying its own region.
+isolated function defaultRegion() returns string {
+    string region = os:getEnv("AWS_REGION");
+    return region != "" ? region : os:getEnv("AWS_DEFAULT_REGION");
+}
 
 // The full `chat()` implementation, shared by every vendor facade.
 // Opens an observe span and closes it on every path.
@@ -191,6 +202,18 @@ isolated function addMantleApiKeyHeader(map<string> headers, Route route, Bedroc
     }
 }
 
+// No-region construction guard, shared by every facade. Fires only when the region
+// is absent from BOTH the argument (or the environment behind `defaultRegion`) and
+// the model ARN — an empty region would otherwise build the host
+// `bedrock-runtime..amazonaws.com` and surface as an opaque DNS failure.
+isolated function guardRegion(string region) returns ai:Error? {
+    if region == "" {
+        return error ai:Error("No AWS region: pass 'region', set AWS_REGION (or " +
+            "AWS_DEFAULT_REGION) in the environment, or use a model ARN that carries " +
+            "its own region.");
+    }
+}
+
 // Guardrail-on-Mantle construction guard, shared by every facade.
 isolated function guardMantleGuardrail(ApiFamily family, GuardrailConfig? guardrail) returns ai:Error? {
     if family == MANTLE && guardrail is GuardrailConfig {
@@ -205,12 +228,17 @@ isolated function guardMantleGuardrail(ApiFamily family, GuardrailConfig? guardr
 // converter, and the transport.
 isolated function resolveSpine(string providerName, BedrockCredentials credentials, string model,
         string region, string serviceUrl, RouteConfig routeConfig,
-        http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail)
+        http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail,
+        boolean fips = false)
         returns [Route, readonly & ModelConverter, BedrockTransport]|ai:Error {
     do {
         Route route = check resolveRoute(model, region, routeConfig); // L1, pure
+        // Validate the RESOLVED region, not the argument: an ARN's region segment
+        // legitimately supplies it, so an ARN model with no `region` and no
+        // AWS_REGION in the environment is well-formed and must not be rejected.
+        check guardRegion(route.region);
         check guardMantleGuardrail(route.family, guardrail);
-        Endpoint ep = check buildEndpoint(route, serviceUrl);         // L2
+        Endpoint ep = check buildEndpoint(route, serviceUrl, fips);   // L2
         readonly & ModelConverter converter = check selectConverter(route);
         BedrockTransport transport =
             check new (credentials, route.region, ep, httpConfig, retryConfig);
@@ -259,7 +287,7 @@ isolated function resolveGenerateSpine(string providerName, BedrockCredentials c
         string model, string region, string serviceUrl, RouteConfig routeConfig,
         http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail,
         Route chatRoute, readonly & ModelConverter chatConverter, BedrockTransport chatTransport,
-        map<string> chatHeaders)
+        map<string> chatHeaders, boolean fips = false)
         returns [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]|ai:Error {
     MantleEntry? entry = chatRoute.mantleEntry;
     boolean fallbackApplies = chatRoute.family == MANTLE
@@ -271,7 +299,7 @@ isolated function resolveGenerateSpine(string providerName, BedrockCredentials c
     RouteConfig converseConfig = {apiFamily: CONVERSE};
     [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
         check resolveSpine(providerName, credentials, model, region, serviceUrl, converseConfig,
-            httpConfig, retryConfig, guardrail);
+            httpConfig, retryConfig, guardrail, fips);
     return [route.family, route.effectiveModelId, converter, transport,
         commonExtraHeaders(route, guardrail, credentials)];
 }
