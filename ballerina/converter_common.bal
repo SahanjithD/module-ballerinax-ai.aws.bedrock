@@ -17,45 +17,6 @@ import ballerina/ai;
 // Shared converter helpers. Converters stay pure and span-free so the
 // golden-file tests are trivial.
 
-// Splits the system message out of a message list. `system` is a
-// top-level field on every route, NEVER a `role: system` message. Multiple system
-// messages are concatenated. Returns [hoisted-system?, remaining-messages].
-isolated function hoistSystem(ai:ChatMessage[] messages) returns [ai:ChatSystemMessage?, ai:ChatMessage[]] {
-    string[] systemParts = [];
-    ai:ChatMessage[] rest = [];
-    foreach ai:ChatMessage m in messages {
-        if m is ai:ChatSystemMessage {
-            systemParts.push(contentToString(m.content));
-        } else {
-            rest.push(m);
-        }
-    }
-    if systemParts.length() == 0 {
-        return [(), rest];
-    }
-    ai:ChatSystemMessage system = {role: ai:SYSTEM, content: string:'join("\n\n", ...systemParts)};
-    return [system, rest];
-}
-
-// Renders message content (`string` or an `ai:Prompt` raw template) to text.
-isolated function contentToString(string|ai:Prompt content) returns string {
-    if content is string {
-        return content;
-    }
-    string[] & readonly strs = content.strings;
-    anydata[] insertions = content.insertions;
-    string result = "";
-    int i = 0;
-    while i < strs.length() {
-        result += strs[i];
-        if i < insertions.length() {
-            result += insertions[i].toString();
-        }
-        i += 1;
-    }
-    return result;
-}
-
 // Maps an `ai:ChatCompletionFunctions` tool to its JSON-schema parameters, reused
 // by tool-forcing. Falls back to an empty object schema.
 isolated function toolParameters(ai:ChatCompletionFunctions tool) returns map<json> {

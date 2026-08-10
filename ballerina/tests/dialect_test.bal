@@ -58,7 +58,7 @@ function testResponsesRejectsAPerCallStopRatherThanDroppingIt() {
     // the request is impossible, and silently ignoring it lets the model run past
     // the caller's stop text and bill for the overrun.
     // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py
-    json|ai:Error encoded = encodeResponses((), [{role: ai:USER, content: "hi"}], [], "STOP",
+    json|ai:Error encoded = encodeResponses((), [userText("hi")], [], "STOP",
             {temperature: 0.5, maxTokens: 100});
     test:assertTrue(encoded is ai:Error, "a stop sequence must not be silently dropped");
     if encoded is ai:Error {
@@ -70,7 +70,7 @@ function testResponsesRejectsAPerCallStopRatherThanDroppingIt() {
 @test:Config {}
 function testResponsesRejectsConfiguredStopSequencesToo() {
     // The configured form must not slip through the per-call check.
-    json|ai:Error encoded = encodeResponses((), [{role: ai:USER, content: "hi"}], [], (),
+    json|ai:Error encoded = encodeResponses((), [userText("hi")], [], (),
             {temperature: 0.5, maxTokens: 100, stopSequences: ["END"]});
     test:assertTrue(encoded is ai:Error, "configured stopSequences must be refused as well");
 }
@@ -78,7 +78,7 @@ function testResponsesRejectsConfiguredStopSequencesToo() {
 @test:Config {}
 function testResponsesEncodesNormallyWithNoStop() returns error? {
     // The guard must not fire on the ordinary path.
-    map<json> body = check encodeResponses((), [{role: ai:USER, content: "hi"}], [], (),
+    map<json> body = check encodeResponses((), [userText("hi")], [], (),
             {temperature: 0.5, maxTokens: 100}).ensureType();
     test:assertTrue(body.hasKey("input"));
     test:assertFalse(body.hasKey("stop"), "no stop field exists in this dialect");
@@ -91,8 +91,8 @@ function testResponsesReplaysAssistantToolCallAsFunctionCallItem() returns error
     // the following `function_call_output` with "No tool call found for function call
     // output with call_id …" and the agent loop stalled. The call must be replayed as a
     // `function_call` item carrying its `call_id`, so a later output can pair to it.
-    ai:ChatMessage[] messages = [
-        {role: ai:USER, content: "What is 3607 multiplied by 4021?"},
+    ResolvedMessage[] messages = [
+        {parts: [{text: "What is 3607 multiplied by 4021?"}]},
         {role: ai:ASSISTANT, content: (),
             toolCalls: [{name: "multiply", arguments: {a: 3607, b: 4021}, id: "call_abc"}]}
     ];

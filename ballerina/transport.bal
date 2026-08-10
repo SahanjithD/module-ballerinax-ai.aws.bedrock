@@ -162,8 +162,14 @@ isolated client class BedrockTransport {
                 return error RetryableError(string `Bedrock transient error (HTTP ${status}): ${detail}`);
             }
             400 => {
-                return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}. ` +
-                    string `The model may not support this route; try 'apiFamily = INVOKE' (or CONVERSE).`);
+                // Only append the routing hint when `detail` is itself the useless
+                // "status 400" fallback — when Bedrock sent a specific reason (e.g.
+                // "Model does not support image modality"), tacking on a generic
+                // routing guess is redundant at best and misleading at worst.
+                string hint = detail.startsWith("status ")
+                    ? " The model may not support this route; try 'apiFamily = INVOKE' (or CONVERSE)."
+                    : "";
+                return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}.${hint}`);
             }
             403 => {
                 string hint = mantle
@@ -185,14 +191,36 @@ isolated client class BedrockTransport {
         }
     }
 
-    // Best-effort extraction of Bedrock's error message from the response body.
+    // Best-effort extraction of the error message from the response body.
+    //
+    // THREE SHAPES, because this transport spans three gateways. Bedrock's own APIs
+    // use a top-level `message`; the OpenAI-compatible Mantle paths use the OpenAI
+    // convention `{"error": {"message": ..., "code": ...}}`; and some upstream errors
+    // arrive with `error` as a bare string. Checking only the first meant every
+    // Mantle-route 400 degraded to the useless "status 400" — which is exactly what a
+    // caller sending an image to a model that does not accept one used to see.
     isolated function errorDetail(http:Response resp) returns string {
         json|error j = resp.getJsonPayload();
-        if j is map<json> {
-            json? msg = j["message"] ?: j["Message"];
-            if msg is string {
-                return msg;
+        if j !is map<json> {
+            return string `status ${resp.statusCode}`;
+        }
+        json? msg = j["message"] ?: j["Message"];
+        if msg is string && msg.trim() != "" {
+            return msg;
+        }
+        json? err = j["error"];
+        if err is map<json> {
+            json? nested = err["message"];
+            if nested is string && nested.trim() != "" {
+                // Keep the provider's own code when it sent one — `validation_error`
+                // vs `invalid_request_error` is the difference between "your body is
+                // wrong" and "this model cannot do that".
+                json? code = err["code"] ?: err["type"];
+                return code is string ? string `${nested} (${code})` : nested;
             }
+        }
+        if err is string && err.trim() != "" {
+            return err;
         }
         return string `status ${resp.statusCode}`;
     }

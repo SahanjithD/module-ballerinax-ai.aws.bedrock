@@ -41,11 +41,15 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
         readonly & ModelConverter converter, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
         typedesc<anydata> td) returns anydata|ai:Error {
+    // A `string` target is plain text on EVERY route — there is nothing to structure.
+    // Checked FIRST, before any route capability: forcing a tool to obtain a string
+    // built a tool schema of `{"type": "string"}`, and Converse requires
+    // `toolSpec.inputSchema.json.type` to be `object`, so a string-target generate()
+    // on Converse died with a ValidationException. Verified live 2026-08-10 on Nova.
+    if td is typedesc<string> {
+        return plainTextResponse(family, converter, transport, wireModelId, extraHeaders, params, prompt);
+    }
     if !supportsStructuredOutput {
-        if td is typedesc<string> {
-            // No structured output on Mantle, but a plain-text generation is fine.
-            return plainTextResponse(family, converter, transport, wireModelId, extraHeaders, params, prompt);
-        }
         return error ai:LlmInvalidGenerationError(
             string `Structured output is not supported on the bedrock-mantle route for model ` +
             string `'${wireModelId}'; the target type must be 'string'. Use a Converse/Invoke model ` +
@@ -53,10 +57,8 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
     }
     if converter.toolChoice == NO_TOOL_CHOICE {
         // A dialect with no tool-calling at all (Mistral text completion). Same
-        // shape as the Mantle guard, and reversible the same way.
-        if td is typedesc<string> {
-            return plainTextResponse(family, converter, transport, wireModelId, extraHeaders, params, prompt);
-        }
+        // shape as the Mantle guard, and reversible the same way. The `string` case
+        // is already handled above, so only a typed target reaches here.
         return error ai:LlmInvalidGenerationError(
             string `Structured output is not supported for model '${wireModelId}': its InvokeModel ` +
             string `dialect (Mistral text completion) has no tool-calling, so the target type must be ` +
@@ -82,7 +84,9 @@ isolated function schemaFor(typedesc<anydata> td) returns map<json>|ai:Error {
 isolated function plainTextResponse(ApiFamily family, readonly & ModelConverter converter, BedrockTransport transport,
         string wireModelId, map<string> & readonly extraHeaders, readonly & InferenceParams params,
         ai:Prompt prompt) returns anydata|ai:Error {
-    ai:ChatUserMessage userMsg = {role: ai:USER, content: prompt};
+    // Resolve the prompt the same way chat() does — a generate() prompt can carry an
+    // image too, and it must reach the dialect (or be refused) identically.
+    ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
     RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode((), [userMsg], [], (), params);
     if encoded is ai:Error {
@@ -116,7 +120,7 @@ isolated function generateByToolForcing(readonly & ModelConverter converter,
         description: "Return the result strictly as structured arguments in the required schema.",
         parameters: check schemaFor(td)
     };
-    ai:ChatUserMessage userMsg = {role: ai:USER, content: prompt};
+    ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
     RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode((), [userMsg], [tool], (), params);
     if encoded is ai:Error {

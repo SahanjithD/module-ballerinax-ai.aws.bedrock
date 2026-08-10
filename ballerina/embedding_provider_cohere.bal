@@ -43,23 +43,28 @@ public distinct isolated client class CohereEmbeddingProvider {
     private final readonly & EmbeddingParams params;
 
     # + model - A Cohere Embed id, or a raw id for a model AWS ships before we update the enum
-    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. Also the SigV4 signing scope, which a custom
-    #            `serviceUrl` does NOT change
     # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
     #                 SSO, shared config, `credential_process`, ECS container credentials,
     #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
     #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
     #                 source, or a `BearerToken` for a Bedrock API key
-    # + serviceUrl - Endpoint origin. The default template resolves to
-    #                `bedrock-runtime.{region}.{domain}` from AWS SDK endpoint metadata —
-    #                embeddings are InvokeModel-only. Pass a concrete URL for a
-    #                PrivateLink or gateway host; use `config.fips` for FIPS
+    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. Also the SigV4 signing scope, which a custom
+    #            `serviceUrl` does NOT change
+    # + serviceUrl - Endpoint origin. Embeddings are InvokeModel-only, so the default
+    #                template resolves to `bedrock-runtime.{region}.{domain}` from AWS
+    #                SDK endpoint metadata. Override it only for a host AWS cannot
+    #                derive: `https://vpce-0abc123.bedrock-runtime.us-east-1.vpce.amazonaws.com`
+    #                (PrivateLink / VPC endpoint), `https://bedrock-gw.internal.corp`
+    #                (an egress gateway), or `http://localhost:4566` (LocalStack or a
+    #                mock). The `{endpoint}`, `{region}` and `{domain}` placeholders are
+    #                substituted. It replaces the ORIGIN only and never changes the
+    #                SigV4 signing scope. For FIPS use `config.fips`
     # + config - `inputType` (**see the class docs**), `truncate`, `dimensions`, retry, HTTP settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} CohereEmbeddingModel|string model,
-            @display {label: "Region"} string region = defaultRegion(),
             @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
+            @display {label: "Region"} string region = defaultRegion(),
             @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
             @display {label: "Embedding Configuration"} *CohereEmbeddingConfig config)
             returns ai:Error? {

@@ -19,10 +19,10 @@ import ballerina/ai;
 
 // Encodes a Converse request body. `system` is the top-level `system` field, never
 // a message. Forwards the passthrough verbatim.
-isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeConverse(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] wire = [];
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         wire.push(converseMessage(m));
     }
 
@@ -39,8 +39,8 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
 
     map<json> body = {"messages": wire, "inferenceConfig": inferenceConfig};
 
-    if system is ai:ChatSystemMessage {
-        body["system"] = [{"text": contentToString(system.content)}];
+    if system is string {
+        body["system"] = [{"text": system}];
     }
     if tools.length() > 0 {
         json[] toolSpecs = [];
@@ -99,20 +99,16 @@ isolated function encodeConverse(ai:ChatSystemMessage? system, ai:ChatMessage[] 
             "guardrailIdentifier": guardrail.guardrailIdentifier,
             "guardrailVersion": guardrail.guardrailVersion
         };
-        string? trace = guardrail.trace;
-        if trace is string {
-            // Converse guardrailConfig.trace is lowercase (`enabled`|`disabled`).
-            gc["trace"] = trace.toLowerAscii();
-        }
         body["guardrailConfig"] = gc;
     }
     return body;
 }
 
-// Maps one `ai:ChatMessage` to a Converse content block.
-isolated function converseMessage(ai:ChatMessage m) returns json {
-    if m is ai:ChatUserMessage {
-        return {"role": "user", "content": [{"text": contentToString(m.content)}]};
+// Maps one resolved message to a Converse content block. Images ride the native
+// `image` ContentBlock member — verified against the Converse API reference.
+isolated function converseMessage(ResolvedMessage m) returns json {
+    if m is ResolvedUserMessage {
+        return {"role": "user", "content": converseContentBlocks(m.parts)};
     }
     if m is ai:ChatAssistantMessage {
         json[] blocks = [];
@@ -128,15 +124,11 @@ isolated function converseMessage(ai:ChatMessage m) returns json {
         }
         return {"role": "assistant", "content": blocks};
     }
-    if m is ai:ChatFunctionMessage {
-        // ai:FUNCTION result → Converse toolResult block.
-        return {
-            "role": "user",
-            "content": [{"toolResult": {"toolUseId": m.id ?: m.name, "content": [{"text": m.content ?: ""}]}}]
-        };
-    }
-    // Defensive: a hoisted-away system message.
-    return {"role": "user", "content": [{"text": contentToString(m.content)}]};
+    // ai:FUNCTION result → Converse toolResult block.
+    return {
+        "role": "user",
+        "content": [{"toolResult": {"toolUseId": m.id ?: m.name, "content": [{"text": m.content ?: ""}]}}]
+    };
 }
 
 // Decodes a Converse response. Always populates `usage` and

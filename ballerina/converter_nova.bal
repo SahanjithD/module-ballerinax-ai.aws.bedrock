@@ -21,10 +21,10 @@ import ballerina/ai;
 
 // Encodes a Nova InvokeModel request body. Reuses Converse message/
 // tool mapping and prepends the mandatory `schemaVersion`.
-isolated function encodeNovaInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeNovaInvoke(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] wire = [];
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         wire.push(converseMessage(m)); // Nova uses the Converse content-block shape
     }
 
@@ -40,8 +40,8 @@ isolated function encodeNovaInvoke(ai:ChatSystemMessage? system, ai:ChatMessage[
 
     // mandatory schema version; validation fails without it.
     map<json> body = {"schemaVersion": "messages-v1", "messages": wire, "inferenceConfig": inferenceConfig};
-    if system is ai:ChatSystemMessage {
-        body["system"] = [{"text": contentToString(system.content)}]; // top-level, never a message
+    if system is string {
+        body["system"] = [{"text": system}]; // top-level, never a message
     }
     if tools.length() > 0 {
         json[] toolSpecs = [];

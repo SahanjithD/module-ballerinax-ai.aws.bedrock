@@ -23,7 +23,7 @@ final BedrockCredentials TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey:
 function testGuardrailOnMantleRouteFailsAtConstruction() {
     // guardrail on a Mantle route → error naming ApplyGuardrail.
     AnthropicModelProvider|ai:Error provider = new (
-        "anthropic.claude-mythos-preview", "us-east-1", TEST_CREDS,
+        "anthropic.claude-mythos-preview", TEST_CREDS, "us-east-1",
         guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"});
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -35,7 +35,7 @@ function testGuardrailOnMantleRouteFailsAtConstruction() {
 function testMantleOnChinaPartitionFailsAtConstruction() {
     // Mantle 'api.aws' host is not partition-templated.
     AnthropicModelProvider|ai:Error provider = new (
-        "anthropic.claude-mythos-preview", "cn-north-1", TEST_CREDS);
+        "anthropic.claude-mythos-preview", TEST_CREDS, "cn-north-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().toLowerAscii().includes("partition") ||
@@ -47,7 +47,7 @@ function testMantleOnChinaPartitionFailsAtConstruction() {
 function testImportedModelArnIsRefusedAtConstruction() {
     // Custom Model Import is out of scope — refused by name, before any I/O.
     AnthropicModelProvider|ai:Error provider = new (
-        "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123", "us-east-1", TEST_CREDS);
+        "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123", TEST_CREDS, "us-east-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("imported-model"), provider.message());
@@ -63,14 +63,14 @@ function testConverseHappyPathConstructsWithoutError() returns error? {
     Route route = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
     test:assertEquals(route.family, CONVERSE, "test must exercise the Converse route");
 
-    AnthropicModelProvider provider = check new ("anthropic.claude-sonnet-4-6", "us-east-1", TEST_CREDS);
+    AnthropicModelProvider provider = check new ("anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1");
     test:assertTrue(provider is AnthropicModelProvider);
 }
 
 @test:Config {}
 function testBearerTokenCredentialsConstruct() returns error? {
     BedrockCredentials bearer = {apiKey: "bedrock-api-key"};
-    AnthropicModelProvider provider = check new ("anthropic.claude-sonnet-4-6", "us-east-1", bearer);
+    AnthropicModelProvider provider = check new ("anthropic.claude-sonnet-4-6", bearer, "us-east-1");
     test:assertTrue(provider is AnthropicModelProvider);
 }
 
@@ -83,7 +83,7 @@ function testBearerTokenCredentialsConstruct() returns error? {
 @test:Config {}
 function testMissingRegionFailsAtConstructionWithANamedError() returns error? {
     AnthropicModelProvider|error provider =
-        new ("anthropic.claude-sonnet-4-6", "", TEST_CREDS);
+        new ("anthropic.claude-sonnet-4-6", TEST_CREDS, "");
     test:assertTrue(provider is error);
     if provider is error {
         test:assertTrue(provider.message().includes("AWS_REGION"), provider.message());
@@ -97,6 +97,6 @@ function testAnArnCarryingItsOwnRegionNeedsNoRegionArgument() returns error? {
     // AWS_REGION in the environment.
     AnthropicModelProvider|error provider = new (
             "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-6",
-            "", TEST_CREDS);
+            TEST_CREDS, "");
     test:assertFalse(provider is error, provider is error ? provider.message() : "");
 }

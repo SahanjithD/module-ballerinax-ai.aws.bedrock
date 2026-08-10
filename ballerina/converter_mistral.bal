@@ -38,13 +38,17 @@ import ballerina/ai;
 // Encodes a Mistral chat-completion request body. This dialect DOES carry
 // `system` as a `role: system` message — the AWS page lists `"system"` among the
 // valid roles — so the hoisted system is re-added as the leading message.
-isolated function encodeMistralChat(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
+    // UNVERIFIED and CONTESTED: AWS documents this dialect's `content` as a string,
+    // while Mistral's own API documents image_url chunks. Two first-party sources
+    // disagree, so per the module's ground rules this refuses rather than picking one.
+    check rejectImagesIn(messages, "the Mistral chat-completion dialect", true);
     json[] wire = [];
-    if system is ai:ChatSystemMessage {
-        wire.push({"role": "system", "content": contentToString(system.content)});
+    if system is string {
+        wire.push({"role": "system", "content": system});
     }
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         wire.push(mistralChatMessage(m));
     }
 
@@ -84,10 +88,10 @@ isolated function encodeMistralChat(ai:ChatSystemMessage? system, ai:ChatMessage
     return body;
 }
 
-// Maps one `ai:ChatMessage` to a Mistral chat-completion message.
-isolated function mistralChatMessage(ai:ChatMessage m) returns json {
-    if m is ai:ChatUserMessage {
-        return {"role": "user", "content": contentToString(m.content)};
+// Maps one resolved message to a Mistral chat-completion message.
+isolated function mistralChatMessage(ResolvedMessage m) returns json {
+    if m is ResolvedUserMessage {
+        return {"role": "user", "content": openAIContentParts(m.parts)};
     }
     if m is ai:ChatAssistantMessage {
         map<json> msg = {"role": "assistant", "content": m.content ?: ""};
@@ -106,10 +110,7 @@ isolated function mistralChatMessage(ai:ChatMessage m) returns json {
         }
         return msg;
     }
-    if m is ai:ChatFunctionMessage {
-        return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
-    }
-    return {"role": "user", "content": contentToString(m.content)};
+    return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
 }
 
 // Decodes a Mistral chat-completion response. The stop reason is
@@ -189,8 +190,10 @@ isolated function decodeMistralChat(json response) returns DecodedResponse|ai:Er
 // Encodes a Mistral text-completion request body. There is no `messages`
 // array on this dialect: the conversation must be flattened into one `prompt`
 // string using Mistral's instruction template.
-isolated function encodeMistralText(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeMistralText(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
+    // Text-only by construction: a single prompt string, no content-part array.
+    check rejectImagesIn(messages, "the Mistral text-completion dialect");
     if tools.length() > 0 {
         // Fail loudly rather than drop the tools: this dialect has no tool support
         // at all, so a silent no-op would look like the model ignoring the tool.
@@ -234,12 +237,14 @@ isolated function encodeMistralText(ai:ChatSystemMessage? system, ai:ChatMessage
 // has no system slot. We prepend it to the first instruction block, which is what
 // Mistral's own chat template does, and it preserves the module invariant that
 // system is never emitted as a `role: system` message.
-isolated function mistralInstructPrompt(ai:ChatSystemMessage? system, ai:ChatMessage[] messages) returns string {
+isolated function mistralInstructPrompt(string? system, ResolvedMessage[] messages) returns string {
+    // Images are rejected by the caller (`encodeMistralText`): this dialect is a single
+    // prompt string with no content-part array to put one in.
     string prompt = "<s>";
-    boolean systemPending = system is ai:ChatSystemMessage;
-    string systemText = system is ai:ChatSystemMessage ? contentToString(system.content) : "";
+    boolean systemPending = system is string;
+    string systemText = system ?: "";
 
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         if m is ai:ChatAssistantMessage {
             string? content = m.content;
             prompt += string ` ${content ?: ""}</s>`;
@@ -247,7 +252,7 @@ isolated function mistralInstructPrompt(ai:ChatSystemMessage? system, ai:ChatMes
         }
         // User (and any tool result, which has nowhere else to go on this dialect)
         // becomes an instruction block.
-        string text = m is ai:ChatFunctionMessage ? (m.content ?: "") : contentToString(m.content);
+        string text = m is ai:ChatFunctionMessage ? (m.content ?: "") : partsText(m.parts);
         if systemPending {
             text = systemText + "\n\n" + text;
             systemPending = false;

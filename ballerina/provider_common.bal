@@ -58,12 +58,23 @@ isolated function runChat(string providerName, ApiFamily family, string wireMode
         // default would misreport what went on the wire.
         span.addTemperature(spanTemperature);
     }
-    span.addInputMessages(messagesForSpan(msgs));
     if tools.length() > 0 {
         span.addTools(tools);
     }
 
-    [ai:ChatSystemMessage?, ai:ChatMessage[]] [system, rest] = hoistSystem(msgs);
+    // Resolve BEFORE encoding: flattens each prompt to parts and fetches any image
+    // URL, so the encoders below stay pure. Any image on a dialect that cannot carry
+    // one fails here, before the request is built.
+    [string?, ResolvedMessage[]]|ai:Error resolved = resolveMessages(msgs);
+    if resolved is ai:Error {
+        span.close(resolved);
+        return resolved;
+    }
+    [string?, ResolvedMessage[]] [system, rest] = resolved;
+    // Recorded from the RESOLVED form so images become a placeholder. The raw form
+    // would put the whole image — potentially megabytes of user data — into the span
+    // and ship it to whatever telemetry backend is configured.
+    span.addInputMessages(messagesForSpan(system, rest));
     RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode(system, rest, tools, stop, params);
     if encoded is ai:Error {
@@ -166,10 +177,6 @@ isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail, Be
     if route.family == INVOKE && guardrail is GuardrailConfig {
         headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
         headers["X-Amzn-Bedrock-GuardrailVersion"] = guardrail.guardrailVersion;
-        string? trace = guardrail.trace;
-        if trace is string {
-            headers["X-Amzn-Bedrock-Trace"] = trace.toUpperAscii();
-        }
     }
     addMantleApiKeyHeader(headers, route, creds);
     return headers;
@@ -333,11 +340,18 @@ isolated function injectModel(json body, string modelId) returns json {
 
 // Simplified message projection for the observe span (avoids `Prompt` objects,
 // which are not `anydata`).
-isolated function messagesForSpan(ai:ChatMessage[] messages) returns json {
+//
+// Image parts are REDACTED to `[image <mime>, <n> bytes]`. A span is shipped to the
+// caller's telemetry backend, so putting the payload there would both bloat every
+// trace and export user image data to a system that was never meant to hold it.
+isolated function messagesForSpan(string? system, ResolvedMessage[] messages) returns json {
     json[] out = [];
-    foreach ai:ChatMessage m in messages {
-        if m is ai:ChatUserMessage|ai:ChatSystemMessage {
-            out.push({role: m.role, content: contentToString(m.content)});
+    if system is string {
+        out.push({role: ai:SYSTEM, content: system});
+    }
+    foreach ResolvedMessage m in messages {
+        if m is ResolvedUserMessage {
+            out.push({role: m.role, content: partsForSpan(m.parts)});
         } else if m is ai:ChatAssistantMessage {
             out.push({role: m.role, content: m.content});
         } else {

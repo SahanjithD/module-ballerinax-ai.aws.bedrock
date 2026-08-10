@@ -23,22 +23,22 @@ import ballerina/ai;
 // Invoke-Anthropic encoder — includes the mandatory `anthropic_version` body
 // field.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
-isolated function encodeInvokeAnthropic(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeInvokeAnthropic(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeAnthropicMessages(system, messages, tools, stop, params, true);
 
 // Mantle Messages encoder — NO body version field (the header carries it).
-isolated function encodeMantleMessages(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeMantleMessages(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeAnthropicMessages(system, messages, tools, stop, params, false);
 
 // Builds an Anthropic Messages request body. `bedrockInvoke` toggles the required
 // `anthropic_version` body field.
-isolated function encodeAnthropicMessages(ai:ChatSystemMessage? system, ai:ChatMessage[] messages,
+isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params,
         boolean bedrockInvoke) returns json|ai:Error {
     json[] wire = [];
-    foreach ai:ChatMessage m in messages {
+    foreach ResolvedMessage m in messages {
         wire.push(anthropicMessage(m));
     }
     map<json> body = {
@@ -58,8 +58,8 @@ isolated function encodeAnthropicMessages(ai:ChatSystemMessage? system, ai:ChatM
     if stops is string[] && stops.length() > 0 {
         body["stop_sequences"] = stops;
     }
-    if system is ai:ChatSystemMessage {
-        body["system"] = contentToString(system.content); // top-level, never a message
+    if system is string {
+        body["system"] = system; // top-level, never a message
     }
     if tools.length() > 0 {
         json[] toolDefs = [];
@@ -93,10 +93,12 @@ isolated function thinkingBody(ThinkingConfig thinking) returns json {
     return out;
 }
 
-// Maps one `ai:ChatMessage` to an Anthropic Messages content block.
-isolated function anthropicMessage(ai:ChatMessage m) returns json {
-    if m is ai:ChatUserMessage {
-        return {role: "user", content: [{"type": "text", "text": contentToString(m.content)}]};
+// Maps one resolved message to an Anthropic Messages content block. Images use the
+// base64 `source`; Bedrock does NOT accept Anthropic's `url` source type
+// (https://platform.claude.com/docs/en/build-with-claude/vision).
+isolated function anthropicMessage(ResolvedMessage m) returns json {
+    if m is ResolvedUserMessage {
+        return {role: "user", content: anthropicContentBlocks(m.parts)};
     }
     if m is ai:ChatAssistantMessage {
         json[] blocks = [];
@@ -112,15 +114,11 @@ isolated function anthropicMessage(ai:ChatMessage m) returns json {
         }
         return {role: "assistant", content: blocks};
     }
-    if m is ai:ChatFunctionMessage {
-        // ai:FUNCTION result → Anthropic user-role tool_result block.
-        return {
-            role: "user",
-            content: [{"type": "tool_result", "tool_use_id": m.id ?: m.name, "content": m.content ?: ""}]
-        };
-    }
-    // A ChatSystemMessage would have been hoisted; handle defensively.
-    return {role: "user", content: [{"type": "text", "text": contentToString(m.content)}]};
+    // ai:FUNCTION result → Anthropic user-role tool_result block.
+    return {
+        role: "user",
+        content: [{"type": "tool_result", "tool_use_id": m.id ?: m.name, "content": m.content ?: ""}]
+    };
 }
 
 // Decodes an Anthropic Messages response (Invoke-Anthropic and Mantle Messages
