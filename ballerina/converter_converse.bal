@@ -60,22 +60,25 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
     if thinking is ThinkingConfig {
         additionalRequest = foldRequestFields(additionalRequest, {"thinking": thinkingBody(thinking)});
     }
+    // `effort` rides the passthrough too, not a native `outputConfig` member.
+    //
+    // Two first-party sources disagreed here: botocore models `outputConfig:
+    // {textFormat, effort}` on ConverseRequest, while AWS's adaptive-thinking page
+    // routes it through `additionalModelRequestFields: {"output_config": {"effort":
+    // ...}}`. Live-verified 2026-08-11: the native member 400s on every model tried
+    // (opus-4-8, sonnet-4-6, and — decisively — opus-4-7, which IS on Anthropic's
+    // adaptive-only list, ruling out "wrong model") with "This model doesn't support
+    // the effort field"; the identical value folded into
+    // additionalModelRequestFields.output_config.effort is accepted (opus-4-7,
+    // controlled pair against the same 400). AWS's docs were right; botocore's
+    // modelled member is not honoured on the wire.
+    Effort? effort = params?.effort;
+    if effort is Effort {
+        additionalRequest = foldRequestFields(additionalRequest, {"output_config": {"effort": effort}});
+    }
     map<json>? additionalJson = additionalFieldsToJson(additionalRequest);
     if additionalJson != () {
         body["additionalModelRequestFields"] = additionalJson;
-    }
-    // `effort` uses the NATIVE Converse `outputConfig` member, not the passthrough.
-    //
-    // TWO FIRST-PARTY SOURCES DISAGREE and this picks one: botocore models
-    // `outputConfig: {textFormat, effort}` on ConverseRequest, while AWS's
-    // adaptive-thinking page routes it through
-    // `additionalModelRequestFields: {"output_config": {"effort": ...}}`. The native
-    // member is the modelled contract, so it wins here — but this is unverified
-    // against a live call. `testLiveConverseEffortIsAccepted` settles it; if Bedrock
-    // rejects this, switch to folding `output_config` into the passthrough above.
-    Effort? effort = params?.effort;
-    if effort is Effort {
-        body["outputConfig"] = {"effort": effort};
     }
     ServiceTier? tier = params.serviceTier;
     if tier is ServiceTier {

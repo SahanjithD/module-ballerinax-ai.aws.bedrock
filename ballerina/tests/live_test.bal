@@ -267,17 +267,22 @@ function testLiveConverseEffortIsAccepted() returns error? {
     if creds is () {
         return;
     }
-    // UNRESOLVED, and this is the test that resolves it. Two first-party sources
-    // disagree on how `effort` reaches Converse:
+    // RESOLVED 2026-08-11 (live). Two first-party sources disagreed on how `effort`
+    // reaches Converse:
     //
     //   botocore  -> a native `outputConfig: {effort}` member on ConverseRequest
     //   AWS docs  -> additionalModelRequestFields: {"output_config": {"effort": ...}}
     //
-    // `converter_converse.bal` emits the NATIVE member. If Bedrock returns a 400
-    // ValidationException here, that choice is wrong: switch to folding
-    // `output_config` into the passthrough instead.
+    // `converter_converse.bal` used to emit the NATIVE member and 400'd with "This
+    // model doesn't support the effort field" on every model tried, including
+    // opus-4-7 — which IS on Anthropic's adaptive-only list (effort is meant to be
+    // ITS only depth control), ruling out "wrong model". The identical value folded
+    // into additionalModelRequestFields.output_config.effort was accepted on the
+    // same model/route. The encoder now emits the passthrough form; this test
+    // guards the regression. Uses opus-4-7 rather than sonnet-4-6 (not on the
+    // adaptive-only list, so it is not a safe model to assert `effort` support on).
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            "anthropic.claude-sonnet-4-6", creds, liveRegion,
+            "us.anthropic.claude-opus-4-7", creds, liveRegion,
             apiFamily = CONVERSE,
             thinking = {mode: ADAPTIVE},
             effort = EFFORT_LOW);
@@ -285,7 +290,7 @@ function testLiveConverseEffortIsAccepted() returns error? {
         {role: ai:USER, content: "Reply with the single word: ok"}
     ]);
     test:assertTrue((response.content ?: "").trim().length() > 0,
-            "Converse rejected the native outputConfig.effort member — use the passthrough form");
+            "Converse rejected the passthrough output_config.effort form too — the finding needs revisiting");
 }
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}

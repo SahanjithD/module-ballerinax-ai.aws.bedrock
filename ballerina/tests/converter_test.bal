@@ -585,3 +585,33 @@ function testEmptyPassthroughIsOmittedEntirely() returns error? {
     map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (), params).ensureType();
     test:assertFalse(body.hasKey("additionalModelRequestFields"));
 }
+
+@test:Config {}
+function testConverseEffortFoldsIntoThePassthroughNotANativeMember() returns error? {
+    // Live-verified 2026-08-11: a native `outputConfig` member 400s on Converse —
+    // "This model doesn't support the effort field" — on every model tried,
+    // including opus-4-7 (on Anthropic's adaptive-only list, so not a "wrong
+    // model" 400). The identical value folded into
+    // additionalModelRequestFields.output_config.effort is accepted on the same
+    // model/route. See testLiveConverseEffortIsAccepted and
+    // converter_converse.bal's `effort` comment.
+    InferenceParams params = buildInferenceParams(100, (), (), (), (), (), (), (), EFFORT_LOW);
+    map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (), params).ensureType();
+    test:assertFalse(body.hasKey("outputConfig"),
+            "effort must not ride a native outputConfig member — Bedrock rejects it");
+    map<json> extra = check body["additionalModelRequestFields"].ensureType();
+    test:assertEquals(extra["output_config"], <json>{"effort": "low"});
+}
+
+@test:Config {}
+function testConverseThinkingAndEffortFoldTogetherWithoutClobbering() returns error? {
+    // `thinking` and `effort` are folded into the same passthrough object in two
+    // separate steps (converter_converse.bal) — this locks in that the second fold
+    // doesn't wipe out the first.
+    InferenceParams params = buildInferenceParams(100, (), (), (), (), (), (),
+            {mode: ADAPTIVE}, EFFORT_HIGH);
+    map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (), params).ensureType();
+    map<json> extra = check body["additionalModelRequestFields"].ensureType();
+    test:assertEquals(extra["thinking"], <json>{"type": "adaptive"});
+    test:assertEquals(extra["output_config"], <json>{"effort": "high"});
+}
