@@ -52,9 +52,15 @@ isolated client class BedrockTransport {
     // Whether the RESOLVED ROUTE is Mantle — drives the
     // `bedrock-mantle:CreateInference` hint on a 403.
     private final boolean isMantleRoute;
+    // Whether this transport talks to the `bedrock-agent`/`bedrock-agent-runtime`
+    // control/data planes (knowledge bases) rather than a model route. Swaps the
+    // 400/403/404 hints for KB-appropriate wording and adds 402/409 handling — the
+    // agent control plane returns 402 for quota, not 400, and only it can 409.
+    private final boolean isAgentRoute;
 
     isolated function init(BedrockCredentials credentials, string region, Endpoint ep,
-            http:ClientConfiguration? httpConfig = (), RetryConfig? retryConfig = ()) returns error? {
+            http:ClientConfiguration? httpConfig = (), RetryConfig? retryConfig = (),
+            boolean isAgentRoute = false) returns error? {
         if credentials is BearerToken {
             self.bearer = credentials.cloneReadOnly();
             self.credProvider = ();
@@ -70,6 +76,7 @@ isolated client class BedrockTransport {
         // FIPS, gateway) changes the HOST, never the signing scope.
         self.signingService = ep.signingService;
         self.isMantleRoute = ep.signingService == SIGNING_BEDROCK_MANTLE;
+        self.isAgentRoute = isAgentRoute;
         self.host = ep.host;
         self.wirePath = ep.path;
         self.httpClient = check new (ep.baseUrl, httpConfig ?: {});
@@ -77,16 +84,29 @@ isolated client class BedrockTransport {
         self.retryConfig = rc.cloneReadOnly();
     }
 
-    // POSTs a signed request and returns the JSON response plus the response
-    // headers we care about, retrying transient errors with
+    // POSTs a signed request to the fixed `wirePath` and returns the JSON response
+    // plus the response headers we care about, retrying transient errors with
     // exponential backoff. `extraHeaders` carry route-specific headers (guardrail,
     // anthropic-version, workspace, api-key) — all of them are signed.
-    isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error {
+    //
+    // A thin fixed-method/path wrapper over `executeRequest`, kept so every existing
+    // model/embedding call site (`transport.execute(body, headers)`) is untouched.
+    isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error
+        => self.executeRequest("POST", self.wirePath, body, extraHeaders);
+
+    // The general form: method and path vary per call, for the knowledge-base agent
+    // planes where one transport instance serves many paths on the same host
+    // (`/knowledgebases/`, `/knowledgebases/{id}/retrieve`,
+    // `/knowledgebases/{id}/datasources/{id}/documents`, …). `body` is `()` for a
+    // bodyless `GET`/`DELETE` — signed as the SHA-256 of the empty string, per SigV4.
+    isolated function executeRequest(string method, string path, json? body, map<string> extraHeaders = {})
+            returns TransportResponse|ai:Error {
         RetryConfig rc = self.retryConfig;
         int attempt = 0;
         decimal delay = rc.initialDelay;
         while true {
-            TransportResponse|RetryableError|ai:Error result = self.executeOnce(body, extraHeaders);
+            TransportResponse|RetryableError|ai:Error result =
+                self.executeRequestOnce(method, path, body, extraHeaders);
             if result is TransportResponse {
                 return result; // success
             }
@@ -106,22 +126,24 @@ isolated client class BedrockTransport {
         }
     }
 
-    // A single signed round-trip. The wire path is sent single-
+    // A single signed round-trip. The path is sent single-
     // encoded; the canonical URI is double-encoded for the signature.
-    isolated function executeOnce(json body, map<string> extraHeaders)
+    isolated function executeRequestOnce(string method, string path, json? body, map<string> extraHeaders)
             returns TransportResponse|RetryableError|ai:Error {
-        string payload = body.toJsonString();
-        map<string>|error headers = self.signedHeaders(payload, extraHeaders);
+        string payload = body is () ? "" : body.toJsonString();
+        map<string>|error headers = self.signedHeadersFor(method, path, payload, extraHeaders);
         if headers is error {
             return error ai:Error("Failed to sign the Bedrock request", headers);
         }
         http:Request req = new;
-        req.setTextPayload(payload, contentType = APPLICATION_JSON);
+        if body !is () {
+            req.setTextPayload(payload, contentType = APPLICATION_JSON);
+        }
         foreach [string, string] [k, v] in headers.entries() {
             req.setHeader(k, v);
         }
-        // Wire path is already single-encoded by buildEndpoint; send it verbatim.
-        http:Response|error resp = self.httpClient->post(self.wirePath, req);
+        // Path is already single-encoded by buildEndpoint; send it verbatim.
+        http:Response|error resp = self.httpClient->execute(method, path, req);
         if resp is error {
             // Transport-level failure (DNS, TLS, socket) — treat as retryable.
             return error RetryableError("Connection error while calling Bedrock", resp);
@@ -154,6 +176,7 @@ isolated client class BedrockTransport {
         }
         string detail = self.errorDetail(resp);
         boolean mantle = self.isMantleRoute;
+        boolean agent = self.isAgentRoute;
         match status {
             // 502/504 come from the load balancers fronting Bedrock rather than the
             // service itself, so they carry no Bedrock error code — but they are just
@@ -165,22 +188,37 @@ isolated client class BedrockTransport {
                 // Only append the routing hint when `detail` is itself the useless
                 // "status 400" fallback — when Bedrock sent a specific reason (e.g.
                 // "Model does not support image modality"), tacking on a generic
-                // routing guess is redundant at best and misleading at worst.
-                string hint = detail.startsWith("status ")
+                // routing guess is redundant at best and misleading at worst. Never on
+                // an agent (KB) route: there is no `apiFamily` to retry with there.
+                string hint = !agent && detail.startsWith("status ")
                     ? " The model may not support this route; try 'apiFamily = INVOKE' (or CONVERSE)."
                     : "";
                 return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}.${hint}`);
+            }
+            // The bedrock-agent control plane returns 402, not 400, for a quota
+            // violation (e.g. IngestKnowledgeBaseDocuments over a service limit).
+            // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_IngestKnowledgeBaseDocuments.html
+            402 => {
+                return error ai:Error(string `Bedrock ServiceQuotaExceededException (HTTP 402): ${detail}`);
             }
             403 => {
                 string hint = mantle
                     ? " Mantle needs the separate 'bedrock-mantle:CreateInference' IAM action — " +
                         "'bedrock:InvokeModel' permissions are NOT sufficient."
+                    : agent
+                    ? " Knowledge base ingestion needs BOTH 'bedrock:StartIngestionJob' and " +
+                        "'bedrock:IngestKnowledgeBaseDocuments' — either alone is insufficient."
                     : "";
                 return error ai:Error(string `Bedrock AccessDeniedException (HTTP 403): ${detail}.${hint}`);
             }
             404 => {
-                return error ai:Error(string `Bedrock ResourceNotFoundException (HTTP 404): ${detail}. ` +
-                    string `Check the model id and region.`);
+                string hint = agent
+                    ? "Check the knowledge base and data source id."
+                    : "Check the model id and region.";
+                return error ai:Error(string `Bedrock ResourceNotFoundException (HTTP 404): ${detail}. ${hint}`);
+            }
+            409 => {
+                return error ai:Error(string `Bedrock ConflictException (HTTP 409): ${detail}`);
             }
             424 => {
                 return error ai:LlmError(string `Bedrock ModelErrorException (HTTP 424): ${detail}`);
@@ -225,11 +263,21 @@ isolated client class BedrockTransport {
         return string `status ${resp.statusCode}`;
     }
 
-    // Builds the SigV4 (or bearer) headers for one request.
+    // Builds the SigV4 (or bearer) headers for a request against the fixed
+    // `wirePath`, using `POST` (every model/embedding route). A thin wrapper over
+    // `signedHeadersFor`, kept so the existing golden signing tests — pinned to this
+    // exact signature — need no change.
+    isolated function signedHeaders(string payload, map<string> extraHeaders,
+            [string, string]? fixedClock = ()) returns map<string>|error
+        => self.signedHeadersFor("POST", self.wirePath, payload, extraHeaders, fixedClock);
+
+    // Builds the SigV4 (or bearer) headers for one request, method and path both
+    // caller-supplied — the knowledge-base planes call many paths per transport
+    // instance, so neither can stay fixed at `self.wirePath`/`"POST"`.
     // `fixedClock` exists ONLY for tests: signing is otherwise unobservable without
     // live AWS, and a wall clock makes the output unassertable. Production callers
     // omit it and get `amzTimestamps()`.
-    isolated function signedHeaders(string payload, map<string> extraHeaders,
+    isolated function signedHeadersFor(string method, string path, string payload, map<string> extraHeaders,
             [string, string]? fixedClock = ()) returns map<string>|error {
         map<string> headers = {};
         foreach [string, string] [k, v] in extraHeaders.entries() {
@@ -263,7 +311,7 @@ isolated client class BedrockTransport {
         [string, string] [amzDate, dateStamp] = fixedClock ?: check amzTimestamps();
         // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule):
         // the server re-encodes the received (single-encoded) path once to match.
-        string canonicalUri = getCanonicalUri(self.wirePath);
+        string canonicalUri = getCanonicalUri(path);
         string payloadHash = array:toBase16(crypto:hashSha256(payload.toBytes())).toLowerAscii();
 
         string accessKey = creds.accessKeyId;
@@ -287,7 +335,7 @@ isolated client class BedrockTransport {
         }
         string signedHeaderList = string:'join(";", ...sortedNames);
 
-        string canonicalRequest = "POST" + "\n" + canonicalUri + "\n" + "" + "\n" +
+        string canonicalRequest = method + "\n" + canonicalUri + "\n" + "" + "\n" +
             canonicalHeaders + "\n" + signedHeaderList + "\n" + payloadHash;
         string credentialScope = string `${dateStamp}/${self.region}/${self.signingService}/${AWS4_REQUEST}`;
         string stringToSign = AWS4_HMAC_SHA256 + "\n" + amzDate + "\n" + credentialScope + "\n" +

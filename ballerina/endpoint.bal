@@ -29,6 +29,15 @@ const SIGNING_BEDROCK_MANTLE = "bedrock-mantle"; // Mantle
 const RUNTIME_ENDPOINT_PREFIX = "bedrock-runtime";
 const MANTLE_ENDPOINT_PREFIX = "bedrock-mantle";
 
+// Knowledge-base control/data planes. BOTH sign as SigV4 service `bedrock` — same as
+// Converse/Invoke, NOT their own hostname — per the `signingName` field in both
+// botocore service models (bedrock-agent/2023-06-05 and
+// bedrock-agent-runtime/2023-07-26/service-2.json). The endpoint PREFIX (hostname)
+// and the SIGNING service are two different things in this service family; only the
+// former differs here.
+const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
+const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
+
 // The resolved wire endpoint. `signingService` is the SigV4 scope,
 // not the IAM namespace — they differ inside this service family.
 type Endpoint record {|
@@ -62,18 +71,34 @@ public const DEFAULT_SERVICE_URL = "https://bedrock-{endpoint}.{region}.{domain}
 // still signs the route's own region/service scope.
 isolated function resolveServiceUrl(string serviceUrl, Route route, boolean fips) returns string|error {
     boolean mantle = route.family == MANTLE;
+    string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
+    string endpointName = mantle ? "mantle" : (fips ? "runtime-fips" : "runtime");
     // Mantle is served from the partition-neutral `api.aws` suffix, which the SDK
     // models as the DUALSTACK variant — without this flag the metadata falls back to
     // `bedrock-mantle.{region}.amazonaws.com`, which does not resolve.
     // Verified 2026-08-09 against ballerinax/aws 1.0.1.
-    aws:EndpointConfig endpointConfig = {fips, dualstack: mantle};
-    string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
+    return resolveServiceUrlCore(serviceName, endpointName, route.region, serviceUrl, fips, mantle);
+}
+
+// The knowledge-base agent planes: standard regional hosts, like `bedrock-runtime` —
+// no Mantle-style dualstack suffix.
+isolated function resolveAgentServiceUrl(string serviceUrl, string serviceName, string endpointName,
+        string region, boolean fips) returns string|error
+    => resolveServiceUrlCore(serviceName, endpointName, region, serviceUrl, fips, false);
+
+// The pure core behind both `resolveServiceUrl` and `resolveAgentServiceUrl`: the
+// default template defers wholly to AWS SDK endpoint metadata, a concrete URL passes
+// through unchanged, and a custom template is substituted with the `{domain}` taken
+// from that same metadata.
+isolated function resolveServiceUrlCore(string serviceName, string endpointName, string region,
+        string serviceUrl, boolean fips, boolean dualstack) returns string|error {
+    aws:EndpointConfig endpointConfig = {fips, dualstack};
 
     // The default: the SDK owns the whole origin (all partitions, FIPS/dualstack
     // variants, per-service exceptions, and a standard-pattern fallback for regions
     // newer than the bundled metadata).
     if serviceUrl == DEFAULT_SERVICE_URL {
-        return aws:resolveEndpoint(serviceName, route.region, endpointConfig);
+        return aws:resolveEndpoint(serviceName, region, endpointConfig);
     }
     // A concrete URL (PrivateLink, gateway, LocalStack) passes through untouched.
     if !serviceUrl.includes("{") {
@@ -82,16 +107,15 @@ isolated function resolveServiceUrl(string serviceUrl, Route route, boolean fips
 
     // A custom template still needs the placeholder VALUES; take `{domain}` from the
     // same metadata rather than hardcoding a suffix table.
-    string endpointName = mantle ? "mantle" : (fips ? "runtime-fips" : "runtime");
-    string host = aws:resolveEndpointHost(serviceName, route.region, endpointConfig);
-    string prefix = string `bedrock-${endpointName}.${route.region}.`;
+    string host = aws:resolveEndpointHost(serviceName, region, endpointConfig);
+    string prefix = string `bedrock-${endpointName}.${region}.`;
     if !host.startsWith(prefix) {
         // The SDK returned a host this template cannot express (an endpoint exception
         // AWS added later). Trust the metadata over the template.
         return string `https://${host}`;
     }
     string url = re `\{endpoint\}`.replaceAll(serviceUrl, endpointName);
-    url = re `\{region\}`.replaceAll(url, route.region);
+    url = re `\{region\}`.replaceAll(url, region);
     url = re `\{domain\}`.replaceAll(url, host.substring(prefix.length()));
 
     // A surviving brace is ALWAYS a typo (`{regoin}`), never a legal host: braces are
@@ -174,6 +198,29 @@ isolated function buildEndpoint(Route route, string serviceUrl = DEFAULT_SERVICE
         ? string `/model/${encodedId}/converse`
         : string `/model/${encodedId}/invoke`;
     return {baseUrl: base, host: hostOf(base), path, signingService: SIGNING_BEDROCK};
+}
+
+// Which bedrock-agent plane an endpoint is for. Module-private: only the knowledge
+// base spine needs this distinction.
+enum AgentPlane {
+    // Control plane (`bedrock-agent`): CreateKnowledgeBase, CreateDataSource,
+    // IngestKnowledgeBaseDocuments, List/Get/DeleteKnowledgeBaseDocuments, ...
+    AGENT_CONTROL,
+    // Data plane (`bedrock-agent-runtime`): Retrieve.
+    AGENT_DATA
+}
+
+// Builds the endpoint for a knowledge-base agent plane. Unlike `buildEndpoint`, the
+// request PATH is not fixed at construction — a single `BedrockTransport` for a
+// plane serves many paths (`/knowledgebases/`, `/knowledgebases/{id}/retrieve`,
+// `/knowledgebases/{id}/datasources/{id}/documents`, …) — so `path` is left empty
+// and every call site of `BedrockTransport.executeRequest` supplies its own.
+isolated function buildAgentEndpoint(AgentPlane plane, string region, string serviceUrl = DEFAULT_SERVICE_URL,
+        boolean fips = false) returns Endpoint|error {
+    string serviceName = plane == AGENT_DATA ? AGENT_RUNTIME_ENDPOINT_PREFIX : AGENT_ENDPOINT_PREFIX;
+    string endpointName = plane == AGENT_DATA ? "agent-runtime" : "agent";
+    string base = check resolveAgentServiceUrl(serviceUrl, serviceName, endpointName, region, fips);
+    return {baseUrl: base, host: hostOf(base), path: "", signingService: SIGNING_BEDROCK};
 }
 
 // RFC 3986 unreserved set — the ONLY characters SigV4 leaves literal.
