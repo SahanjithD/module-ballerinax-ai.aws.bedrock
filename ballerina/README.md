@@ -37,6 +37,9 @@ spine (resolver → endpoint builder → converter → SigV4 transport).
 
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider`.
 
+**Knowledge base** — `BedrockManagedKnowledgeBase`, implementing `ai:KnowledgeBase`. See
+[Knowledge bases](#knowledge-bases).
+
 A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Every
 provider takes `<Vendor>Model|string`, so the enums are autocomplete and documentation, never a gate.
 Passing a raw string skips the enum, not the routing: an id the resolver does not recognise resolves to
@@ -125,6 +128,13 @@ bedrock:BedrockCredentials apiKey = {apiKey: "..."};
 final ai:ModelProvider claude =
     check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, "us-east-1");
 ```
+
+> **Knowledge bases do NOT accept Bedrock API keys.** AWS states API keys "are limited to Amazon
+> Bedrock and Amazon Bedrock Runtime actions" and cannot be used with *"Agents for Amazon Bedrock or
+> Agents for Amazon Bedrock Runtime API operations"* — and both knowledge base planes
+> (`bedrock-agent`, `bedrock-agent-runtime`) are exactly those. `BedrockManagedKnowledgeBase`
+> therefore takes `KnowledgeBaseCredentials` (SigV4 only), so a bearer token is rejected at
+> **compile time** rather than becoming an opaque runtime 403.
 
 ### Step 3: Invoke chat completion
 
@@ -347,6 +357,120 @@ Same story, split by generation rather than by date:
 The module picks by id, and an id it has never seen defaults to chat. Again, only relevant under
 `apiFamily = INVOKE` — Converse and Mantle are unaffected.
 
+## Knowledge bases
+
+`BedrockManagedKnowledgeBase` implements `ai:KnowledgeBase` against a Bedrock **managed** knowledge
+base (`KnowledgeBaseConfiguration.type = MANAGED` — Bedrock owns the vector store; there is nothing
+to provision). It spans two additional endpoints beyond the chat/embedding surface —
+`bedrock-agent.{region}.amazonaws.com` (control: create/list/get/ingest/delete) and
+`bedrock-agent-runtime.{region}.amazonaws.com` (data: retrieve) — both signing as SigV4 service
+`bedrock`, same as Converse/InvokeModel.
+
+Self-managed (`type = VECTOR`, a customer-provisioned vector store) knowledge bases are **not**
+implemented. See `kbdocs/VECTOR-KB-IMPLEMENTATION.md` in the module source for what adding one would
+change.
+
+### Two ways to use it
+
+**Attach to a knowledge base you configured in AWS** — pass its id. AWS owns ingestion through its
+own native connectors (S3, SharePoint, Confluence, Google Drive, OneDrive, Web Crawler) on their own
+sync schedule:
+
+```ballerina
+ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase("GKICZMNWRG", creds, "us-east-1");
+ai:QueryMatch[] matches = check kb->retrieve("What is our refund policy?", 5);
+```
+
+`retrieve()` searches across **every** data source on the knowledge base. `ingest()` and
+`deleteByFilter()` need the knowledge base to also have a `CUSTOM` (direct-ingestion) data source —
+construction fails, naming why, if it does not have one; add one in the console, or use the
+find-or-create path below.
+
+**Create and own it end to end** — pass a `KnowledgeBaseDefinition`. This class creates the knowledge
+base and a `CUSTOM` data source, and every document flows through `ingest()`:
+
+```ballerina
+ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase(
+    {
+        name: "support-docs",
+        roleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb-execution-role"
+    },
+    creds, "us-east-1");
+
+check kb->ingest([{content: "Refunds are processed within 5 business days."}]);
+```
+
+**Find-or-create is by NAME.** `CreateKnowledgeBase` has no upsert and names are not unique per
+account, so `init` searches for an exact name match first: exactly one match attaches (no writes);
+no match creates one (~83s to become `ACTIVE`, bounded by `readyTimeout`); more than one match is a
+construction error naming the candidate ids — pick the id and pass it as a `string` instead.
+
+### Chunking
+
+A `CUSTOM` data source's `chunkingStrategy` is fixed for its lifetime. **`FIXED_SIZE`** (the default
+when this class creates one) means Bedrock chunks server-side — pass `chunkingStrategy: NONE` on
+`KnowledgeBaseDefinition.dataSource` to chunk client-side with an `ai:Chunker` instead:
+
+```ballerina
+ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase(
+    {
+        name: "support-docs",
+        roleArn: "arn:...:role/service-role/bedrock-kb-execution-role",
+        dataSource: {name: "custom-source", chunkingStrategy: bedrock:NONE}
+    },
+    creds, "us-east-1",
+    chunker = new ai:MarkdownChunker());
+```
+
+`ManagedKnowledgeBaseConfig.chunker` is **detected**, not assumed, when left unset: `init` reads the
+resolved data source's actual strategy and defaults to `ai:DISABLE` when Bedrock chunks server-side,
+`ai:AUTO` when it is `NONE`. Passing an explicit `ai:Chunker` against a server-chunking data source
+is a construction error — Bedrock would re-split whatever is submitted, silently overwriting the
+chunker's own boundaries.
+
+> **Ingestion needs a SECOND IAM action.** `bedrock:StartIngestionJob` **and**
+> `bedrock:IngestKnowledgeBaseDocuments` are both required — working `bedrock:InvokeModel`/console
+> permissions are not enough, and the failure mode is an `AccessDenied` that does not name the
+> missing action on its own. This module's 403 error does name it.
+
+> **`ingest()` is slow, by design.** `IngestKnowledgeBaseDocuments` returns 202 as soon as Bedrock has
+> accepted the documents, not once they are indexed — ~14s measured for a single small document, ~47s
+> for a 97KB one. `ingest()` therefore blocks until every document reaches a terminal status or
+> `ingestTimeout` elapses, so a `retrieve()` immediately afterward sees them. There is deliberately no
+> fire-and-forget mode: `ai:KnowledgeBase.ingest` returns a bare `Error?` with no job handle and no
+> status method, so returning at the 202 would report success for a document that later lands `FAILED`
+> and leave you no way to ever find out.
+
+> **`retrieve()` cannot return more than 100 results.** `Retrieve` caps `numberOfResults` at 100 and
+> returns **no `nextToken`** when results are truncated, so there is nothing to page with. `maxLimit`
+> above 100 (including `-1`) is bounded by this.
+
+### `deleteByFilter` is a reconstruction
+
+**Bedrock has no metadata-based delete API and no way to read a document's metadata back**
+(`ListKnowledgeBaseDocuments` carries status and identifier only; `GetDocumentContent` returns a
+presigned content URL). `deleteByFilter` reconstructs one: it enumerates every document on every data
+source, then asks `Retrieve` a single yes/no question per document — the caller's filter ANDed onto
+Bedrock's own `_source_uri` system attribute **pinned to that one document**.
+
+**The pin is what makes this sound.** Sending the caller's filter alone and collecting matches in bulk
+under-deletes silently: measured, a filter matching 5 documents with `numberOfResults: 10` returned
+only 3, with no `nextToken` to signal the loss. Narrowing to one document removes that failure — the
+candidate set is that document's chunks, so nothing can crowd it out, and pinned probes come back at
+0.88–1.0 against a relevance floor near 0.15 whatever the probe query says. A non-empty result means
+"matches", an empty one means "does not match", and there is no third case.
+
+The cost is **one `Retrieve` per document in the knowledge base**, so this is a maintenance operation,
+not something to put on a request path. Documents on a non-`CUSTOM`/`S3` data source (a native
+connector) cannot be deleted through this API at all, and are named in the returned error; deletes
+that CAN be made still happen.
+
+### `RetrieveAndGenerate` is unusable on managed knowledge bases
+
+AWS documents this directly: *"This API cannot be used with managed knowledge bases."* Use
+`retrieve()` plus your own model provider (`ai:augmentUserQuery` bridges the two), or AWS's
+`AgenticRetrieveStream` outside this module.
+
 ## Guardrails
 
 | Route | Mechanism |
@@ -462,7 +586,8 @@ in-module.
 Streaming (the codec seam exists, but no `decodeStream`), document/video/audio content blocks
 (Converse models all three — see [Images](#images) for the image scope line), image/video/audio embeddings and
 `StartAsyncInvoke` (the `ai:Chunk` contract carries text), provisioned-throughput embedding ARNs,
-Meta/Llama, and Custom Model Import (`imported-model/` ARNs).
+Meta/Llama, and Custom Model Import (`imported-model/` ARNs). Self-managed (`type = VECTOR`, a
+customer-provisioned vector store) knowledge bases — see `kbdocs/VECTOR-KB-IMPLEMENTATION.md`.
 
 **SigV4 signing is not delegated to `aws.auth`,** though credential resolution and endpoint metadata
 are. `auth:getSignedHeaders` builds its canonical URI by double-encoding while always treating `/` as a
