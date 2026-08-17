@@ -46,7 +46,7 @@ public type KnowledgeBaseCredentials auth:AuthConfig;
 # `vectorIngestionConfiguration` carrying ONLY `parsingConfiguration`
 # (`{parsingStrategy: SMART_PARSING}`) — no `chunkingConfiguration` field at all,
 # even though the console exposes a "Text chunking strategy" selector for the same
-# data source (measured 2026-08-14; kbdocs/PROBE-RESULTS.md §R1d).
+# data source (measured against the live API on 2026-08-14).
 #
 # The data source measured was created THROUGH THE CONSOLE with "Default chunking"
 # selected, so its silence is ambiguous between two readings:
@@ -127,8 +127,8 @@ public type ManagedEmbeddingModel record {|
     string embeddingDataType = "FLOAT32";
 |};
 
-# A knowledge base to find-or-create by name (Story 2 — content flows entirely
-# through this module). `CreateKnowledgeBase` has no upsert and knowledge base names
+# A knowledge base to find-or-create by name, with all content flowing through this
+# module. `CreateKnowledgeBase` has no upsert and knowledge base names
 # are not unique per account, so `init` first searches `ListKnowledgeBases` for an
 # exact name match: exactly one match → attach to it (no write); no match → create
 # it; more than one match → a construction error naming the candidate ids.

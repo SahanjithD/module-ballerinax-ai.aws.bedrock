@@ -108,7 +108,7 @@ function testSharePointDataSourceIsNotCustomOrS3() {
 // These replace the former `chunkingConfigurationJson` tests. That function built a
 // `chunkingConfiguration` the managed-KB API rejects outright — 400 "A chunking
 // strategy cannot be specified with a managed embedding model" for NONE, FIXED_SIZE
-// and SEMANTIC alike (kbdocs/MANAGED-KB-API-RESEARCH.md §2). It was unreachable
+// and SEMANTIC alike. It was unreachable
 // correctness, so it and its tests are gone; what matters now is the two things the
 // live API actually demands.
 
