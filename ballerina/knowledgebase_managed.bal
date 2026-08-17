@@ -34,8 +34,7 @@ import ballerinax/aws.auth;
 #   creates one.
 #
 # Self-managed (customer vector store, `type = VECTOR`) knowledge bases are not
-# supported by this class — see `kbdocs/VECTOR-KB-IMPLEMENTATION.md` in the module
-# source for what a `BedrockVectorKnowledgeBase` would need to change.
+# supported by this class — use `BedrockVectorKnowledgeBase` for those.
 public distinct isolated client class BedrockManagedKnowledgeBase {
     *ai:KnowledgeBase;
 
@@ -133,7 +132,7 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
 
     # Retrieves relevant chunks. Searches across EVERY data source on the knowledge
     # base — not just the `CUSTOM` one `ingest()` writes to — so results include
-    # anything AWS's own connectors synced in (Story 1).
+    # anything AWS's own connectors synced in.
     #
     # + query - The text query to search for
     # + maxLimit - The maximum number of items to return, or `-1` for no limit (subject to Bedrock's own relevance cutoff)

@@ -20,14 +20,14 @@ import ballerina/time;
 // The shared spine `BedrockManagedKnowledgeBase` is built over: two agent-plane
 // transports, find-or-create, data-source resolution, chunking-strategy detection,
 // and the document/knowledge-base wire calls both `ingest()` and `deleteByFilter()`
-// need. Written to be the drop-in point for a future `BedrockVectorKnowledgeBase` —
-// see kbdocs/VECTOR-KB-IMPLEMENTATION.md for exactly what would differ.
+// need. `BedrockVectorKnowledgeBase` (knowledgebase_vector.bal) is built over the
+// same spine, with its own request bodies where the self-managed API shape differs.
 
 // Bedrock's `_source_uri` metadata attribute — injected on every retrieval result,
 // holding the document's `customDocumentIdentifier.id` (CUSTOM sources) or S3 object
 // URI (S3 sources). NOT in either service model: undocumented and non-contractual,
-// verified only on a MANAGED knowledge base with a CUSTOM data source
-// (kbdocs/PROBE-RESULTS.md §R0/§R5c). It is what makes `deleteByFilter`'s probe
+// confirmed only by calling the live API against a MANAGED knowledge base with a
+// CUSTOM data source (2026-08-14). It is what makes `deleteByFilter`'s probe
 // possible at all — Bedrock has no metadata-based delete and no way to read a
 // document's metadata back any other way.
 const string SOURCE_URI_METADATA_KEY = "_source_uri";
@@ -46,14 +46,14 @@ const string SOURCE_URI_METADATA_KEY = "_source_uri";
 // It exists solely because `Retrieve` REJECTS an empty query: `{"text": ""}`,
 // `{"text": " "}` and an omitted `text` all return 400 "Text input is required."
 // (The service model's `KnowledgeBaseQueryTextString` declares `min: 0`, which the
-// live API contradicts.) See kbdocs/PROBE-RESULTS.md §R5a.
+// live API contradicts.)
 const string FILTER_PROBE_QUERY = "PLACE HOLDER";
 
 // `ListKnowledgeBases`/`ListDataSources`/`ListKnowledgeBaseDocuments` share one
 // `MaxResults` shape declaring `max: 1000` — but the LIVE `ListKnowledgeBaseDocuments`
 // API rejects anything over 100 ("maxResults must be less than or equal to 100"),
-// contradicting the service model (kbdocs/PROBE-RESULTS.md §R0). Applied to all
-// three list calls here defensively, since they share the shape.
+// contradicting the service model. Applied to all three list calls here
+// defensively, since they share the shape.
 const int KB_LIST_PAGE_SIZE = 100;
 
 // `IngestKnowledgeBaseDocuments`/`DeleteKnowledgeBaseDocuments`/
@@ -64,18 +64,18 @@ const int KB_DOCUMENT_BATCH_SIZE = 10;
 // Poll interval for knowledge base / data source / document status.
 const decimal KB_POLL_INTERVAL_SECONDS = 3;
 
-// `CreateDataSource` is SYNCHRONOUS on the managed-KB path (probe-measured: 200
-// AVAILABLE in the response, unlike `CreateKnowledgeBase`'s 202 CREATING) — this
-// bound is a defensive fallback only, used if a future data source is not already
-// AVAILABLE in the create response.
+// `CreateDataSource` is SYNCHRONOUS on the managed-KB path (measured against the
+// live API: 200 AVAILABLE in the response, unlike `CreateKnowledgeBase`'s 202
+// CREATING) — this bound is a defensive fallback only, used if a future data source
+// is not already AVAILABLE in the create response.
 const decimal DEFAULT_DATA_SOURCE_READY_TIMEOUT = 60;
 
 // Document statuses that are retrievable (usable in `retrieve()` results and safe
 // to enumerate for `deleteByFilter()`).
 final readonly & string[] KB_DOC_USABLE_STATUSES = ["INDEXED", "PARTIALLY_INDEXED", "METADATA_PARTIALLY_INDEXED"];
 // Terminal statuses that are NOT usable. `NOT_FOUND` is a tombstone for a deleted
-// document — it arrives as HTTP 200 with this status, never a 404
-// (kbdocs/PROBE-RESULTS.md §R1b).
+// document — it arrives as HTTP 200 with this status, never a 404 (confirmed
+// against the live API).
 final readonly & string[] KB_DOC_FAILED_STATUSES = ["FAILED", "METADATA_UPDATE_FAILED", "IGNORED", "NOT_FOUND"];
 // Transient statuses `ingest()` keeps polling through.
 final readonly & string[] KB_DOC_IN_FLIGHT_STATUSES = ["PENDING", "STARTING", "IN_PROGRESS"];
@@ -190,8 +190,8 @@ isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string
             "was meant is ambiguous. Pass the knowledge base id directly instead of a definition.");
     }
     // No match: create the knowledge base, wait for it to leave CREATING, then
-    // create its CUSTOM data source and wait for that too — "two async resources,
-    // not one" is the real cost of this path (kbdocs/INIT-DESIGN.md).
+    // create its CUSTOM data source and wait for that too — two asynchronously
+    // provisioned resources, not one, is the real cost of this path.
     string kbId = check createKnowledgeBase(controlTransport, knowledgeBase);
     check pollKnowledgeBaseActive(controlTransport, kbId, knowledgeBase.readyTimeout);
     string dsId = check createCustomDataSource(controlTransport, kbId, knowledgeBase.dataSource);
@@ -204,11 +204,12 @@ isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string
 // against Bedrock's own vector store, on the `managedSearchConfiguration` branch:
 // `retrieve()` sends that branch unconditionally, and `deleteByFilter`'s whole
 // soundness argument rests on a pinned `_source_uri` filter taking the query off the
-// scoring path (kbdocs/PROBE-RESULTS.md §R5c). A `VECTOR` knowledge base queries a
-// CUSTOMER-owned store (OpenSearch Serverless, Pinecone, pgvector, ...) through a
-// different branch and a different ranking engine, where none of that was measured
-// and the pinned probe may score normally — which would put `deleteByFilter` back to
-// silently under-deleting. Refuse at construction rather than half-work at runtime.
+// scoring path (see `FILTER_PROBE_QUERY` for those measurements). A `VECTOR`
+// knowledge base queries a CUSTOMER-owned store (OpenSearch Serverless, Pinecone,
+// pgvector, ...) through a different branch and a different ranking engine, where
+// none of that was measured and the pinned probe may score normally — which would
+// put `deleteByFilter` back to silently under-deleting. Refuse at construction
+// rather than half-work at runtime.
 isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId) returns ai:Error? {
     map<json> kb = check getKnowledgeBase(controlTransport, kbId);
     string status = stringField(kb, "status") ?: "";
@@ -226,8 +227,8 @@ isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, s
             string `Knowledge base '${kbId}' is of type '${kbType}', but BedrockManagedKnowledgeBase ` +
             "supports only 'MANAGED' knowledge bases (the ones where Bedrock owns the vector store). " +
             "A 'VECTOR' knowledge base is backed by your own vector store and is served by a different " +
-            "search branch, so retrieve() and deleteByFilter() are not valid against it. This module " +
-            "has no class for that type yet — see kbdocs/VECTOR-KB-IMPLEMENTATION.md.");
+            "search branch, so retrieve() and deleteByFilter() are not valid against it. Use " +
+            "BedrockVectorKnowledgeBase for a 'VECTOR' knowledge base.");
     }
 }
 
@@ -349,8 +350,8 @@ isolated function createKnowledgeBase(BedrockTransport controlTransport, Knowled
     return id;
 }
 
-// ~83s measured for a knowledge base to leave CREATING (kbdocs/PROBE-RESULTS.md
-// §R1e) — far too long to block silently, hence the caller-controlled `readyTimeout`.
+// ~83s measured for a knowledge base to leave CREATING — far too long to block
+// silently, hence the caller-controlled `readyTimeout`.
 isolated function pollKnowledgeBaseActive(BedrockTransport controlTransport, string kbId, decimal timeoutSeconds)
         returns ai:Error? {
     time:Utc deadline = time:utcAddSeconds(time:utcNow(), timeoutSeconds);
@@ -383,15 +384,16 @@ isolated function failureReasonsOf(map<json> details) returns string {
 }
 
 // ============================================================================
-// Data-source creation (Story 2) and resolution (Story 1 + Story 2 attach).
+// Data-source creation (when the module creates the knowledge base) and resolution
+// (when it attaches to an existing one).
 // ============================================================================
 
 // A managed knowledge base REJECTS a bare `{"type": "CUSTOM"}` data source with
 // "Unsupported data source type for MANAGED knowledge base type." — the console's
 // "Custom" source is really `MANAGED_KNOWLEDGE_BASE_CONNECTOR` with the real type
-// nested in `connectorParameters` (probe-measured, not documented:
-// kbdocs/PROBE-RESULTS.md §R1e). A self-managed (VECTOR) knowledge base takes the
-// plain form instead — see kbdocs/VECTOR-KB-IMPLEMENTATION.md.
+// nested in `connectorParameters` (established by calling the live API; not
+// documented). A self-managed (VECTOR) knowledge base takes the plain form instead
+// — see `createVectorDataSourceRequestBody` in knowledgebase_vector_common.bal.
 // The `CreateDataSource` request body. Pure, so the two things the live API demands
 // — `connectorParameters.version`, and the ABSENCE of `vectorIngestionConfiguration`
 // — are assertable without AWS.
@@ -416,7 +418,7 @@ isolated function createDataSourceRequestBody(DataSourceDefinition def) returns 
         //     managed embedding model. Omit chunkingConfiguration to use the
         //     default." (measured for NONE, FIXED_SIZE and SEMANTIC alike). AWS's
         //     own docs contradict this and even show a `DEFAULT` strategy value that
-        //     the API rejects as invalid; see kbdocs/MANAGED-KB-API-RESEARCH.md §2.
+        //     the API rejects as invalid.
         //
         // Whether a CALLER-SUPPLIED embedding model (`ManagedEmbeddingModel`) lifts
         // the chunking restriction is UNVERIFIED — the test needs the knowledge
@@ -543,12 +545,12 @@ isolated function resolveCustomDataSource(BedrockTransport controlTransport, str
 // when it is `MANAGED_KNOWLEDGE_BASE_CONNECTOR` — the wrapper every managed-KB data
 // source uses — in which case the real type is nested inside `connectorParameters`.
 //
-// PROBE-MEASURED, NOT DOCUMENTED: the service model declares `connectorParameters`
-// a free-form `Document` (arbitrary JSON) on BOTH the write and read paths, but the
-// live `GetDataSource`/`ListDataSources` response returns it as a JSON-ENCODED
-// STRING, not an object — asymmetric with what `CreateDataSource` accepts
-// (kbdocs/PROBE-RESULTS.md §R1e). Both shapes are handled here so a future AWS fix
-// does not silently break this.
+// OBSERVED ON THE LIVE API, NOT DOCUMENTED: the service model declares
+// `connectorParameters` a free-form `Document` (arbitrary JSON) on BOTH the write and
+// read paths, but the live `GetDataSource`/`ListDataSources` response returns it as a
+// JSON-ENCODED STRING, not an object — asymmetric with what `CreateDataSource`
+// accepts. Both shapes are handled here so a future AWS fix does not silently break
+// this.
 isolated function effectiveDataSourceType(map<json> dataSource) returns string {
     map<json> config = asMap(dataSource["dataSourceConfiguration"] ?: {});
     string wireType = stringField(config, "type") ?: "";
@@ -694,8 +696,8 @@ type DocumentOutcome record {|
 
 // Polls `GetKnowledgeBaseDocuments` until every id in `ids` leaves
 // `KB_DOC_IN_FLIGHT_STATUSES`, or `timeoutSeconds` elapses. ~14s was measured for a
-// single small document (kbdocs/PROBE-RESULTS.md §R1b) — ingestion is inherently
-// slow, hence the caller-controlled timeout rather than a fixed short one.
+// single small document — ingestion is inherently slow, hence the caller-controlled
+// timeout rather than a fixed short one.
 isolated function pollDocumentsTerminal(BedrockTransport controlTransport, string kbId, string dsId,
         string[] ids, decimal timeoutSeconds) returns map<DocumentOutcome>|ai:Error {
     map<DocumentOutcome> outcomes = {};

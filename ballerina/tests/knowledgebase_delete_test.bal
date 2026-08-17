@@ -30,7 +30,7 @@ import ballerina/test;
 //
 // A zero-hit probe is unambiguous BECAUSE the filter is pinned to one document:
 // with the candidate set narrowed to that document's chunks, nothing can crowd it
-// out and no relevance floor can hide it (measured — kbdocs/PROBE-RESULTS.md §R5b/§R5c).
+// out and no relevance floor can hide it (measured against the live API).
 // So there is exactly ONE probe per candidate document, asserted below.
 
 const string DEL_KB_ID = "KBDELTEST1";

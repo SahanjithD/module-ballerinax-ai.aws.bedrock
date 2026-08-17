@@ -37,8 +37,9 @@ spine (resolver → endpoint builder → converter → SigV4 transport).
 
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider`.
 
-**Knowledge base** — `BedrockManagedKnowledgeBase`, implementing `ai:KnowledgeBase`. See
-[Knowledge bases](#knowledge-bases).
+**Knowledge base** — `BedrockManagedKnowledgeBase` (Bedrock owns the vector store) and
+`BedrockVectorKnowledgeBase` (you own it), both implementing `ai:KnowledgeBase`. See
+[Knowledge bases](#knowledge-bases) and [Self-managed knowledge bases](#self-managed-knowledge-bases).
 
 A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Every
 provider takes `<Vendor>Model|string`, so the enums are autocomplete and documentation, never a gate.
@@ -366,9 +367,11 @@ to provision). It spans two additional endpoints beyond the chat/embedding surfa
 `bedrock-agent-runtime.{region}.amazonaws.com` (data: retrieve) — both signing as SigV4 service
 `bedrock`, same as Converse/InvokeModel.
 
-Self-managed (`type = VECTOR`, a customer-provisioned vector store) knowledge bases are **not**
-implemented. See `kbdocs/VECTOR-KB-IMPLEMENTATION.md` in the module source for what adding one would
-change.
+`BedrockVectorKnowledgeBase` implements the same interface against a **self-managed** knowledge base
+(`KnowledgeBaseConfiguration.type = VECTOR` — a vector store you provision and own), which is the
+console's *Self-managed KB → Unstructured Vector Store KB*. Both classes use the same two endpoints
+and the same signing scope; see [Self-managed knowledge bases](#self-managed-knowledge-bases) below
+for what differs.
 
 ### Two ways to use it
 
@@ -470,6 +473,137 @@ that CAN be made still happen.
 AWS documents this directly: *"This API cannot be used with managed knowledge bases."* Use
 `retrieve()` plus your own model provider (`ai:augmentUserQuery` bridges the two), or AWS's
 `AgenticRetrieveStream` outside this module.
+
+## Self-managed knowledge bases
+
+`BedrockVectorKnowledgeBase` is the sibling of `BedrockManagedKnowledgeBase` for
+`KnowledgeBaseConfiguration.type = VECTOR`. Same three methods, same two endpoints, same SigV4 scope.
+Use it when you want control over indexing and ranking; use the managed class when you do not want to
+run a vector store.
+
+```ballerina
+import ballerinax/ai.aws.bedrock;
+
+// Attach to a knowledge base that already exists.
+final bedrock:BedrockVectorKnowledgeBase kb = check new ("KB1234ABCD");
+```
+
+```ballerina
+// Or create the knowledge base and its CUSTOM data source from Ballerina.
+// The VECTOR STORE ITSELF MUST ALREADY EXIST — see the callout below.
+final bedrock:BedrockVectorKnowledgeBase kb = check new ({
+    name: "support-articles",
+    roleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
+    embeddingModelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
+    storageConfiguration: <bedrock:OpenSearchServerlessStorage>{
+        collectionArn: "arn:aws:aoss:us-east-1:123456789012:collection/abcdefghij1234567890",
+        vectorIndexName: "bedrock-index",
+        fieldMapping: {
+            vectorField: "embeddings",
+            textField: "AMAZON_BEDROCK_TEXT_CHUNK",
+            metadataField: "AMAZON_BEDROCK_METADATA"
+        }
+    }
+});
+```
+
+> **The vector store must already exist.** This class never provisions one. `CreateKnowledgeBase`
+> accepts only a `storageConfiguration` naming an existing collection, cluster, table, or bucket — the
+> console's "Quick create a new vector store" has **no API equivalent**: *"If you prefer to let Amazon
+> Bedrock create and manage a vector store for you, use the console."* Provision it with
+> Terraform/CDK/the console first, then pass its ARNs. This is why the managed class is frictionless
+> by comparison: there is nothing to provision.
+
+Eight backends are supported, one record each: `OpenSearchServerlessStorage`,
+`OpenSearchManagedClusterStorage`, `S3VectorsStorage`, `RdsStorage`, `NeptuneAnalyticsStorage`,
+`PineconeStorage`, `RedisEnterpriseCloudStorage`, `MongoDbAtlasStorage`. Their field mappings are
+**not** interchangeable — Pinecone and Neptune Analytics have no `vectorField` at all, and RDS adds
+`primaryKeyField` plus an optional `customMetadataField`.
+
+### What differs from the managed class
+
+| | `BedrockManagedKnowledgeBase` | `BedrockVectorKnowledgeBase` |
+|---|---|---|
+| Vector store | Bedrock's, nothing to provision | Yours, must pre-exist |
+| Embedding model | Optional (service-managed by default) | **Required** — `embeddingModelArn` |
+| Chunking | Rejected on a service-managed model | Configurable, so `ai:Chunker` is usable |
+| Data source body | `MANAGED_KNOWLEDGE_BASE_CONNECTOR` wrapper | Plain `{"type": "CUSTOM"}` |
+| Search branch | `managedSearchConfiguration` | `vectorSearchConfiguration` |
+| Reranking | `rerankingModelType` enum | `rerankingConfiguration` record |
+| Search type override | Not available | `overrideSearchType`, opt-in |
+| Reserved metadata prefix | `_` (`_source_uri`) | `x-amz-bedrock` |
+
+`startsWith` and `stringContains` are supported by Bedrock on self-managed knowledge bases and not on
+managed ones, but **neither class can emit them**: `ai:MetadataFilterOperator` has exactly eight members
+(`==`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `nin`) and none maps to either. See
+[Not implemented](#not-implemented).
+
+### `overrideSearchType` is backend-dependent, and two AWS sources disagree
+
+Leave it unset unless you know your backend supports the value — unset means Bedrock picks a strategy
+suited to the store, which is correct everywhere. The API reference says `HYBRID` works only on
+**OpenSearch Serverless** with a filterable text field; the user guide says *"Amazon RDS, Amazon
+OpenSearch Serverless, and MongoDB vector stores that contain a filterable text field."* Both agree it
+is unavailable on S3 Vectors, Neptune Analytics, Pinecone, and Redis. Neither is treated as
+authoritative here, so nothing is defaulted.
+
+### `ingest()` needs two IAM permissions, and AWS names only one at a time
+
+Same as the managed class: `bedrock:StartIngestionJob` **and**
+`bedrock:IngestKnowledgeBaseDocuments`. Granting the one named in the first `AccessDenied` fails again
+on the other. Separately, the knowledge base's own `roleArn` needs permissions on **your** vector store
+(`aoss:APIAccessAll`, `es:ESHttp*`, `rds-data:*`, `neptune-graph:*`, `s3vectors:*`, or
+`secretsmanager:GetSecretValue` depending on backend). Those belong to that role, not to this client's
+credentials.
+
+### Pitfalls this module cannot check for you
+
+Each of these needs a query against your vector store to detect — credentials and network reach the
+calling application does not have, since those permissions belong to the knowledge base's service role
+and the store is often VPC-private. Construction validates everything Bedrock itself reports; the rest
+is on you:
+
+- **Index dimension must match the embedding model.** A mismatch fails ingestion with an opaque error.
+- **OpenSearch must use the `faiss` engine.** With `nmslib`, metadata filtering does not work at all
+  and the documented fix is to rebuild the index.
+- **OpenSearch custom metadata fields must be `keyword`-typed** (or `text` with a `keyword` subfield).
+  Without that, filtering on them fails with a *"Rewrite first"* error.
+- **S3 Vectors caps metadata at 1 KB and 35 keys per vector.** Hierarchical chunking can exceed it,
+  and *"the ingestion job will throw an exception."* S3 Vectors is also SEMANTIC-only, float32-only,
+  and rejects `startsWith`/`stringContains`.
+- **Aurora needs HNSW iterative index scans** (pgvector 0.8.0+) when you filter on metadata. Without
+  them, selective filters **silently return fewer results than they should** — no error.
+- **MongoDB Atlas metadata filtering does not work by default**; filters must be configured in the
+  Atlas vector index first.
+
+### `deleteByFilter` keeps a second probe the managed class dropped
+
+The reconstruction is the same as [the managed one](#deletebyfilter-is-a-reconstruction), with one
+difference. The managed class was able to drop its follow-up probe after measuring that a pinned probe
+scores 0.88–1.0 against a relevance floor near 0.15, which makes a zero-hit result unambiguous.
+
+**That measurement was taken against Bedrock's own vector store and does not transfer here** — on a
+self-managed knowledge base the ranking engine is yours. So a zero-hit probe is re-run with the
+document pin alone; if that also returns nothing, the document is reported as **indeterminate** rather
+than silently skipped, which would under-delete. Cost is one to two `Retrieve` calls per document.
+Once the equivalent measurement exists for a backend, the second probe can be dropped exactly as the
+managed class dropped its own.
+
+A probe counts as a match only when a returned result **is** the document it pinned — checked against
+`x-amz-bedrock-kb-source-uri`, `location.customDocumentLocation.id`, or `location.s3Location.uri`.
+Counting results instead would mean trusting your store to honour the pin, and AWS documents at least
+one backend (MongoDB Atlas) where filtering silently does nothing by default; on such a store every
+probe would "match" and the whole knowledge base would be deleted. The trade is that a backend
+returning none of those identity fields makes every document indeterminate, so `deleteByFilter` becomes
+a no-op that reports rather than a silent mass delete. `deleteByFilter` also **rejects a filter set
+with no leaf predicates** — an empty or all-empty-groups `ai:MetadataFilters` would otherwise select
+everything.
+
+> **Nothing on this class has been verified against live AWS.** The reserved attribute name
+> (`x-amz-bedrock-kb-source-uri`) is documented by AWS, but whether Bedrock populates it for a CUSTOM
+> data source on a self-managed knowledge base, and how your store's relevance floor behaves, are
+> unmeasured. Both are flagged in code comments.
+
 
 ## Guardrails
 
@@ -586,8 +720,12 @@ in-module.
 Streaming (the codec seam exists, but no `decodeStream`), document/video/audio content blocks
 (Converse models all three — see [Images](#images) for the image scope line), image/video/audio embeddings and
 `StartAsyncInvoke` (the `ai:Chunk` contract carries text), provisioned-throughput embedding ARNs,
-Meta/Llama, and Custom Model Import (`imported-model/` ARNs). Self-managed (`type = VECTOR`, a
-customer-provisioned vector store) knowledge bases — see `kbdocs/VECTOR-KB-IMPLEMENTATION.md`.
+Meta/Llama, and Custom Model Import (`imported-model/` ARNs).
+
+On knowledge bases specifically: **Kendra and SQL/Redshift** knowledge base types (only `MANAGED` and
+`VECTOR` are implemented); provisioning the vector store itself, which the Bedrock API cannot do at all;
+`implicitFilterConfiguration` on the self-managed search branch; and `startsWith`/`stringContains`
+filters, which self-managed knowledge bases support but `ai:MetadataFilterOperator` has no operator for.
 
 **SigV4 signing is not delegated to `aws.auth`,** though credential resolution and endpoint metadata
 are. `auth:getSignedHeaders` builds its canonical URI by double-encoding while always treating `/` as a
