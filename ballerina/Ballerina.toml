@@ -7,6 +7,8 @@ authors = ["Ballerina"]
 keywords = ["ai", "aws", "bedrock", "llm", "embeddings", "converse", "mantle", "Area/AI & Machine Learning", "Type/Model Provider", "Type/Embedding Provider", "Type/Connector", "Vendor/AWS"]
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.aws.bedrock"
 license = ["Apache-2.0"]
+
+
 visibility = "private"
 
 [build-options]
