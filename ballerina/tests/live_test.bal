@@ -344,7 +344,7 @@ function testLiveConverseAcceptsAnImage() returns error? {
     // encoding is wrong — not that the route lacks support.
     ai:ImageDocument img = check onePixelPng();
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            CLAUDE_SONNET_4_6, creds, liveRegion, config = {apiFamily: CONVERSE});
+            CLAUDE_SONNET_4_6, creds, liveRegion, CONVERSE);
     ai:ChatAssistantMessage response = check provider->chat({
         role: ai:USER,
         content: `Does this contain an image? Answer yes or no. ${img}`
@@ -362,7 +362,7 @@ function testLiveInvokeAnthropicAcceptsAnImage() returns error? {
     // Bedrock really does refuse nothing about it.
     ai:ImageDocument img = check onePixelPng();
     ai:ModelProvider provider = check new AnthropicModelProvider(
-            CLAUDE_SONNET_4_6, creds, liveRegion, config = {apiFamily: INVOKE});
+            CLAUDE_SONNET_4_6, creds, liveRegion, INVOKE);
     ai:ChatAssistantMessage response = check provider->chat({
         role: ai:USER,
         content: `Does this contain an image? Answer yes or no. ${img}`
@@ -420,7 +420,7 @@ function testLiveInvokeMistralChatImageSupportIsContested() returns error? {
     // image chunks. This call settles which one describes Bedrock.
     ai:ImageDocument img = check onePixelPng();
     ai:ModelProvider provider = check new MistralModelProvider(
-            MISTRAL_LARGE_3, creds, liveRegion, config = {apiFamily: INVOKE});
+            MISTRAL_LARGE_3, creds, liveRegion, INVOKE);
     ai:ChatAssistantMessage|ai:Error response = provider->chat({
         role: ai:USER,
         content: `Does this contain an image? Answer yes or no. ${img}`

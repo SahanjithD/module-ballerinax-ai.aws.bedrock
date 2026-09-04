@@ -15,7 +15,6 @@
 import ballerina/ai;
 import ballerina/http;
 import ballerinax/aws.auth;
-import ballerinax/aws;
 
 // Public surface for `BedrockManagedKnowledgeBase`: configuration, the
 // find-or-create definition, and the chunking-strategy enum. See
@@ -126,11 +125,4 @@ public type ManagedKnowledgeBaseConfig record {|
     http:ClientConfiguration httpConfig?;
     # Retry policy, shared by both agent-plane clients.
     RetryConfig retryConfig?;
-    # Endpoint resolution options: `fips`, `dualstack`, and a `customEndpoint`
-    # override. The host is derived from the region and the resolved route when this
-    # is unset, which is correct in every partition — set it only for PrivateLink
-    # without private DNS, an egress gateway, or a local mock. A `customEndpoint` is
-    # a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`:
-    # it applies to every service the client talks to.
-    aws:EndpointConfig endpoint?;
 |};

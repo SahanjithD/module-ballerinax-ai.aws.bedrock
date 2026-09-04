@@ -92,8 +92,10 @@ final ai:ModelProvider claude = check new bedrock:AnthropicModelProvider(
         bedrock:CLAUDE_SONNET_4_6, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 ```
 
-Every vendor follows the same shape — `(model, credentials, region, maxTokens?, temperature?,
-*Config)`. `model`, `credentials` and `region` are all required:
+Every vendor follows the same shape — `(model, credentials, region, apiFamily?, endpoint?,
+maxTokens?, temperature?, *Config)`. `model`, `credentials` and `region` are required; `apiFamily`
+and `endpoint` sit directly on `init` rather than inside the config record, because routing and
+endpoint selection are decisions you make at the same moment you pick the model and region:
 
 ```ballerina
 final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(
@@ -768,9 +770,13 @@ no other Ballerina connector uses a brace template as a default, and none of the
 
 ```ballerina
 config = {fips: true}                          → endpoint = {fips: true}
+config = {apiFamily: bedrock:CONVERSE}         → apiFamily = bedrock:CONVERSE
 serviceUrl = "https://host"                    → endpoint = {customEndpoint: "https://host"}
 serviceUrl = "https://bedrock-{endpoint}..."   → (removed; the derived default already covers it)
 ```
+
+`apiFamily` and `endpoint` moved out of the config record onto `init` itself, so both are named
+arguments now rather than config fields.
 
 **`credentials` and `region` became required, and `region` is now `aws:Region|string`.** `region` no
 longer falls back to `AWS_REGION`/`AWS_DEFAULT_REGION`: no `ballerinax` connector reads the

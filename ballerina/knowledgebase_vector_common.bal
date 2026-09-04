@@ -511,7 +511,8 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 // rather than being passed alongside it — one source of truth, so a future field
 // cannot be wired at one call site and forgotten at another.
 isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
-        string|VectorKnowledgeBaseDefinition knowledgeBase, VectorKnowledgeBaseConfig config)
+        aws:EndpointConfig? endpointConfig, string|VectorKnowledgeBaseDefinition knowledgeBase,
+        VectorKnowledgeBaseConfig config)
         returns KbSpine|ai:Error {
     do {
         check guardRegion(region);
@@ -523,7 +524,6 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredent
         string? dataSourceIdOverride = config?.dataSourceId;
         http:ClientConfiguration? httpConfig = config?.httpConfig;
         RetryConfig? retryConfig = config?.retryConfig;
-        aws:EndpointConfig? endpointConfig = config?.endpoint;
         Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, endpointConfig);
         Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, endpointConfig);
         // One provider, both planes.

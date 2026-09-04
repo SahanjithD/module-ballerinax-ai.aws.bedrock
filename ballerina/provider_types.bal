@@ -15,7 +15,6 @@
 import ballerina/ai;
 import ballerina/http;
 import ballerinax/aws.auth;
-import ballerinax/aws;
 
 // ============================================================================
 // Credentials. SigV4 sources come from `ballerinax/aws.auth`; the bearer
@@ -67,21 +66,12 @@ public type RetryConfig record {|
 // ============================================================================
 
 # Everything that is not the model's identity, shared across vendors.
+// NOTE `apiFamily` and `endpoint` are NOT here. Both are routing/transport decisions
+// a caller makes at the same moment they choose the model and the region, so they sit
+// directly on `init` alongside those rather than one level down in this record —
+// visible in the Integrator panel without expanding a config, and impossible to miss
+// when reading a call site.
 public type CommonModelConfig record {|
-    // --- Routing ---
-    # Route selection: `AUTO` (default) runs the resolver; `CONVERSE`/`INVOKE`/
-    # `MANTLE` force that family. The escape hatch — outranks every heuristic.
-    ApiFamily apiFamily = AUTO;
-
-    # Endpoint resolution options: `fips`, `dualstack`, and a `customEndpoint`
-    # override. The host is derived from the region and the resolved route when this
-    # is unset, which is correct in every partition — set it only for PrivateLink
-    # without private DNS, an egress gateway, or a local mock. A `customEndpoint` is
-    # a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`:
-    # it applies to every service the client talks to, and it SKIPS the host-shape
-    # guards. `fips` is rejected at construction on a MANTLE route (no such host).
-    aws:EndpointConfig endpoint?;
-
     // --- Inference ---
     # Provider-level stop sequences; a per-call `stop` overrides these.
     string[] stopSequences?;
