@@ -127,7 +127,7 @@ function testVectorIngestBatchesInGroupsOfTen() returns error? {
     resetVectorIngestBatchSizes();
 
     BedrockVectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
 
     ai:TextDocument[] docs = [];
     foreach int i in 0 ..< 23 {
@@ -154,7 +154,7 @@ function testVectorIngestReportsFailedDocuments() returns error? {
     resetVectorIngestBatchSizes();
 
     BedrockVectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:TextDocument[] docs = [
         {content: "fine", metadata: {id: 1}},
         {content: "doomed", metadata: {id: 999}}
@@ -182,7 +182,7 @@ function testVectorIngestRefusesNonTextContent() returns error? {
     resetVectorIngestBatchSizes();
 
     BedrockVectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:ImageDocument image = {content: "https://example.com/cat.png"};
     ai:Error? result = kb.ingest(image);
     check mockListener.gracefulStop();

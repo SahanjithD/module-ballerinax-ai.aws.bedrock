@@ -14,6 +14,7 @@
 
 import ballerina/ai;
 import ballerina/lang.array;
+import ballerinax/aws.auth;
 import ballerina/test;
 
 // Live integration tests. These call real AWS and cost real money,
@@ -228,7 +229,7 @@ function testLiveFipsEndpointAcceptsASignedRequest() returns error? {
     // SignatureDoesNotMatch, which is exactly the regression worth paying for.
     ai:ModelProvider provider = check new AnthropicModelProvider(
             "anthropic.claude-sonnet-4-6", creds, liveRegion,
-            serviceUrl = "https://bedrock-{endpoint}-fips.{region}.{domain}");
+            endpoint = {customEndpoint: "https://bedrock-{endpoint}-fips.{region}.{domain}"});
     ai:ChatAssistantMessage response = check provider->chat([
         {role: ai:USER, content: "Reply with the single word: ok"}
     ]);
@@ -250,7 +251,7 @@ function testLiveDefaultAndFipsEndpointsAgree() returns error? {
     // `fips` rather than a hand-written template: the host now comes from AWS SDK
     // endpoint metadata, so this also confirms the metadata's spelling is real.
     ai:ModelProvider fips = check new AnthropicModelProvider(
-            "anthropic.claude-sonnet-4-6", creds, liveRegion, config = {fips: true});
+            "anthropic.claude-sonnet-4-6", creds, liveRegion, endpoint = {fips: true});
     ai:ChatMessage[] prompt = [{role: ai:USER, content: "Reply with the single word: ok"}];
     ai:ChatAssistantMessage a = check dflt->chat(prompt);
     ai:ChatAssistantMessage b = check fips->chat(prompt);
@@ -451,7 +452,7 @@ function testLiveDefaultCredentialChainCanCallBedrock() returns error? {
     // A failure here means the chain did not find usable credentials in THIS
     // environment; run it on the target compute (EC2/ECS/EKS) to prove the case that
     // matters. It is the only test that covers construction with no credentials.
-    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, region = liveRegion);
+    ai:ModelProvider provider = check new AnthropicModelProvider(CLAUDE_SONNET_4_6, auth:DEFAULT_CREDENTIALS, liveRegion);
     ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0,
             "DEFAULT_CREDENTIALS resolved but the call failed");

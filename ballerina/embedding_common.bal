@@ -15,6 +15,7 @@
 import ballerina/ai;
 import ballerina/ai.observe;
 import ballerina/http;
+import ballerinax/aws;
 
 // Shared embedding machinery. Batching lives HERE,
 // parameterized by `converter.maxBatchSize`, because the wire limits differ per
@@ -26,13 +27,12 @@ import ballerina/http;
 // `us.cohere.embed-v4` must strip for lookup and restore on the wire.
 // Returns the wire model id and the transport.
 isolated function resolveEmbeddingSpine(string providerName, BedrockCredentials credentials,
-        string model, string region, string serviceUrl, string familyPrefix, string exampleId,
-        http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, boolean fips = false)
+        string model, string region, aws:EndpointConfig? endpointConfig, string familyPrefix,
+        string exampleId, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig)
         returns [string, BedrockTransport]|ai:Error {
     do {
         // Embeddings take a bare model id, never an ARN, so the region can only come
-        // from the argument (or AWS_REGION behind `defaultRegion`) — there is no ARN
-        // segment to fall back on.
+        // from the argument — there is no ARN segment to fall back on.
         check guardRegion(region);
         // v1: ARNs are out of scope — an ARN carries no vendor prefix, so no converter
         // can be resolved from it.
@@ -55,9 +55,9 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockCredentials 
             partition: partitionForRegion(region),
             mantleEntry: ()
         };
-        Endpoint ep = check buildEndpoint(route, serviceUrl, fips);
+        Endpoint ep = check buildEndpoint(route, endpointConfig);
         BedrockTransport transport =
-            check new (credentials, route.region, ep, httpConfig, retryConfig);
+            check new (check resolveCredentials(credentials), route.region, ep, httpConfig, retryConfig);
         return [route.effectiveModelId, transport];
     } on fail error e {
         if e is ai:Error {

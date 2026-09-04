@@ -34,7 +34,7 @@ final [string, string] FIXED_CLOCK = ["20260717T120000Z", "20260717"];
 
 function transportFor(string host, string path, string signingService, string region)
         returns BedrockTransport|error =>
-    new (TEST_CREDS_SIGNING, region,
+    new (check resolveCredentials(TEST_CREDS_SIGNING), region,
         {baseUrl: string `https://${host}`, host, path, signingService});
 
 // Kept separate from TEST_CREDS so the golden signatures never move if that changes.
@@ -130,7 +130,7 @@ function testStsCredentialsSignAndSendTheSecurityToken() returns error? {
     // The session token must be BOTH sent and signed — Bedrock requires it in the
     // canonical request, so it has to appear in SignedHeaders too.
     BedrockTransport transport = check new (
-            {accessKeyId: "AKIATEST", secretAccessKey: "secret", sessionToken: "session-token-value"},
+            check resolveCredentials({accessKeyId: "AKIATEST", secretAccessKey: "secret", sessionToken: "session-token-value"}),
             "us-east-1",
             {baseUrl: string `https://bedrock-runtime.us-east-1.amazonaws.com`, host: "bedrock-runtime.us-east-1.amazonaws.com", path: "/model/m/converse",
                 signingService: SIGNING_BEDROCK});

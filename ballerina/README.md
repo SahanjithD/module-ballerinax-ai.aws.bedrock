@@ -85,25 +85,39 @@ Only the model is required. Region falls back to `AWS_REGION`/`AWS_DEFAULT_REGIO
 to the AWS credential chain — so on AWS compute this is the whole thing:
 
 ```ballerina
-final ai:ModelProvider claude = check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6);
+import ballerinax/aws;
+import ballerinax/aws.auth;
+
+final ai:ModelProvider claude = check new bedrock:AnthropicModelProvider(
+        bedrock:CLAUDE_SONNET_4_6, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 ```
 
-Every vendor follows the same shape — `(model, credentials?, region?, serviceUrl?, maxTokens?,
-temperature?, *Config)`. Only `model` is positional-required, so pass `region` by name when
-you are not also passing credentials:
+Every vendor follows the same shape — `(model, credentials, region, maxTokens?, temperature?,
+*Config)`. `model`, `credentials` and `region` are all required:
 
 ```ballerina
-final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(bedrock:NOVA_PRO, region = "us-east-1");
-final ai:ModelProvider gpt = check new bedrock:OpenAIModelProvider(bedrock:GPT_5_4, region = "us-east-2");
-final ai:ModelProvider gemma = check new bedrock:GoogleModelProvider(bedrock:GEMMA_3_27B_IT, region = "us-east-1");
+final ai:ModelProvider nova = check new bedrock:AmazonModelProvider(
+        bedrock:NOVA_PRO, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
+final ai:ModelProvider gpt = check new bedrock:OpenAIModelProvider(
+        bedrock:GPT_5_4, auth:DEFAULT_CREDENTIALS, aws:US_EAST_2);
+final ai:ModelProvider gemma = check new bedrock:GoogleModelProvider(
+        bedrock:GEMMA_3_27B_IT, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 ```
+
+`region` is typed `aws:Region|string`, so the enum gives you a checked constant and the string
+escape hatch still reaches a region newer than the enum. Nothing is read from the environment:
+`AWS_REGION` is **not** consulted for this parameter — pass it explicitly. (Credentials are the
+exception, and only because `auth:DEFAULT_CREDENTIALS` asks the AWS SDK to run its own chain.)
 
 ### Credentials
 
-`credentials` defaults to `auth:DEFAULT_CREDENTIALS`, which walks the standard AWS chain —
+`credentials` is required — pass `auth:DEFAULT_CREDENTIALS` to walk the standard AWS chain —
 environment variables, EKS IRSA web identity, IAM Identity Center (SSO), the shared config file,
 `credential_process`, ECS container credentials, then EC2 IMDSv2 — with expiry and refresh handled
-for you. **On EC2, ECS, EKS and Lambda you do not configure credentials at all.**
+for you. **On EC2, ECS, EKS and Lambda that is all you need** — no keys anywhere in your code or
+config. It is spelled out rather than defaulted so that the credential source a client uses is
+visible at the call site; this matches every other `ballerinax/aws.*` connector, all of which make
+`auth` a required field.
 
 To be explicit, pass any [`ballerinax/aws.auth`](https://central.ballerina.io/ballerinax/aws/latest)
 config, or a Bedrock API key:
@@ -127,7 +141,7 @@ bedrock:BedrockCredentials profile = {profileName: "prod"};
 bedrock:BedrockCredentials apiKey = {apiKey: "..."};
 
 final ai:ModelProvider claude =
-    check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, "us-east-1");
+    check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, aws:US_EAST_1);
 ```
 
 > **Knowledge bases do NOT accept Bedrock API keys.** AWS states API keys "are limited to Amazon
@@ -268,41 +282,79 @@ The one exception is a brand-new **Mantle** model: its request path is per-model
 derived from the id, so it needs a table entry. Forcing `apiFamily = MANTLE` on a model absent from
 `MANTLE_CAPABLE` returns a construction error rather than guessing a path.
 
-### FIPS endpoints
+### Endpoint configuration (`endpoint`)
 
-Set `fips` and the host comes from AWS SDK endpoint metadata — no host-name guessing:
+The host is derived from the region and the resolved route, entirely through AWS SDK endpoint
+metadata. That is correct in every partition and for every route without you doing anything:
+
+| Region | Converse / Invoke | Mantle |
+|---|---|---|
+| `us-east-1` | `bedrock-runtime.us-east-1.amazonaws.com` | `bedrock-mantle.us-east-1.api.aws` |
+| `us-gov-west-1` | `bedrock-runtime.us-gov-west-1.amazonaws.com` | `bedrock-mantle.us-gov-west-1.api.aws` |
+| `us-iso-east-1` | `bedrock-runtime.us-iso-east-1.c2s.ic.gov` | *(not served)* |
+| `eusc-de-east-1` | `bedrock-runtime.eusc-de-east-1.amazonaws.eu` | *(not served)* |
+
+Note the suffix flips between routes — `amazonaws.com` for runtime, `api.aws` for Mantle — and again
+per partition. Hand-writing these is the main way to get an unexplained DNS failure, so don't.
+
+The `endpoint` field on every config record is [`aws:EndpointConfig`](https://central.ballerina.io/ballerinax/aws/latest),
+the same record the other `ballerinax/aws.*` connectors take:
 
 ```ballerina
-check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, "us-gov-west-1",
-    config = {fips: true});
+// FIPS: the host spelling comes from SDK metadata, not from string-building "-fips"
+check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_GOV_WEST_1,
+    endpoint = {fips: true});
 // → https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com
+
+// A concrete origin: gateway, LocalStack, or a VPC endpoint
+check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_EAST_1,
+    endpoint = {customEndpoint: "http://localhost:4566"});
 ```
 
-> FIPS applies to `bedrock-runtime` only. There is **no** `bedrock-mantle` FIPS host, so `fips` on a
-> Mantle-resolved model is a **construction error** rather than a DNS failure at call time. Use
-> `apiFamily = bedrock:CONVERSE` (or `INVOKE`) for a FIPS-compliant call.
+`customEndpoint` replaces the **origin only** — the route-derived request path is still appended —
+and it never changes the SigV4 scope: a VPCE or gateway host still signs the route's own region and
+service.
 
-It changes only the host dialled. The SigV4 signing scope, the request path, and the body are untouched.
+> **`customEndpoint` is a global override.** It has the same semantics as the AWS SDK's
+> [`AWS_ENDPOINT_URL`](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html):
+> one URL for **every** service the client talks to. A knowledge base client talks to two
+> (`bedrock-agent` and `bedrock-agent-runtime`), and so does a provider whose `chat()` is on Mantle
+> while a typed `generate()` falls back to Converse. That suits a mock or a single gateway; it does
+> **not** describe a real PrivateLink deployment, where each service has its own interface endpoint
+> and its own `vpce-id`. For PrivateLink, **enable private DNS and set nothing** — AWS's own guidance
+> is *"No code changes needed."* If you must pin per service, the AWS-blessed mechanism is the
+> per-service environment variables (`AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, `..._BEDROCK_AGENT`,
+> `..._BEDROCK_AGENT_RUNTIME`).
 
-### Custom endpoints (`serviceUrl`)
+Setting `customEndpoint` also **skips the host-shape guards** below — they validate a host we would
+otherwise derive, and a concrete origin means there is nothing left to validate.
 
-`serviceUrl` defaults to the template `https://bedrock-{endpoint}.{region}.{domain}`. Left at its
-default, the origin is resolved entirely from AWS SDK endpoint metadata — every partition, the
-FIPS variants, and per-service exceptions, with a standard-pattern fallback for regions newer than the
-bundled metadata. That covers `amazonaws.com.cn` in China and `api.aws` for Mantle automatically.
+### FIPS, GovCloud and Mantle
 
-```ballerina
-// PrivateLink VPC endpoint, or any gateway / mock server — fully literal
-serviceUrl = "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"
+FIPS applies to `bedrock-runtime` only. There is **no** `bedrock-mantle` FIPS host, so `fips` on a
+Mantle-resolved model is a **construction error** rather than a DNS failure at call time.
 
-// Partial override: pin the service segment, let region and domain resolve
-serviceUrl = "https://bedrock-{endpoint}.{region}.{domain}"
-```
+This bites hardest in GovCloud, so read this before deploying there:
 
-It replaces the **origin only** — the route-derived request path is still appended — and it never
-changes the SigV4 scope: a VPCE or gateway host still signs the route's own region and service. A
-placeholder that survives substitution (a typo like `{regoin}`) is a construction error, not a DNS
-failure.
+- **FIPS is opt-in**, not automatic, matching AWS SDK behaviour. If your posture requires FIPS
+  endpoints you must set `endpoint = {fips: true}` yourself.
+- Under `AUTO`, a Mantle-capable model resolves to Mantle. Combined with `fips: true` that is a
+  construction error on **every** flagship Claude model. Set `apiFamily = bedrock:CONVERSE`.
+- **`us-gov-west-1` has Mantle; `us-gov-east-1` does not.** We deliberately do not encode region
+  lists — they go stale — so a Mantle-capable model on `us-gov-east-1` builds a Mantle host and gets
+  AWS's own error at call time, which names the real problem better than a stale list could.
+
+### Partitions
+
+- **China (`cn-`) is rejected at construction, on every API family.** Amazon Bedrock is not offered
+  in the AWS China partition at all — not Mantle, not `bedrock-runtime`. The endpoint resolver would
+  still happily build a well-formed host (it is a string builder and never fails), so without this
+  guard the first call fails with a bare connection error naming nothing.
+- **ISO and EU Sovereign partitions** (`us-iso-`, `us-isob-`, `us-isof-`, `eusc-`) reach
+  `bedrock-runtime` normally. They serve no Mantle host, so under `AUTO` a Mantle-capable model
+  resolves to **Converse** instead of failing — `AUTO` names no destination, so the model's only home
+  there is the one it gets. An explicit `apiFamily = MANTLE` still errors, because an explicit
+  override names a destination and silently going elsewhere would defeat the point of setting it.
 
 ### Inference parameters
 
@@ -620,10 +672,12 @@ A fired guardrail is never silently dropped on either supported route.
 Construction errors are reserved for what AWS *cannot* diagnose for you:
 
 - an `imported-model/` ARN (AWS applies no default chat template to imported weights)
-- an unresolved `{placeholder}` left in `serviceUrl`
+- any route in the AWS China partition (`cn-`) — Bedrock is not offered there at all
 - `apiFamily = MANTLE` on a model with no known Mantle request path
+- an explicit `apiFamily = MANTLE` on a partition that serves no Mantle host (ISO, EU Sovereign);
+  GovCloud and commercial **are** supported, and `AUTO` falls back to Converse rather than failing
+- `fips` on a Mantle-resolved model (there is no `bedrock-mantle-fips` host)
 - a guardrail on a Mantle route (the error names the standalone `ApplyGuardrail` API)
-- Mantle on a partition with no `api.aws` host (`aws-cn`); GovCloud **is** supported
 - a `custom-model/` ARN (an artifact, not a deployment)
 
 Everything AWS *can* tell you — a model unavailable in a region, a bad id — is left to Bedrock's own
@@ -698,8 +752,8 @@ after it in order to keep its default:
 // 0.9.x
 check new bedrock:AnthropicModelProvider(creds, bedrock:CLAUDE_SONNET_4_6, "us-east-1");
 
-// now — model first, credentials optional
-check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, "us-east-1");
+// now — model first, and credentials + region are both required
+check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_EAST_1);
 ```
 
 **`StaticCredentials` and `StsCredentials` were removed.** Both collapse into
@@ -707,12 +761,26 @@ check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, "us-e
 `{accessKeyId, secretAccessKey}` and `{accessKeyId, secretAccessKey, sessionToken}` both still work;
 only code that named those types needs editing. `BearerToken` is unchanged.
 
-**FIPS moved from a `serviceUrl` template to `config = {fips: true}`.** The old
-`"https://bedrock-{endpoint}-fips.{region}.{domain}"` still works, but the flag takes the host from SDK
-metadata and rejects FIPS-on-Mantle at construction.
+**`serviceUrl` and `config.fips` became `endpoint`, an [`aws:EndpointConfig`](https://central.ballerina.io/ballerinax/aws/latest).**
+The `DEFAULT_SERVICE_URL` template and its `{endpoint}`/`{region}`/`{domain}` placeholders are gone —
+no other Ballerina connector uses a brace template as a default, and none of the AWS ones expose a
+`serviceUrl` at all. Migrate:
 
-Nothing else moved. `serviceUrl`, `DEFAULT_SERVICE_URL` and all three placeholders behave as before,
-and SigV4 signing is unchanged — see [Not implemented](#not-implemented) for why signing stayed
+```ballerina
+config = {fips: true}                          → endpoint = {fips: true}
+serviceUrl = "https://host"                    → endpoint = {customEndpoint: "https://host"}
+serviceUrl = "https://bedrock-{endpoint}..."   → (removed; the derived default already covers it)
+```
+
+**`credentials` and `region` became required, and `region` is now `aws:Region|string`.** `region` no
+longer falls back to `AWS_REGION`/`AWS_DEFAULT_REGION`: no `ballerinax` connector reads the
+environment for a parameter default, and a silent region default sends your prompts to a region you
+did not choose. Pass `auth:DEFAULT_CREDENTIALS` and an `aws:Region` explicitly.
+
+**`CLAUDE_MYTHOS_5` and `CLAUDE_MYTHOS_PREVIEW` were removed from `AnthropicModel`** — the models are
+not available. Any id still reachable can be passed as a `string`.
+
+SigV4 signing is unchanged — see [Not implemented](#not-implemented) for why signing stayed
 in-module.
 
 ## Not implemented

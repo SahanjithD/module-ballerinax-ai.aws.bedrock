@@ -195,7 +195,7 @@ function testDeleteByFilterDeletesMatchesSkipsExclusionsAndReportsUndeletableSou
 
     BedrockManagedKnowledgeBase kb = check new (
         DEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`,
+        endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = DEL_DS_CUSTOM);
 
     ai:MetadataFilters filters = {filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]};

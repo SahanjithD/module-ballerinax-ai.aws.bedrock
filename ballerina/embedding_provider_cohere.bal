@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
-import ballerinax/aws.auth;
+import ballerinax/aws;
 
 // CohereEmbeddingProvider.
 
@@ -43,27 +43,23 @@ public distinct isolated client class CohereEmbeddingProvider {
     private final readonly & EmbeddingParams params;
 
     # + model - A Cohere Embed id, or a raw id for a model AWS ships before we update the enum
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
-    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
-    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
-    #                 `BearerToken` for a Bedrock API key
-    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION
-    # + serviceUrl - Endpoint origin. Defaults to the standard AWS `bedrock-runtime`
-    #                endpoint for the region; override only for PrivateLink, an
-    #                egress gateway, or a local mock. For FIPS use `config.fips`
+    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
+    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
+    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
+    #                 source, or a `BearerToken` for a Bedrock API key
+    # + region - AWS region, e.g. `aws:US_EAST_1`
     # + config - `inputType` (see the class docs), `truncate`, `dimensions`, retry, HTTP settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} CohereEmbeddingModel|string model,
-            @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
-            @display {label: "Region"} string region = defaultRegion(),
-            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
+            @display {label: "AWS Credentials"} BedrockCredentials credentials,
+            @display {label: "Region"} aws:Region|string region,
             @display {label: "Embedding Configuration"} *CohereEmbeddingConfig config)
             returns ai:Error? {
         [string, BedrockTransport] [wireModelId, transport] =
-            check resolveEmbeddingSpine("CohereEmbeddingProvider", credentials, model, region, serviceUrl,
+            check resolveEmbeddingSpine("CohereEmbeddingProvider", credentials, model, region, config?.endpoint,
                 COHERE_EMBED_PREFIX, COHERE_EMBED_ENGLISH_V3,
-                config?.httpConfig, config?.retryConfig, config.fips);
+                config?.httpConfig, config?.retryConfig);
 
         self.wireModelId = wireModelId;
         // Two request shapes under one vendor prefix; the id is the only

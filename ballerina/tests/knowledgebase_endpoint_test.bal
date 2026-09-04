@@ -46,15 +46,18 @@ function testAgentEndpointsAreRegionParameterized() returns error? {
 }
 
 @test:Config {}
-function testAgentEndpointOnChinaPartitionUsesTheChinaSuffix() returns error? {
-    Endpoint ep = check buildAgentEndpoint(AGENT_CONTROL, "cn-north-1");
-    test:assertTrue(ep.host.endsWith("amazonaws.com.cn"), ep.host);
-    test:assertEquals(ep.signingService, SIGNING_BEDROCK);
+function testAgentEndpointOnChinaPartitionFailsAtConstruction() returns error? {
+    // Bedrock has no China presence on any endpoint, the agent planes included.
+    Endpoint|error ep = buildAgentEndpoint(AGENT_CONTROL, "cn-north-1");
+    test:assertTrue(ep is error);
+    if ep is error {
+        test:assertTrue(ep.message().includes("China"), ep.message());
+    }
 }
 
 @test:Config {}
 function testAgentEndpointHonoursACustomServiceUrl() returns error? {
-    Endpoint ep = check buildAgentEndpoint(AGENT_DATA, "us-east-1", "http://localhost:4566");
+    Endpoint ep = check buildAgentEndpoint(AGENT_DATA, "us-east-1", {customEndpoint: "http://localhost:4566"});
     test:assertEquals(ep.baseUrl, "http://localhost:4566");
     test:assertEquals(ep.host, "localhost:4566");
     test:assertEquals(ep.signingService, SIGNING_BEDROCK);

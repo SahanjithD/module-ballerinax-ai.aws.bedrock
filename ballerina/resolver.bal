@@ -141,7 +141,14 @@ isolated function resolveBareId(string id, string region, string partition, Rout
     // bedrock-RUNTIME concept — Mantle has no geo prefixes — so a geo-prefixed id
     // signals cross-region runtime intent and stays on Converse
     // (`us.anthropic.claude-opus-4-8` → Converse with the prefix re-applied).
-    if geoPrefix is () {
+    //
+    // GUARD 2: only a partition that SERVES Mantle prefers it. `AUTO` names no
+    // destination, so on an ISO or EU-Sovereign partition — where no bedrock-mantle
+    // host exists — preferring Converse is the correct reading of "resolve to the
+    // home this model has here", not an error. An EXPLICIT `apiFamily = MANTLE`
+    // still reaches `buildEndpoint` and is still rejected there, because the caller
+    // named a destination that cannot be served.
+    if geoPrefix is () && mantleServedOnPartition(partition) {
         MantleEntry? entry = MANTLE_CAPABLE[bareId];
         if entry is MantleEntry {
             return mantleRoute(bareId, geoPrefix, region, partition, entry);
@@ -226,6 +233,24 @@ isolated function partitionForRegion(string region) returns string {
     }
     if region.startsWith("cn-") {
         return "aws-cn";
+    }
+    // The isolated and EU Sovereign partitions. Bedrock carries a service entry in
+    // all four in the SDK endpoint metadata, and each has its own DNS suffix
+    // (`c2s.ic.gov`, `sc2s.sgov.gov`, `csp.hci.ic.gov`, `amazonaws.eu`). Reporting
+    // them as `aws` let them past the Mantle host-shape guard, which would then build
+    // a `bedrock-mantle` host for a partition that serves none.
+    // `us-isob-`/`us-isof-` do not match the `us-iso-` prefix, so order is irrelevant.
+    if region.startsWith("us-iso-") {
+        return "aws-iso";
+    }
+    if region.startsWith("us-isob-") {
+        return "aws-iso-b";
+    }
+    if region.startsWith("us-isof-") {
+        return "aws-iso-f";
+    }
+    if region.startsWith("eusc-") {
+        return "aws-eusc";
     }
     return "aws";
 }

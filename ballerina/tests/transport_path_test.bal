@@ -61,7 +61,7 @@ function testHttpClientSendsEncodedPathVerbatim() returns error? {
 
 @test:Config {}
 function testErrorDetailReadsAllThreeErrorBodyShapes() returns error? {
-    BedrockTransport t = check new (TEST_CREDS, "us-east-1",
+    BedrockTransport t = check new (check resolveCredentials(TEST_CREDS), "us-east-1",
             {baseUrl: "https://x", host: "x", path: "/p", signingService: SIGNING_BEDROCK});
 
     // 1. Bedrock's own shape.

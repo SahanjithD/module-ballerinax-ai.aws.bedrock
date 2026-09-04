@@ -50,7 +50,7 @@ function testAmbiguousKnowledgeBaseNameFailsAtConstruction() returns error? {
 
     BedrockManagedKnowledgeBase|ai:Error kb = new (
         {name: "dup-kb", roleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb"},
-        KB_TEST_CREDS, "us-east-1", serviceUrl = string `http://localhost:${port}`);
+        KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);
@@ -100,7 +100,7 @@ function testNoCustomDataSourceFailsAtConstruction() returns error? {
     check mockListener.'start();
 
     BedrockManagedKnowledgeBase|ai:Error kb =
-        new (NO_CUSTOM_KB_ID, KB_TEST_CREDS, "us-east-1", serviceUrl = string `http://localhost:${port}`);
+        new (NO_CUSTOM_KB_ID, KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);
@@ -162,7 +162,7 @@ function testMultipleCustomDataSourcesFailAtConstruction() returns error? {
     check mockListener.'start();
 
     BedrockManagedKnowledgeBase|ai:Error kb =
-        new (MULTI_CUSTOM_KB_ID, KB_TEST_CREDS, "us-east-1", serviceUrl = string `http://localhost:${port}`);
+        new (MULTI_CUSTOM_KB_ID, KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);
@@ -213,7 +213,7 @@ function testVectorKnowledgeBaseIsRefusedAtConstruction() returns error? {
     check mockListener.'start();
 
     BedrockManagedKnowledgeBase|ai:Error kb =
-        new (VECTOR_KB_ID, KB_TEST_CREDS, "us-east-1", serviceUrl = string `http://localhost:${port}`);
+        new (VECTOR_KB_ID, KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     // Everything this class does was measured on the managed search branch against

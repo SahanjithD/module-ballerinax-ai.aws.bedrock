@@ -231,7 +231,7 @@ function testDeleteByFilterProbesOnTheVectorSourceUriKey() returns error? {
     }
 
     BedrockVectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:MetadataFilters filters = {filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]};
     ai:Error? result = kb.deleteByFilter(filters);
     check mockListener.gracefulStop();
@@ -288,7 +288,7 @@ function testDeleteByFilterReprobesWithThePinAloneOnAZeroHit() returns error? {
     }
 
     BedrockVectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     // The returned error is asserted by the sibling test; here only the probe
     // sequence matters.
     ai:Error? ignored = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
@@ -377,7 +377,7 @@ function testDeleteByFilterDoesNotMassDeleteWhenTheStoreIgnoresTheFilter() retur
     }
 
     BedrockVectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
     check mockListener.gracefulStop();
 
@@ -411,7 +411,7 @@ function testDeleteByFilterRefusesNestedEmptyFilterGroups() returns error? {
     }
 
     BedrockVectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:MetadataFilters nestedEmpty = {filters: [{filters: []}, {filters: []}]};
     // Confirm the premise: this really is non-nil, so the nil check alone cannot
     // catch it. If Ballerina's filter mapping ever starts returning () here, this
@@ -440,7 +440,7 @@ function testDeleteByFilterRefusesAnEmptyFilterSet() returns error? {
     }
 
     BedrockVectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:Error? result = kb.deleteByFilter({filters: []});
     check mockListener.gracefulStop();
 
@@ -515,7 +515,7 @@ function testDeleteByFilterNamesUndeletableDataSources() returns error? {
     check mockListener.'start();
 
     BedrockVectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
-        string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
     check mockListener.gracefulStop();
 

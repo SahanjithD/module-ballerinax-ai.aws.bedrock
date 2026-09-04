@@ -86,7 +86,7 @@ function testMissingRegionFailsAtConstructionWithANamedError() returns error? {
         new ("anthropic.claude-sonnet-4-6", TEST_CREDS, "");
     test:assertTrue(provider is error);
     if provider is error {
-        test:assertTrue(provider.message().includes("AWS_REGION"), provider.message());
+        test:assertTrue(provider.message().includes("No AWS region"), provider.message());
     }
 }
 

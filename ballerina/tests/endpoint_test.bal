@@ -219,10 +219,52 @@ function testDefaultServiceUrlTemplateResolvesPerRouteFamily() returns error? {
 }
 
 @test:Config {}
-function testDefaultServiceUrlTemplateFollowsThePartitionSuffix() returns error? {
+function testDerivedOriginFollowsThePartitionSuffix() returns error? {
+    // The suffix is the partition's, and it is AWS SDK metadata's spelling, not ours.
+    Route gov = check resolveRoute("anthropic.claude-sonnet-4-6", "us-gov-west-1");
+    test:assertEquals((check buildEndpoint(gov)).baseUrl,
+            "https://bedrock-runtime.us-gov-west-1.amazonaws.com");
+    Route iso = check resolveRoute("anthropic.claude-sonnet-4-6", "us-iso-east-1");
+    test:assertEquals((check buildEndpoint(iso)).baseUrl,
+            "https://bedrock-runtime.us-iso-east-1.c2s.ic.gov");
+    Route eusc = check resolveRoute("anthropic.claude-sonnet-4-6", "eusc-de-east-1");
+    test:assertEquals((check buildEndpoint(eusc)).baseUrl,
+            "https://bedrock-runtime.eusc-de-east-1.amazonaws.eu");
+}
+
+@test:Config {}
+function testChinaPartitionFailsAtConstructionOnEveryFamily() returns error? {
+    // Bedrock is not offered in `aws-cn` on ANY endpoint: the partition carries no
+    // `bedrock` entry in the SDK endpoint metadata, the regional-availability table
+    // has no China section, and `bedrock-runtime.cn-north-1.amazonaws.com` is
+    // NXDOMAIN. `aws:resolveEndpoint` would still build a host, so the guard is the
+    // only thing standing between a China user and an opaque connection error.
+    Route converse = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1",
+            {apiFamily: CONVERSE});
+    Endpoint|error converseEp = buildEndpoint(converse);
+    test:assertTrue(converseEp is error, "CONVERSE must not build a China endpoint");
+    if converseEp is error {
+        test:assertTrue(converseEp.message().includes("China"), converseEp.message());
+    }
+
+    Route invoke = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1",
+            {apiFamily: INVOKE});
+    Endpoint|error invokeEp = buildEndpoint(invoke);
+    test:assertTrue(invokeEp is error, "INVOKE must not build a China endpoint");
+    if invokeEp is error {
+        test:assertTrue(invokeEp.message().includes("China"), invokeEp.message());
+    }
+}
+
+@test:Config {}
+function testCustomEndpointSkipsTheHostShapeGuards() returns error? {
+    // The guards validate a host we are about to DERIVE. A concrete origin replaces
+    // it wholesale, so there is nothing left to validate — a mock or gateway must
+    // still work in a region whose derived host we would refuse.
     Route cn = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1");
-    test:assertEquals((check buildEndpoint(cn)).baseUrl,
-            "https://bedrock-runtime.cn-north-1.amazonaws.com.cn");
+    Endpoint ep = check buildEndpoint(cn, {customEndpoint: "http://localhost:4566"});
+    test:assertEquals(ep.baseUrl, "http://localhost:4566");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK);
 }
 
 @test:Config {}
@@ -230,8 +272,7 @@ function testConcreteServiceUrlPassesThroughAndKeepsTheRouteDerivedPath() return
     // The no-sentinel property: a URL with no placeholders is returned untouched, so
     // nothing has to ask "did the caller accept the default?".
     Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
-    Endpoint ep = check buildEndpoint(r,
-            "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com");
+    Endpoint ep = check buildEndpoint(r, {customEndpoint: "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"});
     test:assertEquals(ep.baseUrl, "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com");
     test:assertEquals(ep.host, "vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com",
             "Host header / SigV4 canonical host must follow the override");
@@ -242,32 +283,10 @@ function testConcreteServiceUrlPassesThroughAndKeepsTheRouteDerivedPath() return
 }
 
 @test:Config {}
-function testPartialServiceUrlOverrideKeepsRegionAndDomainAutomatic() returns error? {
-    // The FIPS case: override the service segment, let region/domain resolve. This is
-    // what a nilable-with-derived-default could not express without hardcoding both.
-    Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-gov-west-1");
-    Endpoint ep = check buildEndpoint(r, "https://bedrock-{endpoint}-fips.{region}.{domain}");
-    test:assertEquals(ep.baseUrl, "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com");
-}
-
-@test:Config {}
-function testUnresolvedPlaceholderFailsAtConstruction() returns error? {
-    // A surviving brace is ALWAYS a typo — braces are not legal in DNS names — so
-    // catching it here turns a silent DNS failure into a named construction error.
-    Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
-    Endpoint|error ep = buildEndpoint(r, "https://bedrock-{endpoint}.{regoin}.{domain}");
-    test:assertTrue(ep is error);
-    if ep is error {
-        test:assertTrue(ep.message().includes("unresolved placeholder"), ep.message());
-        test:assertTrue(ep.message().includes("{regoin}"), ep.message());
-    }
-}
-
-@test:Config {}
 function testServiceUrlTrailingSlashIsTrimmed() returns error? {
     // Otherwise it doubles up against the leading slash of the route-derived path.
     Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
-    test:assertEquals((check buildEndpoint(r, "https://gw.corp/")).baseUrl, "https://gw.corp");
+    test:assertEquals((check buildEndpoint(r, {customEndpoint: "https://gw.corp/"})).baseUrl, "https://gw.corp");
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +300,7 @@ function testFipsResolvesToTheFipsHostFromSdkMetadata() returns error? {
     // The host spelling is AWS's, not ours — that is the whole point of routing
     // this through SDK metadata rather than string-building `-fips` ourselves.
     Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
-    Endpoint ep = check buildEndpoint(r, DEFAULT_SERVICE_URL, true);
+    Endpoint ep = check buildEndpoint(r, {fips: true});
     test:assertEquals(ep.baseUrl, "https://bedrock-runtime-fips.us-east-1.amazonaws.com");
     test:assertEquals(ep.host, "bedrock-runtime-fips.us-east-1.amazonaws.com");
     test:assertEquals(ep.signingService, SIGNING_BEDROCK,
@@ -293,7 +312,7 @@ function testFipsIsRejectedOnAMantleRouteBeforeAnyIo() returns error? {
     // There is no `bedrock-mantle-fips` host. Without this guard the SDK fallback
     // would synthesise one and the failure would surface as an opaque DNS error.
     Route mantle = check resolveRoute("openai.gpt-5.4", "us-east-1");
-    Endpoint|error ep = buildEndpoint(mantle, DEFAULT_SERVICE_URL, true);
+    Endpoint|error ep = buildEndpoint(mantle, {fips: true});
     test:assertTrue(ep is error);
     if ep is error {
         test:assertTrue(ep.message().includes("fips"), ep.message());
@@ -313,11 +332,3 @@ function testMantleRequiresTheDualstackVariantToReachApiAws() returns error? {
             "https://bedrock-mantle.us-east-1.api.aws");
 }
 
-@test:Config {}
-function testCustomTemplateStillTakesItsDomainFromSdkMetadata() returns error? {
-    // The `{domain}` placeholder is no longer a hardcoded suffix table; it is
-    // derived from the resolved host, so China still lands on `.com.cn`.
-    Route cn = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1");
-    Endpoint ep = check buildEndpoint(cn, "https://bedrock-{endpoint}.{region}.{domain}");
-    test:assertEquals(ep.baseUrl, "https://bedrock-runtime.cn-north-1.amazonaws.com.cn");
-}

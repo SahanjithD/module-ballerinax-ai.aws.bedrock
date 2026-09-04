@@ -51,7 +51,7 @@ function testMantleRejectsTypedStructuredOutput() returns error? {
     Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-east-1");
     Endpoint ep = check buildEndpoint(route);
     readonly & ModelConverter converter = check selectConverter(route);
-    BedrockTransport transport = check new (TEST_CREDS, route.region, ep);
+    BedrockTransport transport = check new (check resolveCredentials(TEST_CREDS), route.region, ep);
     ai:Prompt prompt = `Give me a number`;
 
     anydata|ai:Error result = structuredGenerate(false, MANTLE, converter, transport,

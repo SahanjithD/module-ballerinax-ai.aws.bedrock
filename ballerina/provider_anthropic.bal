@@ -13,14 +13,31 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerinax/aws;
 import ballerinax/aws.auth;
 import ballerina/jballerina.java;
 
 // AnthropicModelProvider — a thin typed facade over the shared spine.
-// Claude on Converse (default) / Mantle (Mythos, Haiku) / Invoke-Anthropic.
+// Claude on Converse (default) / Mantle / Invoke-Anthropic.
 
-# Well-known Claude model ids. Any newer Claude is reachable by passing its id as
-# a `string`.
+# Well-known Claude model ids, in their BARE form. Any newer Claude is reachable by
+# passing its id as a `string`.
+#
+# ON `bedrock-runtime` (Converse/Invoke) THESE IDS NEED A CROSS-REGION PREFIX.
+# Current Claude models are served there through cross-region inference profiles
+# only: the model card's regional-availability table marks In-Region unsupported in
+# every region and lists the Geo (`us.`, `eu.`, `au.`) and Global (`global.`) profile
+# ids as the way in — a bare id on Converse/Invoke fails with
+# `on-demand throughput isn't supported`. So pass e.g. `"us.anthropic.claude-sonnet-5"`
+# whenever you force `apiFamily = CONVERSE` or `INVOKE`. The resolver strips the
+# prefix for lookup and re-applies it on the wire.
+#
+# The BARE id is the `bedrock-mantle` form, which takes no geo prefix — which is why
+# these constants are bare and why an id carrying a prefix always routes to Converse.
+# (One AWS doc inconsistency to be aware of: the model cards' own boto3 samples still
+# show the bare id on Converse, contradicting the availability table on the same page.
+# The table matches the error users actually hit.)
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
 public enum AnthropicModel {
     # Claude Opus 5 — 1M context, 128K max output, adaptive thinking on by default.
     # Dual-homed (Converse and Mantle); under `AUTO` it resolves to Mantle, so pass
@@ -32,11 +49,7 @@ public enum AnthropicModel {
     # `generate()`.
     CLAUDE_SONNET_5 = "anthropic.claude-sonnet-5",
     CLAUDE_SONNET_4_6 = "anthropic.claude-sonnet-4-6",
-    CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
-    CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview",
-    # Mantle only (Messages API). No structured output, and rejects `temperature` —
-    # leave it unset.
-    CLAUDE_MYTHOS_5 = "anthropic.claude-mythos-5"
+    CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5"
 }
 
 # Anthropic-specific configuration. Includes the shared `CommonModelConfig` and
@@ -74,15 +87,12 @@ public isolated distinct client class AnthropicModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A Claude id (bare, CRIS-prefixed, ARN, or `mantle/|converse/|invoke/` prefixed)
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
-    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
-    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
-    #                 `BearerToken` for a Bedrock API key
-    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it
-    # + serviceUrl - Endpoint origin. Defaults to the standard AWS endpoint for the
-    #                region; override only for PrivateLink, an egress gateway, or a
-    #                local mock. For FIPS use `config.fips`, not a hand-written host
+    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
+    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
+    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
+    #                 source, or a `BearerToken` for a Bedrock API key
+    # + region - AWS region, e.g. `aws:US_EAST_1`. An ARN `model`'s region segment
+    #            overrides it
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to use the
     #                 model's own default — several current models reject it outright
@@ -90,18 +100,20 @@ public isolated distinct client class AnthropicModelProvider {
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} AnthropicModel|string model,
-            @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
-            @display {label: "Region"} string region = defaultRegion(),
-            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
+            @display {label: "AWS Credentials"} BedrockCredentials credentials,
+            @display {label: "Region"} aws:Region|string region,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AnthropicConfig config)
             returns ai:Error? {
         // ---- shared spine (identical in every vendor provider) ----
         RouteConfig routeConfig = {apiFamily: config.apiFamily};
+        aws:EndpointConfig? endpointConfig = config?.endpoint;
+        // Resolved ONCE per provider and shared by the chat and generate spines.
+        auth:CredentialProvider|BearerToken resolvedCredentials = check resolveCredentials(credentials);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("AnthropicModelProvider", credentials, model, region, serviceUrl, routeConfig,
-                config?.httpConfig, config?.retryConfig, config?.guardrail, config.fips);
+            check resolveSpine("AnthropicModelProvider", resolvedCredentials, model, region, endpointConfig, routeConfig,
+                config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
@@ -111,9 +123,9 @@ public isolated distinct client class AnthropicModelProvider {
         self.extraHeaders = chatHeaders.cloneReadOnly();
         [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
             [genFamily, genModelId, genConverter, genTransport, genHeaders] =
-            check resolveGenerateSpine("AnthropicModelProvider", credentials, model, region, serviceUrl,
+            check resolveGenerateSpine("AnthropicModelProvider", resolvedCredentials, credentials, model, region, endpointConfig,
                 routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
-                route, converter, transport, chatHeaders, config.fips);
+                route, converter, transport, chatHeaders);
         self.genFamily = genFamily;
         self.genModelId = genModelId;
         self.genConverter = genConverter;

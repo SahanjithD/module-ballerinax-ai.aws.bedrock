@@ -14,6 +14,8 @@
 
 import ballerina/ai;
 import ballerina/http;
+import ballerinax/aws;
+import ballerinax/aws.auth;
 
 // The wire layer for `BedrockVectorKnowledgeBase`. Deliberately SEPARATE from
 // knowledgebase_common.bal rather than branching inside it on a knowledge base type:
@@ -509,7 +511,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 // rather than being passed alongside it — one source of truth, so a future field
 // cannot be wired at one call site and forgotten at another.
 isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
-        string serviceUrl, string|VectorKnowledgeBaseDefinition knowledgeBase, VectorKnowledgeBaseConfig config)
+        string|VectorKnowledgeBaseDefinition knowledgeBase, VectorKnowledgeBaseConfig config)
         returns KbSpine|ai:Error {
     do {
         check guardRegion(region);
@@ -521,12 +523,15 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredent
         string? dataSourceIdOverride = config?.dataSourceId;
         http:ClientConfiguration? httpConfig = config?.httpConfig;
         RetryConfig? retryConfig = config?.retryConfig;
-        Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, serviceUrl, config.fips);
-        Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, serviceUrl, config.fips);
+        aws:EndpointConfig? endpointConfig = config?.endpoint;
+        Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, endpointConfig);
+        Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, endpointConfig);
+        // One provider, both planes.
+        auth:CredentialProvider|BearerToken resolved = check resolveCredentials(credentials);
         BedrockTransport controlTransport =
-            check new (credentials, region, controlEp, httpConfig, retryConfig, true);
+            check new (resolved, region, controlEp, httpConfig, retryConfig, true);
         BedrockTransport dataTransport =
-            check new (credentials, region, dataEp, httpConfig, retryConfig, true);
+            check new (resolved, region, dataEp, httpConfig, retryConfig, true);
 
         KbAttachResult attach = check resolveVectorKnowledgeBase(controlTransport, knowledgeBase);
         string dataSourceId;

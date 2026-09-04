@@ -16,6 +16,8 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/lang.runtime;
 import ballerina/time;
+import ballerinax/aws;
+import ballerinax/aws.auth;
 
 // The shared spine `BedrockManagedKnowledgeBase` is built over: two agent-plane
 // transports, find-or-create, data-source resolution, chunking-strategy detection,
@@ -111,19 +113,21 @@ type KbSpine record {|
 // resolution -> chunking detection. Every failure surfaces here, before any method
 // is callable.
 isolated function resolveKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
-        string serviceUrl, string|KnowledgeBaseDefinition knowledgeBase, string? dataSourceIdOverride,
-        http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, boolean fips,
+        aws:EndpointConfig? endpointConfig, string|KnowledgeBaseDefinition knowledgeBase,
+        string? dataSourceIdOverride, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig,
         RerankingModelType? rerankingModelType = ())
         returns KbSpine|ai:Error {
     do {
         check guardRegion(region);
         check guardEmbeddingModelAgainstReranker(knowledgeBase, rerankingModelType);
-        Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, serviceUrl, fips);
-        Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, serviceUrl, fips);
+        Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, endpointConfig);
+        Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, endpointConfig);
+        // One provider, both planes.
+        auth:CredentialProvider|BearerToken resolved = check resolveCredentials(credentials);
         BedrockTransport controlTransport =
-            check new (credentials, region, controlEp, httpConfig, retryConfig, true);
+            check new (resolved, region, controlEp, httpConfig, retryConfig, true);
         BedrockTransport dataTransport =
-            check new (credentials, region, dataEp, httpConfig, retryConfig, true);
+            check new (resolved, region, dataEp, httpConfig, retryConfig, true);
 
         KbAttachResult attach = check resolveKnowledgeBase(controlTransport, knowledgeBase);
         string dataSourceId;

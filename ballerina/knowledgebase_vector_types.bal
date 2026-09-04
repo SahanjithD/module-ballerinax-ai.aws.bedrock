@@ -14,6 +14,7 @@
 
 import ballerina/ai;
 import ballerina/http;
+import ballerinax/aws;
 
 // Public surface for `BedrockVectorKnowledgeBase` — the SELF-MANAGED knowledge base
 // (`KnowledgeBaseConfiguration.type = VECTOR`), where the vector store belongs to the
@@ -408,9 +409,13 @@ public type VectorKnowledgeBaseConfig record {|
     http:ClientConfiguration httpConfig?;
     # Retry policy, shared by both agent-plane clients.
     RetryConfig retryConfig?;
-    # Use the FIPS 140-validated endpoint variant. Ignored when `serviceUrl` is a
-    # concrete URL.
-    boolean fips = false;
+    # Endpoint resolution options: `fips`, `dualstack`, and a `customEndpoint`
+    # override. The host is derived from the region and the resolved route when this
+    # is unset, which is correct in every partition — set it only for PrivateLink
+    # without private DNS, an egress gateway, or a local mock. A `customEndpoint` is
+    # a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`:
+    # it applies to every service the client talks to.
+    aws:EndpointConfig endpoint?;
 |};
 
 // `implicitFilterConfiguration` is deliberately NOT exposed. It is a real member of

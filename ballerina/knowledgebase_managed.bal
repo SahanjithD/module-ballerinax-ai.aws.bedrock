@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
-import ballerinax/aws.auth;
+import ballerinax/aws;
 
 # A Bedrock managed knowledge base (`KnowledgeBaseConfiguration.type = MANAGED` —
 # Bedrock owns the vector store) exposed through `ai:KnowledgeBase`.
@@ -38,23 +38,21 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
     private final RerankingModelType? rerankingModelType;
 
     # + knowledgeBase - An existing knowledge base id/ARN, or a `KnowledgeBaseDefinition` to find-or-create by name
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
-    #                 shared config, EC2 IMDSv2). SigV4 only — Bedrock API keys are not
+    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
+    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), or an
+    #                 explicit `auth:AuthConfig`. SigV4 only — Bedrock API keys are not
     #                 accepted on the agent planes
-    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION
-    # + serviceUrl - Endpoint origin for both agent planes. Defaults to the standard AWS
-    #                endpoint for the region; override only for PrivateLink or a local mock
+    # + region - AWS region, e.g. `aws:US_EAST_1`
     # + config - Data source override, chunking, ingest/retrieve tuning, HTTP/retry settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Knowledge Base"} string|KnowledgeBaseDefinition knowledgeBase,
-            @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials = auth:DEFAULT_CREDENTIALS,
-            @display {label: "Region"} string region = defaultRegion(),
-            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
+            @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials,
+            @display {label: "Region"} aws:Region|string region,
             @display {label: "Configuration"} *ManagedKnowledgeBaseConfig config)
             returns ai:Error? {
-        KbSpine spine = check resolveKbSpine("BedrockManagedKnowledgeBase", credentials, region, serviceUrl,
-            knowledgeBase, config?.dataSourceId, config?.httpConfig, config?.retryConfig, config.fips,
+        KbSpine spine = check resolveKbSpine("BedrockManagedKnowledgeBase", credentials, region,
+            config?.endpoint, knowledgeBase, config?.dataSourceId, config?.httpConfig, config?.retryConfig,
             config?.rerankingModelType);
         self.controlTransport = spine.controlTransport;
         self.dataTransport = spine.dataTransport;

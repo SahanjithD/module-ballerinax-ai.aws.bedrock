@@ -67,7 +67,7 @@ function testCustomServiceUrlIsHonouredOnTheWire() returns error? {
     // override is taken verbatim rather than forced onto a scheme.
     AnthropicModelProvider provider = check new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1",
-            serviceUrl = string `http://localhost:${port}`);
+            endpoint = {customEndpoint: string `http://localhost:${port}`});
     _ = check provider->chat([{role: "user", content: "hi"}]);
     check mockListener.gracefulStop();
 

@@ -198,19 +198,18 @@ function testChinaPartitionArn() returns error? {
 }
 
 @test:Config {}
-function testChinaPartitionArnBuildsTheCnHostAndSignsAsBedrock() returns error? {
-    // Partition inference is only half the job — the whole point of tracking the
-    // partition is the DNS suffix, and a hardcoded `.amazonaws.com` would still
-    // pass the resolver assertions above.
+function testChinaPartitionArnIsRejectedAtConstruction() returns error? {
+    // Partition inference is only half the job. The partition is tracked so the
+    // guards can fire, and `aws-cn` has no Bedrock at all — an ARN naming it is
+    // well-formed and still unreachable.
     Route r = check resolveRoute(
         "arn:aws-cn:bedrock:cn-north-1:123456789012:provisioned-model/xyz", REGION);
-    Endpoint ep = check buildEndpoint(r);
-    test:assertEquals(ep.host, "bedrock-runtime.cn-north-1.amazonaws.com.cn",
-            "aws-cn must use the .com.cn suffix");
-    test:assertEquals(ep.path,
-            "/model/arn%3Aaws-cn%3Abedrock%3Acn-north-1%3A123456789012%3Aprovisioned-model%2Fxyz/converse");
-    test:assertEquals(ep.signingService, SIGNING_BEDROCK,
-            "signing name follows the route family, not the partition");
+    test:assertEquals(r.partition, "aws-cn");
+    Endpoint|error ep = buildEndpoint(r);
+    test:assertTrue(ep is error);
+    if ep is error {
+        test:assertTrue(ep.message().includes("China"), ep.message());
+    }
 }
 
 @test:Config {}
@@ -375,5 +374,69 @@ function testNonBedrockArnIsRejectedAtConstruction() {
     test:assertTrue(r is error);
     if r is error {
         test:assertTrue(r.message().includes("Bedrock"), r.message());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Partition inference beyond `aws`/`aws-cn`/`aws-us-gov`. Bedrock carries a service
+// entry in the isolated and EU Sovereign partitions too, and each has its own DNS
+// suffix — reporting them as `aws` let them past the Mantle host-shape guard.
+// ---------------------------------------------------------------------------
+
+@test:Config {}
+function testPartitionForRegionCoversEveryBedrockPartition() {
+    test:assertEquals(partitionForRegion("us-east-1"), "aws");
+    test:assertEquals(partitionForRegion("us-gov-west-1"), "aws-us-gov");
+    test:assertEquals(partitionForRegion("cn-north-1"), "aws-cn");
+    test:assertEquals(partitionForRegion("us-iso-east-1"), "aws-iso");
+    test:assertEquals(partitionForRegion("us-isob-east-1"), "aws-iso-b");
+    test:assertEquals(partitionForRegion("us-isof-east-1"), "aws-iso-f");
+    test:assertEquals(partitionForRegion("eusc-de-east-1"), "aws-eusc");
+}
+
+@test:Config {}
+function testIsobDoesNotMatchTheIsoPrefix() {
+    // `us-isob-east-1`.startsWith("us-iso-") is false — the 7th character is `b`,
+    // not `-` — so the four checks are order-independent. Pinned because a careless
+    // `us-iso` (no trailing dash) would silently collapse three partitions into one.
+    test:assertFalse("us-isob-east-1".startsWith("us-iso-"));
+    test:assertFalse("us-isof-east-1".startsWith("us-iso-"));
+}
+
+@test:Config {}
+function testAutoPrefersConverseOnAPartitionThatDoesNotServeMantle() returns error? {
+    // `AUTO` names no destination, so on a partition with no bedrock-mantle host the
+    // model's only home there IS Converse. Erroring would contradict what AUTO means.
+    Route r = check resolveRoute("anthropic.claude-opus-4-8", "us-iso-east-1");
+    test:assertEquals(r.family, CONVERSE, "AUTO must fall back, not fail");
+    test:assertEquals(r.partition, "aws-iso");
+    Endpoint ep = check buildEndpoint(r);
+    test:assertEquals(ep.baseUrl, "https://bedrock-runtime.us-iso-east-1.c2s.ic.gov");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK);
+}
+
+@test:Config {}
+function testAutoStillPrefersMantleWhereItIsServed() returns error? {
+    // The fallback must not weaken the Amendment-2 preference order anywhere Mantle
+    // actually exists — commercial and GovCloud.
+    Route commercial = check resolveRoute("anthropic.claude-opus-4-8", "us-east-1");
+    test:assertEquals(commercial.family, MANTLE);
+    Route gov = check resolveRoute("anthropic.claude-opus-4-8", "us-gov-west-1");
+    test:assertEquals(gov.family, MANTLE);
+}
+
+@test:Config {}
+function testExplicitMantleStillFailsOnAPartitionThatDoesNotServeIt() returns error? {
+    // An explicit `apiFamily` names a destination. Silently going elsewhere would
+    // break the one guarantee an override exists to provide, so this errors where
+    // AUTO falls back.
+    Route r = check resolveRoute("anthropic.claude-opus-4-8", "us-iso-east-1",
+            {apiFamily: MANTLE});
+    test:assertEquals(r.family, MANTLE);
+    Endpoint|error ep = buildEndpoint(r);
+    test:assertTrue(ep is error);
+    if ep is error {
+        test:assertTrue(ep.message().includes("aws-iso"), ep.message());
+        test:assertTrue(ep.message().includes("CONVERSE"), ep.message());
     }
 }
