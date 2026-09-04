@@ -26,19 +26,12 @@ import ballerina/jballerina.java;
 
 # Well-known DeepSeek model ids. Any newer id can be passed as a `string`.
 public enum DeepSeekModel {
-    # The CRIS (cross-region) profile id, NOT the bare `deepseek.r1-v1:0`.
-    #
-    # This is deliberate: the card's Regional Availability table marks In-Region as
-    # NO in *every* region and Geo as YES, so the bare id is not callable anywhere —
-    # `us.` is the only form that resolves. US is also the only geo AWS lists for
-    # this model. Pass a raw string if you need a different profile.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html
+    # The CRIS (cross-region) profile id — the bare `deepseek.r1-v1:0` is not
+    # callable in any region. Pass a raw string for a different geo profile.
     DEEPSEEK_R1 = "us.deepseek.r1-v1:0",
-    # DeepSeek V3.2 — the current flagship (MoE, reasoning/coding). UNLIKE R1, the
-    # BARE id IS callable: the card marks In-Region YES in us-east-1 and elsewhere,
-    # Geo/Global not supported — so no CRIS prefix. Converse + Invoke on
-    # bedrock-runtime (dual-homed with bedrock-mantle; defaults to Converse here).
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+    # DeepSeek V3.2 — the current flagship (MoE, reasoning/coding). Unlike R1, the
+    # bare id is callable directly, no CRIS prefix needed. Converse + Invoke;
+    # dual-homed with Mantle, defaults to Converse here.
     DEEPSEEK_V3_2 = "deepseek.v3.2"
 }
 
@@ -68,32 +61,18 @@ public isolated distinct client class DeepSeekModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A DeepSeek id; use a CRIS inference-profile id (e.g. `us.deepseek.r1-v1:0`)
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
-    #                 SSO, shared config, `credential_process`, ECS container credentials,
-    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
-    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
+    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
+    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
+    #                 `BearerToken` for a Bedrock API key
     # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it. Also the SigV4 signing scope, which a custom
-    #            `serviceUrl` does NOT change
-    # + serviceUrl - Endpoint origin. The default template resolves per route from AWS
-    #                SDK endpoint metadata, which already covers every partition
-    #                (`amazonaws.com`, `amazonaws.com.cn`) and Mantle's `api.aws`.
-    #                Override it only for a host AWS cannot derive:
-    #                `https://vpce-0abc123.bedrock-runtime.us-east-1.vpce.amazonaws.com`
-    #                (PrivateLink / VPC endpoint), `https://bedrock-gw.internal.corp`
-    #                (an egress gateway or proxy), or `http://localhost:4566`
-    #                (LocalStack, a mock server, or a recorded fixture in tests).
-    #                The placeholders `{endpoint}` (`runtime`|`mantle`), `{region}` and
-    #                `{domain}` are substituted, so a partial override such as
-    #                `https://bedrock-{endpoint}.{region}.{domain}` keeps region and
-    #                domain automatic. It replaces the ORIGIN only — the route-derived
-    #                request path is still appended — and never changes the SigV4
-    #                signing scope. For FIPS use `config.fips`, not a hand-written host
+    #            segment overrides it
+    # + serviceUrl - Endpoint origin. Defaults to the standard AWS endpoint for the
+    #                region; override only for PrivateLink, an egress gateway, or a
+    #                local mock. For FIPS use `config.fips`, not a hand-written host
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature. Leave unset (the default) to omit the
-    #                 field entirely and use the model's own default — several current
-    #                 models reject it outright
+    # + temperature - Sampling temperature. Leave unset (the default) to use the
+    #                 model's own default — several current models reject it outright
     # + config - Routing overrides, guardrails, Converse passthrough
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -142,8 +121,9 @@ public isolated distinct client class DeepSeekModelProvider {
         => runChat("DeepSeek", self.family, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
-    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
-    # chat to Mantle and the model is also served on `bedrock-runtime`.
+    # Generates a value of the expected type by forcing a single tool whose schema
+    # is that type. Available on the Converse and Invoke routes; a Mantle-routed
+    # model returns an `ai:Error` for any target type other than `string`.
     #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type

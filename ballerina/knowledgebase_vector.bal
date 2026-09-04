@@ -15,48 +15,18 @@
 import ballerina/ai;
 import ballerinax/aws.auth;
 
-# A Bedrock **self-managed** knowledge base — `KnowledgeBaseConfiguration.type` is
-# `VECTOR`, meaning your own vector store rather than Bedrock's — exposed through
-# `ai:KnowledgeBase`. This is the console's *Self-managed KB → Unstructured Vector
-# Store KB*.
+# A Bedrock self-managed knowledge base (`KnowledgeBaseConfiguration.type = VECTOR`)
+# — your own vector store rather than Bedrock's — exposed through `ai:KnowledgeBase`.
+# This is the console's *Self-managed KB → Unstructured Vector Store KB*.
 #
-# Two ways to use it, mirroring `BedrockManagedKnowledgeBase`:
+# Pass an existing knowledge base id to attach to it, or a
+# `VectorKnowledgeBaseDefinition` to find-or-create one by name.
 #
-# - **Attach to an existing knowledge base** (pass its id): `retrieve()` searches
-#   every data source on it; `ingest()`/`deleteByFilter()` need it to also have a
-#   `CUSTOM` (direct-ingestion) data source — construction fails, naming why, if it
-#   does not.
-# - **Create and own it end to end** (pass a `VectorKnowledgeBaseDefinition`): this
-#   class creates the knowledge base and a `CUSTOM` data source, and every document
-#   flows through `ingest()`. Find-or-create by NAME.
-#
-# ## The vector store must already exist
-#
-# This class never provisions one. `CreateKnowledgeBase` accepts only a
-# `storageConfiguration` naming an existing collection, cluster, table, or bucket;
-# the console's "Quick create a new vector store" has no API equivalent — *"If you
-# prefer to let Amazon Bedrock create and manage a vector store for you, use the
-# console"*. Provision it with Terraform/CDK/the console, then pass its ARNs.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-create.html
-#
-# ## IAM
-#
-# `ingest()` needs BOTH `bedrock:StartIngestionJob` and
-# `bedrock:IngestKnowledgeBaseDocuments` — AWS reports only one as missing per
-# attempt, so granting the one named in the first `AccessDenied` fails again on the
-# other. The knowledge base's own `roleArn`
-# additionally needs permissions on your vector store; those belong to that role,
-# not to this client's credentials.
+# The vector store named by `storageConfiguration` must already exist; this class
+# never provisions one. `ingest()` additionally needs `bedrock:StartIngestionJob`
+# and `bedrock:IngestKnowledgeBaseDocuments` on the caller's credentials, and the
+# knowledge base's own `roleArn` needs permissions on the vector store itself.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
-#
-# ## What is not measured
-#
-# Every behaviour `BedrockManagedKnowledgeBase` relies on was measured against the
-# live API on Bedrock's own vector store. None of those checks ran against a
-# self-managed one, so on this class the equivalents are documented-but-unmeasured — see
-# `VECTOR_SOURCE_URI_METADATA_KEY` and `deleteByFilter` below. Where the managed
-# class could simplify on the strength of a measurement, this one keeps the
-# conservative form.
 public distinct isolated client class BedrockVectorKnowledgeBase {
     *ai:KnowledgeBase;
 
@@ -75,17 +45,12 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
 
     # + knowledgeBase - An existing knowledge base id/ARN, or a `VectorKnowledgeBaseDefinition` to
     #                   find-or-create by name. The vector store it names must already exist
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
-    #                 SSO, shared config, `credential_process`, ECS container credentials,
-    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
-    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit source.
-    #                 SigV4 only — Bedrock API keys do not work on the agent planes, see
-    #                 `KnowledgeBaseCredentials`
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
+    #                 shared config, EC2 IMDSv2). SigV4 only — Bedrock API keys are not
+    #                 accepted on the agent planes
     # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION
-    # + serviceUrl - Endpoint origin for BOTH agent planes (`bedrock-agent` and
-    #                `bedrock-agent-runtime`). The default template resolves per plane from AWS
-    #                SDK endpoint metadata. Override it only for a host AWS cannot derive
-    #                (PrivateLink, an egress gateway, or a local mock)
+    # + serviceUrl - Endpoint origin for both agent planes. Defaults to the standard AWS
+    #                endpoint for the region; override only for PrivateLink or a local mock
     # + config - Data source override, chunking, ingest/retrieve tuning, HTTP/retry settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -113,15 +78,8 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
     # when the data source's `chunkingStrategy` is `NONE` (detected at construction —
     # see `VectorKnowledgeBaseConfig.chunker`).
     #
-    # SLOW BY NATURE: `IngestKnowledgeBaseDocuments` returns 202 as soon as Bedrock
-    # has accepted the documents, not once they are indexed. This call therefore
-    # blocks until every document reaches a terminal status or `ingestTimeout`
+    # Blocks until every document reaches a terminal status or `ingestTimeout`
     # elapses, so a `retrieve()` immediately afterward sees them.
-    #
-    # There is deliberately no fire-and-forget mode. `ai:KnowledgeBase.ingest`
-    # returns a bare `Error?` with no job handle and no status method, so returning
-    # at the 202 would report success for a document that later lands `FAILED` and
-    # leave the caller no way to ever discover it.
     #
     # + documents - The documents or chunks to index; only text content is supported
     # + return - An `ai:Error` if any document fails to submit or to index; `nil` otherwise
@@ -157,12 +115,8 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
         }
     }
 
-    # Retrieves relevant chunks. Searches across EVERY data source on the knowledge
+    # Retrieves relevant chunks. Searches across every data source on the knowledge
     # base, not just the `CUSTOM` one `ingest()` writes to.
-    #
-    # Sends the `vectorSearchConfiguration` branch — never
-    # `managedSearchConfiguration`, which is the managed knowledge base's branch and
-    # carries different members.
     #
     # + query - The text query to search for
     # + maxLimit - The maximum number of items to return, or `-1` for no limit (subject to your vector store's own relevance cutoff)
@@ -204,41 +158,13 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
 
     # Deletes documents matching `filters`.
     #
-    # Bedrock has no metadata-based delete and no way to read a document's metadata
-    # back — `KnowledgeBaseDocumentDetail` carries only `dataSourceId`, `identifier`,
-    # `knowledgeBaseId`, `status`, `statusReason` and `updatedAt`, with no metadata
-    # member on any data source type. So this is a reconstruction: enumerate every
-    # document, then ask `Retrieve` one yes/no question per document — the caller's
-    # filter ANDed with a leaf pinning that ONE document by
-    # `x-amz-bedrock-kb-source-uri`.
-    #
-    # ## Why this keeps a second probe the managed class does not
-    #
-    # Pinning exists because sending the caller's filter alone under-deletes: a
-    # relevance floor drops matching documents with no `nextToken` to signal
-    # truncation. `BedrockManagedKnowledgeBase` was able to drop its follow-up probe
-    # after measuring that pinned probes score 0.88-1.0 against a floor near 0.15,
-    # making a zero-hit result unambiguous.
-    #
-    # THAT MEASUREMENT DOES NOT TRANSFER HERE. It was taken against Bedrock's own
-    # vector store; on a self-managed knowledge base the ranking engine is YOUR
-    # store's, and nothing guarantees a pinned probe clears its floor the same way.
-    # So a zero-hit result is re-probed with the id leaf ALONE: if that also returns
-    # nothing, the document was unreachable rather than genuinely excluded, and it is
-    # reported as indeterminate instead of being silently skipped — which would
-    # under-delete. Once the equivalent measurement exists for a given backend, this
-    # second probe can be dropped exactly as the managed class dropped its own.
-    #
-    # Costs one to two `Retrieve` calls per document in the knowledge base — a
-    # maintenance operation, not something to put on a request path.
-    #
-    # Runs over every data source, not only the `CUSTOM` one `ingest()` writes to.
-    # `DocumentIdentifier.dataSourceType` has only `CUSTOM`/`S3` members, so documents
-    # from any other data source cannot be deleted through this API at all — those are
-    # named in the returned error rather than silently skipped.
-    #
-    # Deletes that CAN be made still happen even when some documents or data sources
-    # cannot be reached.
+    # Bedrock has no metadata-based delete, so this enumerates every document on
+    # every data source and probes each one against `filters` through `Retrieve`.
+    # Costs one to two `Retrieve` calls per document — a maintenance operation, not
+    # something to put on a request path. Only `CUSTOM`/`S3` data sources support
+    # deletion; documents on other data source types are named in the returned error
+    # rather than silently skipped, and deletes that can be made still happen even
+    # when some documents or data sources cannot be reached.
     #
     # + filters - The metadata filters used to identify which documents to delete
     # + return - An `ai:Error` naming indeterminate documents or undeletable data sources; `nil` otherwise

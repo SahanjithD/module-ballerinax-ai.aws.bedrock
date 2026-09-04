@@ -23,25 +23,16 @@ import ballerinax/aws.auth;
 // ============================================================================
 
 # A Bedrock API key (bearer token) — first-class on both endpoints.
-#
-# Module-local rather than an `auth:AuthConfig` member: every `auth:AuthConfig`
-# variant resolves to `auth:Credentials` (access key + secret + optional session
-# token), which cannot carry an opaque key. A bearer bypasses SigV4 entirely.
 public type BearerToken record {|
     # The Bedrock API key, sent as `Authorization: Bearer` — or as `x-api-key` on a
     # Mantle Messages path, where the two headers are mutually exclusive.
     string apiKey;
 |};
 
-# The credential union accepted by every provider.
-#
-# `auth:AuthConfig` covers static keys (`auth:StaticAuthConfig`, whose optional
-# `sessionToken` also carries temporary STS credentials), `auth:AssumeRoleConfig`
-# for cross-account, `auth:WebIdentityConfig` for EKS IRSA, plus SSO, named
-# profiles and `credential_process`. Its default member, `auth:DEFAULT_CREDENTIALS`,
-# walks the full chain — env vars, web identity, SSO, shared config, external
-# process, ECS container credentials, EC2 IMDSv2 — so nothing needs configuring on
-# EC2, ECS, EKS or Lambda. Expiry and refresh are handled by `auth:CredentialProvider`.
+# The credential union accepted by every provider. `auth:AuthConfig` covers static
+# keys, assume-role, EKS IRSA, SSO, named profiles and `credential_process`; its
+# default, `auth:DEFAULT_CREDENTIALS`, walks the full AWS credential chain so
+# nothing needs configuring on EC2, ECS, EKS or Lambda.
 public type BedrockCredentials auth:AuthConfig|BearerToken;
 
 // ============================================================================
@@ -81,11 +72,8 @@ public type CommonModelConfig record {|
     # `MANTLE` force that family. The escape hatch — outranks every heuristic.
     ApiFamily apiFamily = AUTO;
 
-    # Use the FIPS 140-validated endpoint variant (`bedrock-runtime-fips.{region}...`),
-    # resolved from AWS SDK endpoint metadata. Required for FedRAMP and GovCloud.
-    # Changes only which HOST is dialled — never the SigV4 signing scope, the request
-    # path, or the body. Ignored when `serviceUrl` is a concrete URL, and rejected at
-    # construction on a MANTLE route (no `bedrock-mantle-fips` host exists).
+    # Use the FIPS 140-validated endpoint variant. Ignored when `serviceUrl` is a
+    # concrete URL; rejected at construction on a MANTLE route.
     boolean fips = false;
 
     // --- Inference ---
@@ -100,10 +88,9 @@ public type CommonModelConfig record {|
     # `serviceTier`.
     ServiceTier serviceTier?;
 
-    # Request latency-optimized inference on Converse: routes the call onto AWS's
-    # faster serving path (custom silicon / reserved capacity) for a lower
-    # time-to-first-token, at a higher price. Same output — a speed/cost dial only.
-    # Support is per model and region; unsupported combinations are rejected by AWS.
+    # Request latency-optimized inference on Converse — a speed/cost dial only, same
+    # output. Support is per model and region; unsupported combinations are rejected
+    # by AWS.
     boolean latencyOptimized?;
 
     // --- Cross-cutting ---

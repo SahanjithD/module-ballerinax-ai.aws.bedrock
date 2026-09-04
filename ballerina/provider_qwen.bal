@@ -23,25 +23,16 @@ import ballerina/jballerina.java;
 public enum QwenModel {
     QWEN3_32B = "qwen.qwen3-32b-v1:0",
     # Qwen3 Coder 480B A35B — the flagship coding model (MoE, 480B/35B active).
-    # This is the bedrock-runtime id; on bedrock-mantle the id differs
-    # (`qwen.qwen3-coder-480b-a35b-instruct`, like gpt-oss) — `MANTLE_CAPABLE` carries
-    # the swap, so forcing MANTLE works. In-Region callable (us-east-1 etc.); Geo/Global not
-    # supported. Converse + Invoke; defaults to Converse here.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+    # Converse + Invoke; defaults to Converse here.
     QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
 
 # Qwen-specific configuration.
 public type QwenConfig record {|
     *CommonModelConfig;
-    # Turns Qwen3's hybrid thinking mode on or off. Qwen3 can reason before
-    # answering; enabling it trades latency and output tokens for quality on
-    # multi-step tasks. Forwarded verbatim as `enable_thinking` via the
-    # passthrough, so the name matches the wire field. Leave unset to use the
-    # model's own default.
-    #
-    # This is a MODE switch, not a display switch: it controls whether the model
-    # thinks at all, not whether the thinking text is returned.
+    # Turns Qwen3's hybrid thinking mode on or off — whether the model reasons
+    # before answering at all, trading latency and output tokens for quality on
+    # multi-step tasks. Leave unset to use the model's own default.
     boolean enableThinking?;
 |};
 
@@ -66,32 +57,18 @@ public isolated distinct client class QwenModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A Qwen id (bare, CRIS-prefixed, ARN, or route-prefixed)
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
-    #                 SSO, shared config, `credential_process`, ECS container credentials,
-    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
-    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
+    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
+    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
+    #                 `BearerToken` for a Bedrock API key
     # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it. Also the SigV4 signing scope, which a custom
-    #            `serviceUrl` does NOT change
-    # + serviceUrl - Endpoint origin. The default template resolves per route from AWS
-    #                SDK endpoint metadata, which already covers every partition
-    #                (`amazonaws.com`, `amazonaws.com.cn`) and Mantle's `api.aws`.
-    #                Override it only for a host AWS cannot derive:
-    #                `https://vpce-0abc123.bedrock-runtime.us-east-1.vpce.amazonaws.com`
-    #                (PrivateLink / VPC endpoint), `https://bedrock-gw.internal.corp`
-    #                (an egress gateway or proxy), or `http://localhost:4566`
-    #                (LocalStack, a mock server, or a recorded fixture in tests).
-    #                The placeholders `{endpoint}` (`runtime`|`mantle`), `{region}` and
-    #                `{domain}` are substituted, so a partial override such as
-    #                `https://bedrock-{endpoint}.{region}.{domain}` keeps region and
-    #                domain automatic. It replaces the ORIGIN only — the route-derived
-    #                request path is still appended — and never changes the SigV4
-    #                signing scope. For FIPS use `config.fips`, not a hand-written host
+    #            segment overrides it
+    # + serviceUrl - Endpoint origin. Defaults to the standard AWS endpoint for the
+    #                region; override only for PrivateLink, an egress gateway, or a
+    #                local mock. For FIPS use `config.fips`, not a hand-written host
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature. Leave unset (the default) to omit the
-    #                 field entirely and use the model's own default — several current
-    #                 models reject it outright
+    # + temperature - Sampling temperature. Leave unset (the default) to use the
+    #                 model's own default — several current models reject it outright
     # + config - Routing overrides, guardrails, passthrough, Qwen knobs
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -138,8 +115,9 @@ public isolated distinct client class QwenModelProvider {
         => runChat("Qwen", self.family, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
-    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
-    # chat to Mantle and the model is also served on `bedrock-runtime`.
+    # Generates a value of the expected type by forcing a single tool whose schema
+    # is that type. Available on the Converse and Invoke routes; a Mantle-routed
+    # model returns an `ai:Error` for any target type other than `string`.
     #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type

@@ -42,7 +42,7 @@ public final class Generator {
     public static Object generate(Environment env, BObject modelProvider,
                                   BObject prompt, BTypedesc expectedResponseTypedesc) {
         return env.getRuntime().callFunction(
-                new Module("ballerinax", "ai.aws.bedrock", "0"), "generateLlmResponse", null,
+                new Module("dasunorg", "ai.aws.bedrock", "1"), "generateLlmResponse", null,
                 modelProvider.get(StringUtils.fromString("supportsStructuredOutput")),
                 modelProvider.get(StringUtils.fromString("genFamily")),
                 // NOTE: these are looked up by NAME at runtime, so renaming a provider
