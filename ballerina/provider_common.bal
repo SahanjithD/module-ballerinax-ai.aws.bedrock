@@ -15,7 +15,9 @@
 import ballerina/ai;
 import ballerina/ai.observe;
 import ballerina/http;
-import ballerina/os;
+
+import ballerinax/aws;
+import ballerinax/aws.auth;
 
 // Shared facade machinery: every vendor provider is a thin class
 // over these. `runChat` is the whole `chat()` body; `buildInferenceParams`
@@ -23,16 +25,6 @@ import ballerina/os;
 // route-specific headers common to all vendors. Only the model enum, config
 // extras (folded into `additionalModelRequestFields`), and Invoke-converter choice
 // differ per vendor.
-
-// The default `region` for every provider. `ballerinax/aws` does not resolve a
-// region — both `CredentialProvider` and `resolveEndpoint` take it as an argument —
-// so mirror the SDK's own environment lookup here. Returns "" when neither is set,
-// which `resolveSpine` turns into a named construction error UNLESS the model is an
-// ARN carrying its own region.
-isolated function defaultRegion() returns string {
-    string region = os:getEnv("AWS_REGION");
-    return region != "" ? region : os:getEnv("AWS_DEFAULT_REGION");
-}
 
 // The full `chat()` implementation, shared by every vendor facade.
 // Opens an observe span and closes it on every path.
@@ -209,15 +201,17 @@ isolated function addMantleApiKeyHeader(map<string> headers, Route route, Bedroc
     }
 }
 
-// No-region construction guard, shared by every facade. Fires only when the region
-// is absent from BOTH the argument (or the environment behind `defaultRegion`) and
-// the model ARN — an empty region would otherwise build the host
-// `bedrock-runtime..amazonaws.com` and surface as an opaque DNS failure.
+// Empty-region construction guard, shared by every facade. `region` is a required
+// parameter, so this fires only on an explicitly empty string — an empty region would
+// otherwise build the host `bedrock-runtime..amazonaws.com` and surface as an opaque
+// DNS failure. Nothing in this module reads the environment: no `ballerinax`
+// connector defaults a parameter from `os:getEnv`, and the AWS environment lookup
+// belongs to the SDK, behind `auth:DEFAULT_CREDENTIALS`.
 isolated function guardRegion(string region) returns ai:Error? {
     if region == "" {
-        return error ai:Error("No AWS region: pass 'region', set AWS_REGION (or " +
-            "AWS_DEFAULT_REGION) in the environment, or use a model ARN that carries " +
-            "its own region.");
+        return error ai:Error("No AWS region: pass a non-empty 'region' (an 'aws:Region' " +
+            "constant such as 'aws:US_EAST_1', or a region string), or use a model ARN " +
+            "that carries its own region.");
     }
 }
 
@@ -233,10 +227,9 @@ isolated function guardMantleGuardrail(ApiFamily family, GuardrailConfig? guardr
 // converter → transport. Every failure AWS cannot diagnose surfaces here, before any
 // I/O. Returns the resolved route (for header/param assembly), the
 // converter, and the transport.
-isolated function resolveSpine(string providerName, BedrockCredentials credentials, string model,
-        string region, string serviceUrl, RouteConfig routeConfig,
-        http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail,
-        boolean fips = false)
+isolated function resolveSpine(string providerName, auth:CredentialProvider|BearerToken credentials,
+        string model, string region, aws:EndpointConfig? endpointConfig, RouteConfig routeConfig,
+        http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail)
         returns [Route, readonly & ModelConverter, BedrockTransport]|ai:Error {
     do {
         Route route = check resolveRoute(model, region, routeConfig); // L1, pure
@@ -245,7 +238,7 @@ isolated function resolveSpine(string providerName, BedrockCredentials credentia
         // AWS_REGION in the environment is well-formed and must not be rejected.
         check guardRegion(route.region);
         check guardMantleGuardrail(route.family, guardrail);
-        Endpoint ep = check buildEndpoint(route, serviceUrl, fips);   // L2
+        Endpoint ep = check buildEndpoint(route, endpointConfig);   // L2
         readonly & ModelConverter converter = check selectConverter(route);
         BedrockTransport transport =
             check new (credentials, route.region, ep, httpConfig, retryConfig);
@@ -290,11 +283,12 @@ isolated function additionalFieldsToJson(AdditionalRequestFields? fields) return
 // endpoints, which need two different IAM permissions —
 // `bedrock-mantle:CreateInference` for `chat()` and `bedrock:InvokeModel` for a typed
 // `generate()`. Credentials holding only one will see the other path 403.
-isolated function resolveGenerateSpine(string providerName, BedrockCredentials credentials,
-        string model, string region, string serviceUrl, RouteConfig routeConfig,
+isolated function resolveGenerateSpine(string providerName, auth:CredentialProvider|BearerToken credentials,
+        BedrockCredentials rawCredentials, string model, string region,
+        aws:EndpointConfig? endpointConfig, RouteConfig routeConfig,
         http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail,
         Route chatRoute, readonly & ModelConverter chatConverter, BedrockTransport chatTransport,
-        map<string> chatHeaders, boolean fips = false)
+        map<string> chatHeaders)
         returns [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]|ai:Error {
     MantleEntry? entry = chatRoute.mantleEntry;
     boolean fallbackApplies = chatRoute.family == MANTLE
@@ -305,10 +299,10 @@ isolated function resolveGenerateSpine(string providerName, BedrockCredentials c
     }
     RouteConfig converseConfig = {apiFamily: CONVERSE};
     [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-        check resolveSpine(providerName, credentials, model, region, serviceUrl, converseConfig,
-            httpConfig, retryConfig, guardrail, fips);
+        check resolveSpine(providerName, credentials, model, region, endpointConfig, converseConfig,
+            httpConfig, retryConfig, guardrail);
     return [route.family, route.effectiveModelId, converter, transport,
-        commonExtraHeaders(route, guardrail, credentials)];
+        commonExtraHeaders(route, guardrail, rawCredentials)];
 }
 
 // Folds a vendor's extra request fields into `additionalModelRequestFields`.

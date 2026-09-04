@@ -171,10 +171,10 @@ function testExplicitMantleDoesNotSilentlyFallBack() returns error? {
 function generateSpineFor(string model, RouteConfig routeConfig)
         returns [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]|error {
     [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-        check resolveSpine("Test", TEST_CREDS, model, REGION, DEFAULT_SERVICE_URL, routeConfig,
+        check resolveSpine("Test", check resolveCredentials(TEST_CREDS), model, REGION, (), routeConfig,
             (), (), ());
-    return resolveGenerateSpine("Test", TEST_CREDS, model, REGION, DEFAULT_SERVICE_URL, routeConfig,
-        (), (), (), route, converter, transport, {});
+    return resolveGenerateSpine("Test", check resolveCredentials(TEST_CREDS), TEST_CREDS, model, REGION,
+        (), routeConfig, (), (), (), route, converter, transport, {});
 }
 
 // Qwen3 32B is served under a DIFFERENT id on Mantle (`qwen.qwen3-32b`) than on

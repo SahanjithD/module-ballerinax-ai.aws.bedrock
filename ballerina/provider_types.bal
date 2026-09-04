@@ -15,6 +15,7 @@
 import ballerina/ai;
 import ballerina/http;
 import ballerinax/aws.auth;
+import ballerinax/aws;
 
 // ============================================================================
 // Credentials. SigV4 sources come from `ballerinax/aws.auth`; the bearer
@@ -72,9 +73,14 @@ public type CommonModelConfig record {|
     # `MANTLE` force that family. The escape hatch — outranks every heuristic.
     ApiFamily apiFamily = AUTO;
 
-    # Use the FIPS 140-validated endpoint variant. Ignored when `serviceUrl` is a
-    # concrete URL; rejected at construction on a MANTLE route.
-    boolean fips = false;
+    # Endpoint resolution options: `fips`, `dualstack`, and a `customEndpoint`
+    # override. The host is derived from the region and the resolved route when this
+    # is unset, which is correct in every partition — set it only for PrivateLink
+    # without private DNS, an egress gateway, or a local mock. A `customEndpoint` is
+    # a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`:
+    # it applies to every service the client talks to, and it SKIPS the host-shape
+    # guards. `fips` is rejected at construction on a MANTLE route (no such host).
+    aws:EndpointConfig endpoint?;
 
     // --- Inference ---
     # Provider-level stop sequences; a per-call `stop` overrides these.

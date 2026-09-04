@@ -63,7 +63,7 @@ function testVectorClassRefusesAManagedKnowledgeBase() returns error? {
     check mockListener.'start();
 
     BedrockVectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);
@@ -118,7 +118,7 @@ function testVectorClassAttachesToAVectorKnowledgeBase() returns error? {
     check mockListener.'start();
 
     BedrockVectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     if kb is ai:Error {
@@ -138,7 +138,7 @@ function testExplicitChunkerAllowedWhenDataSourceChunkingIsNone() returns error?
     check mockListener.'start();
 
     BedrockVectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`, chunker = new ai:MarkdownChunker());
+        endpoint = {customEndpoint: string `http://localhost:${port}`}, chunker = new ai:MarkdownChunker());
     check mockListener.gracefulStop();
 
     if kb is ai:Error {
@@ -222,7 +222,7 @@ function testFindOrCreateSendsVectorBodiesOnTheWire() returns error? {
         storageConfiguration: VEC_TEST_STORAGE
     };
     BedrockVectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     if kb is ai:Error {
@@ -261,7 +261,7 @@ function testInvalidS3VectorsStorageFailsBeforeAnyRequest() returns error? {
         }
     };
     BedrockVectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = "http://localhost:1");
+        endpoint = {customEndpoint: "http://localhost:1"});
 
     test:assertTrue(kb is ai:Error);
     if kb is ai:Error {
@@ -286,7 +286,7 @@ function testDataSourceValidationIsWiredIntoConstruction() returns error? {
         dataSource: {name: "ds", maxTokens: 0}
     };
     BedrockVectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = "http://localhost:1");
+        endpoint = {customEndpoint: "http://localhost:1"});
 
     test:assertTrue(kb is ai:Error);
     if kb is ai:Error {
@@ -305,7 +305,7 @@ function testUnsupportedChunkingStrategyIsWiredIntoConstruction() returns error?
         dataSource: {name: "ds", chunkingStrategy: HIERARCHICAL}
     };
     BedrockVectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = "http://localhost:1");
+        endpoint = {customEndpoint: "http://localhost:1"});
 
     test:assertTrue(kb is ai:Error);
     if kb is ai:Error {
@@ -319,7 +319,7 @@ function testUnsupportedChunkingStrategyIsWiredIntoConstruction() returns error?
 @test:Config {}
 function testRetrievalConfigValidationIsWiredIntoConstruction() returns error? {
     BedrockVectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = "http://localhost:1", numberOfResults = 0);
+        endpoint = {customEndpoint: "http://localhost:1"}, numberOfResults = 0);
 
     test:assertTrue(kb is ai:Error);
     if kb is ai:Error {
@@ -357,7 +357,7 @@ function testAmbiguousVectorKnowledgeBaseNameFailsAtConstruction() returns error
         storageConfiguration: VEC_TEST_STORAGE
     };
     BedrockVectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);
@@ -399,7 +399,7 @@ function testVectorKnowledgeBaseWithNoCustomDataSourceFailsAtConstruction() retu
     check mockListener.'start();
 
     BedrockVectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);
@@ -433,7 +433,7 @@ function testNonActiveVectorKnowledgeBaseFailsAtConstruction() returns error? {
     check mockListener.'start();
 
     BedrockVectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`);
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
     test:assertTrue(kb is ai:Error);

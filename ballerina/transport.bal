@@ -30,7 +30,32 @@ import ballerinax/aws.auth;
 // `...inference-profile%252Fus.anthropic...`. No input string fixes that — `/`
 // survives both passes unchanged and a pre-encoded `%2F` becomes `%25252F` — so
 // every provisioned-model / inference-profile / custom-model-deployment ARN would
-// fail with SignatureDoesNotMatch. Verified 2026-08-09 against aws 1.0.1.
+// fail with SignatureDoesNotMatch. Verified 2026-08-09 against aws 1.0.1; the
+// dependency now resolves to 1.0.2, whose `SignatureRequest` is unchanged — re-check
+// this on every `ballerinax/aws` bump.
+
+// Resolves a client's credentials ONCE, at construction. Every transport that
+// client builds then shares the result.
+//
+// `auth:CredentialProvider` owns a credential cache and, for the refreshing sources
+// (STS, SSO, IMDS, IRSA), a background refresh. Constructing one per TRANSPORT gave a
+// client with two endpoints — the two knowledge-base agent planes — two providers for
+// identical credentials, each with its own cache and refresh. `ai:ModelProvider`
+// declares no `close`, so nothing ever reclaims them; sharing is the only fix.
+//
+// Resolves eagerly, so a bad profile/role surfaces at construction rather than on the
+// first call. A bearer token bypasses SigV4 and needs no provider at all.
+isolated function resolveCredentials(BedrockCredentials credentials)
+        returns auth:CredentialProvider|BearerToken|ai:Error {
+    if credentials is BearerToken {
+        return credentials;
+    }
+    auth:CredentialProvider|error provider = new (credentials);
+    if provider is error {
+        return error ai:Error(string `Failed to resolve AWS credentials: ${provider.message()}`, provider);
+    }
+    return provider;
+}
 
 const APPLICATION_JSON = "application/json";
 const AWS4_HMAC_SHA256 = "AWS4-HMAC-SHA256";
@@ -58,7 +83,7 @@ isolated client class BedrockTransport {
     // agent control plane returns 402 for quota, not 400, and only it can 409.
     private final boolean isAgentRoute;
 
-    isolated function init(BedrockCredentials credentials, string region, Endpoint ep,
+    isolated function init(auth:CredentialProvider|BearerToken credentials, string region, Endpoint ep,
             http:ClientConfiguration? httpConfig = (), RetryConfig? retryConfig = (),
             boolean isAgentRoute = false) returns error? {
         if credentials is BearerToken {
@@ -66,14 +91,15 @@ isolated client class BedrockTransport {
             self.credProvider = ();
         } else {
             self.bearer = ();
-            // Resolves eagerly, so a bad profile/role surfaces at construction rather
-            // than on the first chat() call.
-            self.credProvider = check new (credentials);
+            // Already resolved by `resolveCredentials`, once per CLIENT. `CredentialProvider`
+            // is an isolated class holding its own cache and refresh, so sharing one
+            // across a client's transports is safe and is the point.
+            self.credProvider = credentials;
         }
         self.region = region;
         // Signing name comes from the route and only from the route: `bedrock` for
-        // Converse/Invoke, `bedrock-mantle` for Mantle. A custom `serviceUrl` (VPCE,
-        // FIPS, gateway) changes the HOST, never the signing scope.
+        // Converse/Invoke, `bedrock-mantle` for Mantle. A `customEndpoint` (VPCE,
+        // gateway, mock) changes the HOST, never the signing scope.
         self.signingService = ep.signingService;
         self.isMantleRoute = ep.signingService == SIGNING_BEDROCK_MANTLE;
         self.isAgentRoute = isAgentRoute;

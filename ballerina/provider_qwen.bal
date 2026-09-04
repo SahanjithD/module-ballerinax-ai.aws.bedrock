@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerinax/aws;
 import ballerinax/aws.auth;
 import ballerina/jballerina.java;
 
@@ -57,15 +58,12 @@ public isolated distinct client class QwenModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A Qwen id (bare, CRIS-prefixed, ARN, or route-prefixed)
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
-    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
-    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
-    #                 `BearerToken` for a Bedrock API key
-    # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it
-    # + serviceUrl - Endpoint origin. Defaults to the standard AWS endpoint for the
-    #                region; override only for PrivateLink, an egress gateway, or a
-    #                local mock. For FIPS use `config.fips`, not a hand-written host
+    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
+    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
+    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
+    #                 source, or a `BearerToken` for a Bedrock API key
+    # + region - AWS region, e.g. `aws:US_EAST_1`. An ARN `model`'s region segment
+    #            overrides it
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to use the
     #                 model's own default — several current models reject it outright
@@ -73,17 +71,19 @@ public isolated distinct client class QwenModelProvider {
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} QwenModel|string model,
-            @display {label: "AWS Credentials"} BedrockCredentials credentials = auth:DEFAULT_CREDENTIALS,
-            @display {label: "Region"} string region = defaultRegion(),
-            @display {label: "Service URL"} string serviceUrl = DEFAULT_SERVICE_URL,
+            @display {label: "AWS Credentials"} BedrockCredentials credentials,
+            @display {label: "Region"} aws:Region|string region,
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *QwenConfig config)
             returns ai:Error? {
         RouteConfig routeConfig = {apiFamily: config.apiFamily};
+        aws:EndpointConfig? endpointConfig = config?.endpoint;
+        // Resolved ONCE per provider and shared by the chat and generate spines.
+        auth:CredentialProvider|BearerToken resolvedCredentials = check resolveCredentials(credentials);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("QwenModelProvider", credentials, model, region, serviceUrl, routeConfig,
-                config?.httpConfig, config?.retryConfig, config?.guardrail, config.fips);
+            check resolveSpine("QwenModelProvider", resolvedCredentials, model, region, endpointConfig, routeConfig,
+                config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.family = route.family;
         self.wireModelId = route.effectiveModelId;
@@ -93,9 +93,9 @@ public isolated distinct client class QwenModelProvider {
         self.extraHeaders = chatHeaders.cloneReadOnly();
         [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
             [genFamily, genModelId, genConverter, genTransport, genHeaders] =
-            check resolveGenerateSpine("QwenModelProvider", credentials, model, region, serviceUrl,
+            check resolveGenerateSpine("QwenModelProvider", resolvedCredentials, credentials, model, region, endpointConfig,
                 routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
-                route, converter, transport, chatHeaders, config.fips);
+                route, converter, transport, chatHeaders);
         self.genFamily = genFamily;
         self.genModelId = genModelId;
         self.genConverter = genConverter;

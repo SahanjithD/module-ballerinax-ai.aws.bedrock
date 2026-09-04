@@ -141,7 +141,7 @@ function testIngestBatchesInGroupsOfTenAndSucceedsWhenAllIndex() returns error? 
 
     BedrockManagedKnowledgeBase kb = check new (
         ING_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`,
+        endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = ING_DS_ID);
 
     ai:TextChunk[] chunks = [];
@@ -168,7 +168,7 @@ function testIngestReportsAFailedDocumentByIdAndReason() returns error? {
 
     BedrockManagedKnowledgeBase kb = check new (
         ING_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`,
+        endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = ING_DS_ID);
 
     ai:TextChunk okChunk = {content: "fine"};
@@ -194,7 +194,7 @@ function testRetrievePaginatesAndMapsResultsInOrder() returns error? {
 
     BedrockManagedKnowledgeBase kb = check new (
         ING_KB_ID, KB_TEST_CREDS, "us-east-1",
-        serviceUrl = string `http://localhost:${port}`,
+        endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = ING_DS_ID,
         numberOfResults = 2);
 
