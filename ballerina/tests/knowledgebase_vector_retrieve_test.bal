@@ -107,7 +107,7 @@ isolated service class VectorRetrieveMock {
 function newVectorRetrieveKb(int port, SearchType? overrideSearchType = (),
         VectorRerankingConfig? reranking = (), int? numberOfResults = ())
         returns BedrockVectorKnowledgeBase|ai:Error {
-    VectorKnowledgeBaseConfig config = {endpoint: {customEndpoint: string `http://localhost:${port}`}};
+    VectorKnowledgeBaseConfig config = {};
     if overrideSearchType is SearchType {
         config.overrideSearchType = overrideSearchType;
     }
@@ -117,7 +117,8 @@ function newVectorRetrieveKb(int port, SearchType? overrideSearchType = (),
     if numberOfResults is int {
         config.numberOfResults = numberOfResults;
     }
-    return new (VRET_KB_ID, KB_TEST_CREDS, "us-east-1", config);
+    return new (VRET_KB_ID, KB_TEST_CREDS, "us-east-1",
+            {customEndpoint: string `http://localhost:${port}`}, config);
 }
 
 // THE branch guard: a self-managed knowledge base must be queried through

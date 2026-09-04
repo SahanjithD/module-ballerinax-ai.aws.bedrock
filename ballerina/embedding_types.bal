@@ -14,7 +14,6 @@
 
 import ballerina/ai;
 import ballerina/http;
-import ballerinax/aws;
 
 // Embedding types; the public class is split by vendor.
 // Embeddings are InvokeModel-ONLY — there is no Converse equivalent
@@ -62,13 +61,6 @@ public type TitanEmbeddingConfig record {|
     boolean normalize?;
     # Escape hatch, mirroring the model provider's passthrough.
     AdditionalRequestFields additionalModelRequestFields?;
-    # Endpoint resolution options: `fips`, `dualstack`, and a `customEndpoint`
-    # override. The host is derived from the region and the resolved route when this
-    # is unset, which is correct in every partition — set it only for PrivateLink
-    # without private DNS, an egress gateway, or a local mock. A `customEndpoint` is
-    # a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`:
-    # it applies to every service the client talks to.
-    aws:EndpointConfig endpoint?;
     # Retry policy.
     RetryConfig retryConfig?;
     # Underlying HTTP client configuration.
@@ -90,13 +82,6 @@ public type CohereEmbeddingConfig record {|
     int dimensions?;
     # Escape hatch, mirroring the model provider's passthrough.
     AdditionalRequestFields additionalModelRequestFields?;
-    # Endpoint resolution options: `fips`, `dualstack`, and a `customEndpoint`
-    # override. The host is derived from the region and the resolved route when this
-    # is unset, which is correct in every partition — set it only for PrivateLink
-    # without private DNS, an egress gateway, or a local mock. A `customEndpoint` is
-    # a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`:
-    # it applies to every service the client talks to.
-    aws:EndpointConfig endpoint?;
     # Retry policy.
     RetryConfig retryConfig?;
     # Underlying HTTP client configuration.

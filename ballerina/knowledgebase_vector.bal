@@ -50,15 +50,22 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
     #                 explicit `auth:AuthConfig`. SigV4 only — Bedrock API keys are not
     #                 accepted on the agent planes
     # + region - AWS region, e.g. `aws:US_EAST_1`
+    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
+    #              The host is derived from the region when this is `()`, which is
+    #              correct in every partition — set it only for PrivateLink without
+    #              private DNS, an egress gateway, or a local mock. A `customEndpoint`
+    #              is a GLOBAL override with the same semantics as the AWS SDK's
+    #              `AWS_ENDPOINT_URL`: it applies to every service this client talks to
     # + config - Data source override, chunking, ingest/retrieve tuning, HTTP/retry settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Knowledge Base"} string|VectorKnowledgeBaseDefinition knowledgeBase,
             @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
+            @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *VectorKnowledgeBaseConfig config)
             returns ai:Error? {
-        KbSpine spine = check resolveVectorKbSpine("BedrockVectorKnowledgeBase", credentials, region,
+        KbSpine spine = check resolveVectorKbSpine("BedrockVectorKnowledgeBase", credentials, region, endpoint,
             knowledgeBase, config);
         self.controlTransport = spine.controlTransport;
         self.dataTransport = spine.dataTransport;

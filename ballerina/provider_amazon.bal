@@ -60,6 +60,16 @@ public isolated distinct client class AmazonModelProvider {
     #                 source, or a `BearerToken` for a Bedrock API key
     # + region - AWS region, e.g. `aws:US_EAST_1`. An ARN `model`'s region segment
     #            overrides it
+    # + apiFamily - Route selection. `AUTO` (the default) runs the resolver;
+    #               `CONVERSE`/`INVOKE`/`MANTLE` force that family and outrank every
+    #               heuristic
+    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
+    #              The host is derived from the region and the resolved route when this
+    #              is `()`, which is correct in every partition — set it only for
+    #              PrivateLink without private DNS, an egress gateway, or a local mock.
+    #              A `customEndpoint` is a GLOBAL override with the same semantics as
+    #              the AWS SDK's `AWS_ENDPOINT_URL`: it applies to every service this
+    #              client talks to, and it skips the host-shape guards
     # + maxTokens - Maximum tokens to generate
     # + temperature - Sampling temperature. Leave unset (the default) to use the
     #                 model's own default — several current models reject it outright
@@ -69,12 +79,14 @@ public isolated distinct client class AmazonModelProvider {
             @display {label: "Model"} AmazonModel|string model,
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
+            @display {label: "API Family"} ApiFamily apiFamily = AUTO,
+            @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AmazonConfig config)
             returns ai:Error? {
-        RouteConfig routeConfig = {apiFamily: config.apiFamily};
-        aws:EndpointConfig? endpointConfig = config?.endpoint;
+        RouteConfig routeConfig = {apiFamily};
+        aws:EndpointConfig? endpointConfig = endpoint;
         // Resolved ONCE per provider and shared by the chat and generate spines.
         auth:CredentialProvider|BearerToken resolvedCredentials = check resolveCredentials(credentials);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =

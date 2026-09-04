@@ -40,16 +40,23 @@ public distinct isolated client class TitanEmbeddingProvider {
     #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
     #                 source, or a `BearerToken` for a Bedrock API key
     # + region - AWS region, e.g. `aws:US_EAST_1`
+    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
+    #              The host is derived from the region when this is `()`, which is
+    #              correct in every partition — set it only for PrivateLink without
+    #              private DNS, an egress gateway, or a local mock. A `customEndpoint`
+    #              is a GLOBAL override with the same semantics as the AWS SDK's
+    #              `AWS_ENDPOINT_URL`: it applies to every service this client talks to
     # + config - `dimensions`, `normalize`, retry, and HTTP settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} TitanEmbeddingModel|string model,
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
+            @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Embedding Configuration"} *TitanEmbeddingConfig config)
             returns ai:Error? {
         [string, BedrockTransport] [wireModelId, transport] =
-            check resolveEmbeddingSpine("TitanEmbeddingProvider", credentials, model, region, config?.endpoint,
+            check resolveEmbeddingSpine("TitanEmbeddingProvider", credentials, model, region, endpoint,
                 TITAN_EMBED_PREFIX, TITAN_EMBED_TEXT_V2,
                 config?.httpConfig, config?.retryConfig);
 
