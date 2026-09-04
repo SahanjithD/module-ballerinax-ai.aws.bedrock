@@ -15,26 +15,16 @@
 import ballerina/ai;
 import ballerinax/aws.auth;
 
-# A Bedrock **managed** knowledge base (`KnowledgeBaseConfiguration.type = MANAGED` —
+# A Bedrock managed knowledge base (`KnowledgeBaseConfiguration.type = MANAGED` —
 # Bedrock owns the vector store) exposed through `ai:KnowledgeBase`.
 #
-# Two ways to use it:
-#
-# - **Attach to a console-configured knowledge base** (pass its id): AWS owns
-#   ingestion through its native connectors (S3, SharePoint, Confluence, Google
-#   Drive, OneDrive, Web Crawler) on their own sync schedule. `retrieve()` searches
-#   across every data source on the knowledge base; `ingest()`/`deleteByFilter()`
-#   need the knowledge base to also have a `CUSTOM` (direct-ingestion) data source —
-#   construction fails, naming why, if it does not have one.
-# - **Create and own it end to end** (pass a `KnowledgeBaseDefinition`): this class
-#   creates the knowledge base and a `CUSTOM` data source, and every document flows
-#   through `ingest()` — Ballerina dataloaders/chunkers, never a native connector.
-#   Find-or-create by NAME: `CreateKnowledgeBase` has no upsert and names are not
-#   unique per account, so an existing match is attached (no writes); no match
-#   creates one.
+# Pass an existing knowledge base id to attach to it, or a `KnowledgeBaseDefinition`
+# to find-or-create one by name. `ingest()`/`retrieve()`/`deleteByFilter()` need the
+# knowledge base to have a `CUSTOM` (direct-ingestion) data source; a definition
+# creates one, and attaching by id fails construction, naming why, if it lacks one.
 #
 # Self-managed (customer vector store, `type = VECTOR`) knowledge bases are not
-# supported by this class — use `BedrockVectorKnowledgeBase` for those.
+# supported here — use `BedrockVectorKnowledgeBase` for those.
 public distinct isolated client class BedrockManagedKnowledgeBase {
     *ai:KnowledgeBase;
 
@@ -48,17 +38,12 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
     private final RerankingModelType? rerankingModelType;
 
     # + knowledgeBase - An existing knowledge base id/ARN, or a `KnowledgeBaseDefinition` to find-or-create by name
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
-    #                 SSO, shared config, `credential_process`, ECS container credentials,
-    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
-    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit source.
-    #                 SigV4 only — Bedrock API keys do not work on the agent planes, see
-    #                 `KnowledgeBaseCredentials`
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
+    #                 shared config, EC2 IMDSv2). SigV4 only — Bedrock API keys are not
+    #                 accepted on the agent planes
     # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION
-    # + serviceUrl - Endpoint origin for BOTH agent planes (`bedrock-agent` and
-    #                `bedrock-agent-runtime`). The default template resolves per plane from AWS
-    #                SDK endpoint metadata. Override it only for a host AWS cannot derive
-    #                (PrivateLink, an egress gateway, or a local mock)
+    # + serviceUrl - Endpoint origin for both agent planes. Defaults to the standard AWS
+    #                endpoint for the region; override only for PrivateLink or a local mock
     # + config - Data source override, chunking, ingest/retrieve tuning, HTTP/retry settings
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -85,16 +70,8 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
     # when the data source's `chunkingStrategy` is `NONE` (detected at construction —
     # see `ManagedKnowledgeBaseConfig.chunker`).
     #
-    # SLOW BY NATURE: `IngestKnowledgeBaseDocuments` returns 202 as soon as Bedrock
-    # has accepted the documents, not once they are indexed — ~14s measured for a
-    # single small document, ~47s for a 97KB one. This call therefore blocks until
-    # every document reaches a terminal status or `ingestTimeout` elapses, so a
-    # `retrieve()` immediately afterward sees them.
-    #
-    # There is deliberately no fire-and-forget mode. `ai:KnowledgeBase.ingest`
-    # returns a bare `Error?` with no job handle and no status method, so returning
-    # at the 202 would report success for a document that later lands `FAILED` and
-    # leave the caller no way to ever discover it.
+    # Blocks until every document reaches a terminal status or `ingestTimeout`
+    # elapses, so a `retrieve()` immediately afterward sees them.
     #
     # + documents - The documents or chunks to index; only text content is supported
     # + return - An `ai:Error` if any document fails to submit or to index; `nil` otherwise
@@ -130,8 +107,8 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
         }
     }
 
-    # Retrieves relevant chunks. Searches across EVERY data source on the knowledge
-    # base — not just the `CUSTOM` one `ingest()` writes to — so results include
+    # Retrieves relevant chunks. Searches across every data source on the knowledge
+    # base, not just the `CUSTOM` one `ingest()` writes to, so results include
     # anything AWS's own connectors synced in.
     #
     # + query - The text query to search for
@@ -173,37 +150,14 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
 
     # Deletes documents matching `filters`.
     #
-    # Bedrock has no metadata-based delete and no way to read a document's metadata
-    # back (`ListKnowledgeBaseDocuments` returns status and identifier only;
-    # `GetDocumentContent` returns a presigned content URL), so this is a
-    # reconstruction: enumerate every document, then ask `Retrieve` one yes/no
-    # question per document — the caller's filter ANDed with a leaf on Bedrock's
-    # system `_source_uri` attribute pinning that ONE document.
-    #
-    # PINNING IS LOAD-BEARING, not an optimization. Sending the caller's filter
-    # ALONE and collecting the matches in bulk silently under-deletes: measured
-    # 2026-08-14, a filter matching 5 documents with `numberOfResults: 10` returned
-    # only 3 — a relevance floor dropped the other 2, with no `nextToken` to signal
-    # truncation. Narrowing the filter to a single document removes that failure
-    # entirely: the candidate set is that document's chunks, so nothing can crowd it
-    # out, and pinned probes return at 0.88-1.0 against a floor near 0.15 regardless
-    # of the probe query (see `FILTER_PROBE_QUERY`). A non-empty result therefore
-    # means "matches", an empty one means "does not match", and there is no third
-    # case to report.
-    #
-    # Costs one `Retrieve` per document in the knowledge base — this is a maintenance
-    # operation, not something to put on a request path.
-    #
-    # Runs over every data source on the knowledge base, not only the `CUSTOM` one
-    # `ingest()` writes to (`retrieve()` is not scoped to one data source either, so
-    # neither is this). `DocumentIdentifier.dataSourceType` only has `CUSTOM`/`S3`
-    # members, so documents from any other data source (SharePoint, Confluence,
-    # Drive, Web, ...) cannot be deleted through this API at all — such data
-    # sources are named in the returned error rather than silently skipped.
-    #
-    # Deletes that CAN be made still happen even when some data sources cannot be
-    # touched — this method reports what it could not do, rather than doing nothing
-    # because part of the request was out of reach.
+    # Bedrock has no metadata-based delete, so this enumerates every document on
+    # every data source and probes each one against `filters` through `Retrieve`.
+    # Costs one `Retrieve` call per document — a maintenance operation, not
+    # something to put on a request path. Only `CUSTOM`/`S3` data sources support
+    # deletion; documents on other data source types (SharePoint, Confluence,
+    # Drive, Web, ...) are named in the returned error rather than silently
+    # skipped, and deletes that can be made still happen even when some data
+    # sources cannot be reached.
     #
     # + filters - The metadata filters used to identify which documents to delete
     # + return - An `ai:Error` naming any undeletable data sources; `nil` otherwise

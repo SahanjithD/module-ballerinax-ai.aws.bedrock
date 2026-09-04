@@ -22,32 +22,20 @@ import ballerina/jballerina.java;
 # Well-known Claude model ids. Any newer Claude is reachable by passing its id as
 # a `string`.
 public enum AnthropicModel {
-    # Claude Opus 5 — Anthropic's most advanced Opus (1M context, 128K max output,
-    # adaptive thinking on by default). Converse + Invoke + Messages; dual-homed
-    # (bedrock-runtime and bedrock-mantle), so under `AUTO` it resolves to Mantle —
-    # pass `apiFamily = CONVERSE` for typed `generate()`. In-Region callable in
-    # us-east-1, eu-north-1, eu-west-1 and ap-southeast-4 only; elsewhere use a geo
-    # (`us.`/`eu.`/`au.`) or `global.` profile.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
+    # Claude Opus 5 — 1M context, 128K max output, adaptive thinking on by default.
+    # Dual-homed (Converse and Mantle); under `AUTO` it resolves to Mantle, so pass
+    # `apiFamily = CONVERSE` for typed `generate()`.
     CLAUDE_OPUS_5 = "anthropic.claude-opus-5",
     CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
-    # Claude Sonnet 5 — the current flagship Sonnet (1M context, adaptive thinking
-    # always on). Converse + Invoke + Messages; dual-homed (bedrock-runtime and
-    # bedrock-mantle), so under `AUTO` it resolves to Mantle — pass
-    # `apiFamily = CONVERSE` for typed `generate()`.
-    # In-Region callable in us-east-1 (not every region — some are Geo/Global only);
-    # geo profiles `us.`/`eu.`/`au.` and `global.` also work.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+    # Claude Sonnet 5 — 1M context, adaptive thinking always on. Dual-homed; under
+    # `AUTO` it resolves to Mantle, so pass `apiFamily = CONVERSE` for typed
+    # `generate()`.
     CLAUDE_SONNET_5 = "anthropic.claude-sonnet-5",
     CLAUDE_SONNET_4_6 = "anthropic.claude-sonnet-4-6",
     CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
     CLAUDE_MYTHOS_PREVIEW = "anthropic.claude-mythos-preview",
-    # `bedrock-mantle` only (Messages API). No structured output.
-    #
-    # This model rejects sampling parameters (as do Opus 4.7+, Opus 5 and Sonnet 5):
-    # passing `temperature` at all returns a 400. Leave it unset — the default.
-    # It also requires opting in to provider data sharing.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html
+    # Mantle only (Messages API). No structured output, and rejects `temperature` —
+    # leave it unset.
     CLAUDE_MYTHOS_5 = "anthropic.claude-mythos-5"
 }
 
@@ -86,32 +74,18 @@ public isolated distinct client class AnthropicModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A Claude id (bare, CRIS-prefixed, ARN, or `mantle/|converse/|invoke/` prefixed)
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
-    #                 SSO, shared config, `credential_process`, ECS container credentials,
-    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
-    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
+    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
+    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
+    #                 `BearerToken` for a Bedrock API key
     # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it. Also the SigV4 signing scope, which a custom
-    #            `serviceUrl` does NOT change
-    # + serviceUrl - Endpoint origin. The default template resolves per route from AWS
-    #                SDK endpoint metadata, which already covers every partition
-    #                (`amazonaws.com`, `amazonaws.com.cn`) and Mantle's `api.aws`.
-    #                Override it only for a host AWS cannot derive:
-    #                `https://vpce-0abc123.bedrock-runtime.us-east-1.vpce.amazonaws.com`
-    #                (PrivateLink / VPC endpoint), `https://bedrock-gw.internal.corp`
-    #                (an egress gateway or proxy), or `http://localhost:4566`
-    #                (LocalStack, a mock server, or a recorded fixture in tests).
-    #                The placeholders `{endpoint}` (`runtime`|`mantle`), `{region}` and
-    #                `{domain}` are substituted, so a partial override such as
-    #                `https://bedrock-{endpoint}.{region}.{domain}` keeps region and
-    #                domain automatic. It replaces the ORIGIN only — the route-derived
-    #                request path is still appended — and never changes the SigV4
-    #                signing scope. For FIPS use `config.fips`, not a hand-written host
+    #            segment overrides it
+    # + serviceUrl - Endpoint origin. Defaults to the standard AWS endpoint for the
+    #                region; override only for PrivateLink, an egress gateway, or a
+    #                local mock. For FIPS use `config.fips`, not a hand-written host
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature. Leave unset (the default) to omit the
-    #                 field entirely and use the model's own default — several current
-    #                 models reject it outright
+    # + temperature - Sampling temperature. Leave unset (the default) to use the
+    #                 model's own default — several current models reject it outright
     # + config - Routing overrides, guardrails, Converse passthrough, Claude knobs
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -164,11 +138,6 @@ public isolated distinct client class AnthropicModelProvider {
     # Generates a value of the expected type by forcing a single tool whose schema
     # is that type. Available on the Converse and Invoke routes; a Mantle-routed
     # model returns an `ai:Error` for any target type other than `string`.
-    # External Java per the platform convention; the shim calls back into
-    # `generateLlmResponse`, passing this provider's resolved state.
-    #
-    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
-    # chat to Mantle and the model is also served on `bedrock-runtime`.
     #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type

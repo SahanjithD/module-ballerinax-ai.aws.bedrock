@@ -44,14 +44,14 @@ public enum GoogleModel {
     GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     # Converse on `bedrock-runtime` (also served on Mantle).
     GEMMA_3_12B_IT = "google.gemma-3-12b-it",
-    # Converse on `bedrock-runtime` (also served on Mantle). AWS titles this card
-    # "Gemma 3 27B PT" but its id really is `-it` — do not "correct" this.
+    // AWS titles this card "Gemma 3 27B PT" but its id really is `-it` — do not "correct" this.
+    # Converse on `bedrock-runtime` (also served on Mantle).
     GEMMA_3_27B_IT = "google.gemma-3-27b-it",
-    # `bedrock-mantle` ONLY — structured output is not available on this route.
+    # Mantle only — structured output is not available on this route.
     GEMMA_4_E2B = "google.gemma-4-e2b",
-    # `bedrock-mantle` ONLY — structured output is not available on this route.
+    # Mantle only — structured output is not available on this route.
     GEMMA_4_26B_A4B = "google.gemma-4-26b-a4b",
-    # `bedrock-mantle` ONLY — structured output is not available on this route.
+    # Mantle only — structured output is not available on this route.
     GEMMA_4_31B = "google.gemma-4-31b"
 }
 
@@ -83,32 +83,18 @@ public isolated distinct client class GoogleModelProvider {
     private final boolean supportsStructuredOutput;
 
     # + model - A Gemma id (bare, CRIS-prefixed, ARN, or route-prefixed)
-    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA,
-    #                 SSO, shared config, `credential_process`, ECS container credentials,
-    #                 EC2 IMDSv2), so nothing needs configuring on AWS compute. Pass an
-    #                 `auth:StaticAuthConfig`, `auth:AssumeRoleConfig`, ... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + credentials - Defaults to the full AWS credential chain (env vars, EKS IRSA, SSO,
+    #                 shared config, EC2 IMDSv2). Pass an `auth:StaticAuthConfig`,
+    #                 `auth:AssumeRoleConfig`, ... for an explicit source, or a
+    #                 `BearerToken` for a Bedrock API key
     # + region - Defaults to AWS_REGION/AWS_DEFAULT_REGION. An ARN `model`'s region
-    #            segment overrides it. Also the SigV4 signing scope, which a custom
-    #            `serviceUrl` does NOT change
-    # + serviceUrl - Endpoint origin. The default template resolves per route from AWS
-    #                SDK endpoint metadata, which already covers every partition
-    #                (`amazonaws.com`, `amazonaws.com.cn`) and Mantle's `api.aws`.
-    #                Override it only for a host AWS cannot derive:
-    #                `https://vpce-0abc123.bedrock-runtime.us-east-1.vpce.amazonaws.com`
-    #                (PrivateLink / VPC endpoint), `https://bedrock-gw.internal.corp`
-    #                (an egress gateway or proxy), or `http://localhost:4566`
-    #                (LocalStack, a mock server, or a recorded fixture in tests).
-    #                The placeholders `{endpoint}` (`runtime`|`mantle`), `{region}` and
-    #                `{domain}` are substituted, so a partial override such as
-    #                `https://bedrock-{endpoint}.{region}.{domain}` keeps region and
-    #                domain automatic. It replaces the ORIGIN only — the route-derived
-    #                request path is still appended — and never changes the SigV4
-    #                signing scope. For FIPS use `config.fips`, not a hand-written host
+    #            segment overrides it
+    # + serviceUrl - Endpoint origin. Defaults to the standard AWS endpoint for the
+    #                region; override only for PrivateLink, an egress gateway, or a
+    #                local mock. For FIPS use `config.fips`, not a hand-written host
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature. Leave unset (the default) to omit the
-    #                 field entirely and use the model's own default — several current
-    #                 models reject it outright
+    # + temperature - Sampling temperature. Leave unset (the default) to use the
+    #                 model's own default — several current models reject it outright
     # + config - Routing overrides, guardrails, Converse passthrough
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
@@ -157,8 +143,9 @@ public isolated distinct client class GoogleModelProvider {
         => runChat("Google", self.family, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
-    # Uses the generate spine, which differs from the chat spine when `AUTO` routed
-    # chat to Mantle and the model is also served on `bedrock-runtime`.
+    # Generates a value of the expected type by forcing a single tool whose schema
+    # is that type. Available on the Converse and Invoke routes; a Mantle-routed
+    # model returns an `ai:Error` for any target type other than `string`.
     #
     # + prompt - The prompt to use in the chat request
     # + td - Type descriptor of the expected return type

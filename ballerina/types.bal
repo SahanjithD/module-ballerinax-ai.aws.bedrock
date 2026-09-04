@@ -16,9 +16,8 @@
 // Public enums.
 // ============================================================================
 
-# Route selection on the common config, plus the resolved wire family.
-# `AUTO` (the config default) runs the resolver ladder; `CONVERSE`,
-# `INVOKE`, `MANTLE` force that family. A resolved `Route.family` is never `AUTO`.
+# Route selection. `AUTO` (the default) runs the resolver ladder; `CONVERSE`,
+# `INVOKE`, `MANTLE` force that family.
 public enum ApiFamily {
     AUTO,
     CONVERSE,
@@ -63,32 +62,16 @@ enum ToolChoiceStyle {
 
 # Fields forwarded verbatim to the model — the escape hatch for anything Bedrock
 # exposes that this module does not model (`top_p`, `top_k`, Nova `reasoningConfig`,
-# `anthropic_beta`, prompt-caching `cache_control`, …).
-#
-# An OPEN record, deliberately: a field AWS ships after this release works today,
-# with no module update. A closed record would make an unknown field a compile error,
-# which is the opposite of what a passthrough is for.
-#
-# The rest type is `anydata` (the `record {}` default), so the value is NOT directly
-# assignable to a `json` request body — every wire boundary goes through
-# `additionalFieldsToJson`. That conversion is total: `toJson` deep-converts anydata
-# that is not already json (an `xml` value becomes its string form) rather than
-# failing, so there is no error path for a caller to handle.
-#
-# Keys for undeclared fields must be QUOTED string literals — `{"top_p": 0.9}`.
-# `{top_p: 0.9}` is a compile error: identifiers cannot be used as rest-field keys.
+# `anthropic_beta`, prompt-caching `cache_control`, …). Keys must be quoted string
+# literals, e.g. `{"top_p": 0.9}`.
 public type AdditionalRequestFields record {
 };
 
 # How Claude allocates internal reasoning before answering.
-#
-# A closed, AWS-documented shape, which is why it is a record and not raw `json`:
-# the wire spelling (`type`, `budget_tokens`) and the mode/budget pairing rules are
-# all things a typed field can enforce at construction instead of surfacing as a 400.
 public enum ThinkingMode {
-    # Claude decides when and how much to think. The recommended mode, and the ONLY
-    # one supported by Claude Mythos 5, Fable 5, Opus 4.7 and Mythos Preview —
-    # `ENABLED`/`DISABLED` return a 400 on those. Pair with `effort` to steer depth.
+    # Claude decides when and how much to think. The recommended mode, and the only
+    # one supported by Claude Mythos 5, Fable 5, Opus 4.7 and Mythos Preview. Pair
+    # with `effort` to steer depth.
     ADAPTIVE = "adaptive",
     # Manual budget via `budgetTokens`. Deprecated on Opus 4.6 / Sonnet 4.6 and
     # unsupported on the adaptive-only models above.
@@ -101,21 +84,14 @@ public enum ThinkingMode {
 public type ThinkingConfig record {|
     # Thinking mode. Defaults to `ADAPTIVE`, which every current Claude accepts.
     ThinkingMode mode = ADAPTIVE;
-    # Reasoning-token budget. Valid ONLY with `ENABLED`, minimum 1024, and must be
-    # less than `maxTokens`. All three rules are checked at construction.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
+    # Reasoning-token budget. Valid only with `ENABLED`, minimum 1024, and must be
+    # less than `maxTokens`.
     int budgetTokens?;
 |};
 
-# How much reasoning the model should spend, emitted as `output_config.effort`.
-#
-# This is a SIBLING of `thinking` on the wire, never a field inside it — AWS
-# documents that nesting it under `thinking` returns a `ValidationException`. Keeping
-# it a separate config field makes that mistake unrepresentable.
-#
-# It is also the only depth control available on the adaptive-only models
-# (Mythos 5, Fable 5, Opus 4.7, Mythos Preview), where `budgetTokens` is a 400.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-adaptive-thinking.html
+# How much reasoning the model should spend. Also the only depth control available
+# on the adaptive-only models (Mythos 5, Fable 5, Opus 4.7, Mythos Preview), where
+# `budgetTokens` is rejected.
 public enum Effort {
     # Minimises thinking; may skip it entirely on simple tasks.
     EFFORT_LOW = "low",
@@ -129,12 +105,8 @@ public enum Effort {
     EFFORT_MAX = "max"
 }
 
-# Converse `serviceTier` passthrough.
-#
-# Values are AWS's, verbatim. Note there is no "standard" tier — the baseline is
-# spelled `default`. The member names carry a `TIER_` prefix because a bare
-# `DEFAULT` reads as a language keyword at the call site.
-# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+# Converse `serviceTier` passthrough. Note there is no "standard" tier — the
+# baseline is spelled `default`.
 public enum ServiceTier {
     # Baseline pay-per-token processing.
     TIER_DEFAULT = "default",

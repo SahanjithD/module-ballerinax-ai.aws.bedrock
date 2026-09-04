@@ -61,9 +61,7 @@ public type TitanEmbeddingConfig record {|
     boolean normalize?;
     # Escape hatch, mirroring the model provider's passthrough.
     AdditionalRequestFields additionalModelRequestFields?;
-    # Use the FIPS 140-validated endpoint variant (`bedrock-runtime-fips.{region}...`),
-    # resolved from AWS SDK endpoint metadata. Required for FedRAMP and GovCloud.
-    # Changes only which HOST is dialled — never the SigV4 signing scope.
+    # Use the FIPS 140-validated endpoint variant.
     boolean fips = false;
     # Retry policy.
     RetryConfig retryConfig?;
@@ -86,9 +84,7 @@ public type CohereEmbeddingConfig record {|
     int dimensions?;
     # Escape hatch, mirroring the model provider's passthrough.
     AdditionalRequestFields additionalModelRequestFields?;
-    # Use the FIPS 140-validated endpoint variant (`bedrock-runtime-fips.{region}...`),
-    # resolved from AWS SDK endpoint metadata. Required for FedRAMP and GovCloud.
-    # Changes only which HOST is dialled — never the SigV4 signing scope.
+    # Use the FIPS 140-validated endpoint variant.
     boolean fips = false;
     # Retry policy.
     RetryConfig retryConfig?;

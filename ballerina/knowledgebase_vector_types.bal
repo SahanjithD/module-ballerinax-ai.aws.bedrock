@@ -41,7 +41,6 @@ import ballerina/http;
 # Field mapping for an Amazon OpenSearch vector index — Serverless and Managed
 # Cluster declare identical shapes.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_OpenSearchServerlessFieldMapping.html
-# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_OpenSearchManagedClusterFieldMapping.html
 public type OpenSearchFieldMapping record {|
     # Field holding the vector embeddings.
     string vectorField;
@@ -51,8 +50,8 @@ public type OpenSearchFieldMapping record {|
     string metadataField;
 |};
 
-# Field mapping for a Pinecone index. Note there is NO `vectorField` — Pinecone
-# stores the vector natively rather than in a named field.
+# Field mapping for a Pinecone index. No `vectorField` — Pinecone stores the vector
+# natively rather than in a named field.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_PineconeFieldMapping.html
 public type PineconeFieldMapping record {|
     # Field holding the raw text chunk.
@@ -61,7 +60,7 @@ public type PineconeFieldMapping record {|
     string metadataField;
 |};
 
-# Field mapping for a Neptune Analytics graph. Like Pinecone, NO `vectorField`.
+# Field mapping for a Neptune Analytics graph. Like Pinecone, no `vectorField`.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_NeptuneAnalyticsFieldMapping.html
 public type NeptuneAnalyticsFieldMapping record {|
     # Field holding the raw text chunk.
@@ -92,8 +91,8 @@ public type RedisEnterpriseCloudFieldMapping record {|
     string metadataField;
 |};
 
-# Column mapping for an Amazon Aurora/RDS table. These are COLUMN names, and this
-# is the only backend with a primary key and an optional custom-metadata column.
+# Column mapping for an Amazon Aurora/RDS table. The only backend with a primary key
+# and an optional custom-metadata column.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_RdsFieldMapping.html
 public type RdsFieldMapping record {|
     # Primary key column.
@@ -104,10 +103,8 @@ public type RdsFieldMapping record {|
     string textField;
     # Column holding the metadata Bedrock manages.
     string metadataField;
-    # Column holding YOUR metadata attributes, as a single `jsonb` value. Without it
-    # you must add one typed column per metadata attribute instead. AWS requires a
-    # GIN index on this column for metadata filtering to work.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
+    # Column holding your metadata attributes as a single `jsonb` value, needed for
+    # metadata filtering. Without it, add one typed column per attribute instead.
     string customMetadataField?;
 |};
 
@@ -127,27 +124,22 @@ public type RdsFieldMapping record {|
 // https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-create.html).
 // ============================================================================
 
-# Amazon OpenSearch Serverless. The only backend Bedrock supports `startsWith`
-# filters on, and (with a filterable text field) the one every AWS source agrees
-# supports `SEARCH_HYBRID`. Note this module cannot emit `startsWith` regardless:
-# `ai:MetadataFilterOperator` has no operator that means "starts with".
+# Amazon OpenSearch Serverless.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_OpenSearchServerlessConfiguration.html
 public type OpenSearchServerlessStorage record {|
     # Discriminator. Always emitted on the wire.
     readonly "OPENSEARCH_SERVERLESS" 'type = "OPENSEARCH_SERVERLESS";
     # ARN of the vector search collection.
     string collectionArn;
-    # Name of the vector index inside the collection. AWS requires the `faiss`
-    # engine — with `nmslib`, metadata filtering does not work and the index must be
-    # rebuilt.
+    # Name of the vector index inside the collection. Requires the `faiss` engine —
+    # metadata filtering does not work with `nmslib`.
     string vectorIndexName;
     # Names of the fields Bedrock reads and writes.
     OpenSearchFieldMapping fieldMapping;
 |};
 
-# Amazon OpenSearch Service Managed Cluster. AWS requires a PUBLIC-access domain —
-# domains behind a VPC are not supported for knowledge bases — and engine 2.13+ for
-# a k-NN index (2.16+ for binary vectors).
+# Amazon OpenSearch Service Managed Cluster. Requires a public-access domain
+# (VPC-bound domains are not supported) and engine 2.13+ for a k-NN index.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_OpenSearchManagedClusterConfiguration.html
 public type OpenSearchManagedClusterStorage record {|
     # Discriminator. Always emitted on the wire.
@@ -162,13 +154,10 @@ public type OpenSearchManagedClusterStorage record {|
     OpenSearchFieldMapping fieldMapping;
 |};
 
-# Amazon S3 Vectors — the cheapest backend, at the cost of three limits AWS
-# documents: SEMANTIC search only (no `SEARCH_HYBRID`), floating-point vectors only
-# (no binary), and at most 1 KB of custom metadata across 35 keys per vector, which
-# hierarchical chunking can exceed and fail ingestion. `startsWith` and
-# `stringContains` filters are not supported.
+# Amazon S3 Vectors — the cheapest backend. Semantic search only (no
+# `SEARCH_HYBRID`), floating-point vectors only, and limited custom metadata
+# (1 KB / 35 keys per vector).
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_S3VectorsConfiguration.html
-# https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-bedrock-kb.html
 public type S3VectorsStorage record {|
     # Discriminator. Always emitted on the wire.
     readonly "S3_VECTORS" 'type = "S3_VECTORS";
@@ -180,10 +169,8 @@ public type S3VectorsStorage record {|
     string indexName?;
 |};
 
-# Amazon Aurora PostgreSQL (RDS). The cluster must live in the SAME AWS account as
-# the knowledge base. If you filter on metadata, AWS recommends enabling HNSW
-# iterative index scans (pgvector 0.8.0+) — without them, selective filters
-# silently return fewer results than they should rather than erroring.
+# Amazon Aurora PostgreSQL (RDS). The cluster must live in the same AWS account as
+# the knowledge base.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_RdsConfiguration.html
 public type RdsStorage record {|
     # Discriminator. Always emitted on the wire.
@@ -196,7 +183,7 @@ public type RdsStorage record {|
     string databaseName;
     # Table holding the vectors.
     string tableName;
-    # Names of the COLUMNS Bedrock reads and writes.
+    # Names of the columns Bedrock reads and writes.
     RdsFieldMapping fieldMapping;
 |};
 
@@ -230,8 +217,8 @@ public type PineconeStorage record {|
 |};
 
 # Redis Enterprise Cloud. TLS must be enabled, and the Secrets Manager secret needs
-# five specific keys: `username`, `password`, `serverCertificate`,
-# `clientPrivateKey`, `clientCertificate`.
+# `username`, `password`, `serverCertificate`, `clientPrivateKey`,
+# `clientCertificate`.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_RedisEnterpriseCloudConfiguration.html
 public type RedisEnterpriseCloudStorage record {|
     # Discriminator. Always emitted on the wire.
@@ -246,8 +233,8 @@ public type RedisEnterpriseCloudStorage record {|
     RedisEnterpriseCloudFieldMapping fieldMapping;
 |};
 
-# MongoDB Atlas. **Metadata filtering does not work by default** — AWS requires
-# filters to be configured explicitly in the Atlas vector index first.
+# MongoDB Atlas. Metadata filtering requires filters to be configured explicitly in
+# the Atlas vector index first — it does not work by default.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_MongoDbAtlasConfiguration.html
 public type MongoDbAtlasStorage record {|
     # Discriminator. Always emitted on the wire.
@@ -265,7 +252,7 @@ public type MongoDbAtlasStorage record {|
     # Name of the VPC endpoint service connected to the cluster, when reaching Atlas
     # over AWS PrivateLink.
     string endpointServiceName?;
-    # Name of the Atlas text search index. REQUIRED for `SEARCH_HYBRID` on this
+    # Name of the Atlas text search index. Required for `SEARCH_HYBRID` on this
     # backend.
     string textIndexName?;
     # Names of the fields Bedrock reads and writes.
@@ -287,21 +274,15 @@ public type StorageConfiguration OpenSearchServerlessStorage|OpenSearchManagedCl
 public enum EmbeddingDataType {
     # Floating-point vectors. The default, and the only type S3 Vectors supports.
     EMBEDDING_FLOAT32 = "FLOAT32",
-    # Binary vectors — cheaper and less precise. Supported ONLY on OpenSearch
-    # Serverless and OpenSearch Managed Cluster ("the only vector stores that
-    # support storing binary vectors"), and Managed Cluster additionally needs
-    # engine version 2.16 or later.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
+    # Binary vectors — cheaper and less precise. Supported only on OpenSearch
+    # Serverless and Managed Cluster (2.16+).
     EMBEDDING_BINARY = "BINARY"
 }
 
 # Tuning for the embedding model on a self-managed knowledge base.
 #
-# `dimensions` MUST match the dimension the vector index was created with —
-# Bedrock does not reconcile them, and a mismatch fails ingestion with an opaque
-# error. This module cannot check it: verifying would mean querying your vector
-# store, which needs credentials and network reach the calling application does not
-# have (those permissions belong to the knowledge base's own service role).
+# `dimensions` must match the dimension the vector index was created with —
+# Bedrock does not reconcile them, and a mismatch fails ingestion.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_BedrockEmbeddingModelConfiguration.html
 public type VectorEmbeddingModelConfig record {|
     # Vector dimensions (0-4096). Must equal the vector index's dimension.
@@ -310,22 +291,15 @@ public type VectorEmbeddingModelConfig record {|
     EmbeddingDataType embeddingDataType?;
 |};
 
-# Search strategy override for `retrieve()`.
+# Search strategy override for `retrieve()`. Leave unset unless you know your
+# backend supports the value — Bedrock otherwise picks a strategy suited to the
+# store.
 #
-# LEAVE IT UNSET unless you know your backend supports the value. Unset means
-# Bedrock picks a strategy suited to the store, which is correct everywhere.
-#
-# ## Two AWS sources disagree on where `SEARCH_HYBRID` works
-#
-# - The API reference names ONLY OpenSearch Serverless with a filterable text field.
-#   https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_KnowledgeBaseVectorSearchConfiguration.html
-# - The user guide names three: "Hybrid search is only supported for Amazon RDS,
-#   Amazon OpenSearch Serverless, and MongoDB vector stores that contain a
-#   filterable text field."
-#   https://docs.aws.amazon.com/bedrock/latest/userguide/kb-test-config.html
-#
-# Both agree it is unavailable on S3 Vectors, Neptune Analytics, Pinecone, and
-# Redis. Neither is treated as authoritative here, which is why nothing is defaulted.
+# AWS sources disagree on where `SEARCH_HYBRID` is supported (OpenSearch
+# Serverless at minimum; the user guide also names RDS and MongoDB with a
+# filterable text field). It is unavailable on S3 Vectors, Neptune Analytics,
+# Pinecone, and Redis.
+# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_KnowledgeBaseVectorSearchConfiguration.html
 public enum SearchType {
     # Combine vector embeddings with raw-text search. Backend-dependent, see above.
     SEARCH_HYBRID = "HYBRID",
@@ -333,14 +307,11 @@ public enum SearchType {
     SEARCH_SEMANTIC = "SEMANTIC"
 }
 
-# Reranking for `retrieve()` on a self-managed knowledge base.
+# Reranking for `retrieve()` on a self-managed knowledge base — the only way to
+# rerank on this class, since `vectorSearchConfiguration` has no `RerankingModelType`
+# shortcut.
 #
-# Unlike `BedrockManagedKnowledgeBase`, which selects a reranker with the single
-# `RerankingModelType` enum, `vectorSearchConfiguration` has no such shortcut — its
-# only reranking member is the full `rerankingConfiguration` object. This record is
-# therefore the ONLY way to rerank on this class.
-#
-# Reranking applies its own relevance cut, so it can return FEWER results than
+# Reranking applies its own relevance cut, so it can return fewer results than
 # `numberOfResults` asked for.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_VectorSearchBedrockRerankingConfiguration.html
 public type VectorRerankingConfig record {|
@@ -357,32 +328,27 @@ public type VectorRerankingConfig record {|
 # The `CUSTOM` direct-ingestion data source created alongside a self-managed
 # knowledge base.
 #
-# Separate from `DataSourceDefinition` (the managed one) because chunking diverges:
-# a managed knowledge base REJECTS `chunkingConfiguration` outright on a
-# service-managed embedding model, so that record carries no chunking fields. A
-# self-managed knowledge base always supplies its own embedding model, so chunking
-# IS configurable here — and `NONE` is what makes a client-side `ai:Chunker` usable.
+# Separate from `DataSourceDefinition` (the managed one): a managed knowledge base
+# rejects `chunkingConfiguration` on a service-managed embedding model, so that
+# record carries no chunking fields, while a self-managed one always supplies its
+# own embedding model and so has chunking configurable here.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html
 public type VectorDataSourceDefinition record {|
     # Data source name.
     string name;
     # Data source description.
     string description?;
-    # How Bedrock chunks documents submitted through this data source. FIXED for the
-    # life of the data source — `chunkingConfiguration` cannot be changed after
-    # `CreateDataSource`. Set `NONE` to chunk client-side with an `ai:Chunker`.
-    #
-    # Only `FIXED_SIZE` and `NONE` are accepted here. `HIERARCHICAL` and `SEMANTIC`
-    # are construction errors: each needs a tuning sub-object with required members
-    # and no service-side default, which this record cannot express. To use one,
-    # create the data source in the AWS console and attach by knowledge base id.
+    # How Bedrock chunks documents submitted through this data source. Fixed for the
+    # life of the data source. Only `FIXED_SIZE` and `NONE` are accepted here —
+    # `HIERARCHICAL` and `SEMANTIC` need a tuning sub-object this record cannot
+    # express; create such a data source in the AWS console instead. Set `NONE` to
+    # chunk client-side with an `ai:Chunker`.
     ChunkingStrategy chunkingStrategy = FIXED_SIZE;
-    # `FIXED_SIZE` tuning: approximate tokens per chunk. Must be **1-8192**. Ignored
-    # on other strategies.
+    # `FIXED_SIZE` tuning: approximate tokens per chunk (1-8192). Ignored on other
+    # strategies.
     int maxTokens = 300;
-    # `FIXED_SIZE` tuning: percentage overlap between adjacent chunks. Must be
-    # **1-99** — Bedrock rejects 0, so there is no "no overlap" value here; use
-    # `chunkingStrategy = NONE` if you do not want Bedrock to chunk at all. Ignored on
+    # `FIXED_SIZE` tuning: percentage overlap between adjacent chunks (1-99 — Bedrock
+    # rejects 0; use `chunkingStrategy = NONE` for no chunking at all). Ignored on
     # other strategies.
     int overlapPercentage = 20;
 |};
@@ -390,27 +356,22 @@ public type VectorDataSourceDefinition record {|
 # A self-managed knowledge base to find-or-create by name, with all content flowing
 # through this module.
 #
-# **The vector store named by `storageConfiguration` must already exist.** The
-# Bedrock API has no equivalent of the console's "Quick create a new vector store";
-# it accepts only a configuration naming an existing collection, cluster, table, or
-# bucket. Provision it with Terraform/CDK/the console first, then pass its ARNs here.
+# The vector store named by `storageConfiguration` must already exist — the Bedrock
+# API has no equivalent of the console's "Quick create a new vector store". Provision
+# it with Terraform/CDK/the console first, then pass its ARNs here.
 # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CreateKnowledgeBase.html
 public type VectorKnowledgeBaseDefinition record {|
-    # Knowledge base name. Must match `([0-9a-zA-Z][_-]?){1,100}` — dots are
-    # rejected. Also the find-or-create lookup key.
+    # Knowledge base name. Must match `([0-9a-zA-Z][_-]?){1,100}`. Also the
+    # find-or-create lookup key.
     string name;
-    # IAM role Bedrock assumes to manage the knowledge base. It needs permissions on
-    # the vector store as well as on Bedrock — `aoss:APIAccessAll`, `es:ESHttp*`,
-    # `rds-data:*`, `neptune-graph:*`, `s3vectors:*`, or
-    # `secretsmanager:GetSecretValue`, depending on the backend. Console-created
-    # roles live under the `/service-role/` path.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
+    # IAM role Bedrock assumes to manage the knowledge base. Needs permissions on
+    # the vector store as well as on Bedrock — see `kb-permissions` in the AWS
+    # user guide for the backend-specific action list.
     string roleArn;
     # Knowledge base description.
     string description?;
-    # ARN of the embedding model. REQUIRED — unlike a managed knowledge base, there
-    # is no service-managed embedding model on this path. The role above must hold
-    # `bedrock:InvokeModel` on it.
+    # ARN of the embedding model. Required — there is no service-managed embedding
+    # model on this path. `roleArn` must hold `bedrock:InvokeModel` on it.
     string embeddingModelArn;
     # Embedding model tuning. Leave unset for the model's own defaults.
     VectorEmbeddingModelConfig embeddingModel?;
@@ -419,32 +380,27 @@ public type VectorKnowledgeBaseDefinition record {|
     # The `CUSTOM` direct-ingestion data source created alongside the knowledge base.
     VectorDataSourceDefinition dataSource = {name: "ballerina-custom-source"};
     # How long `init` waits for the knowledge base and data source to leave their
-    # transient `CREATING` states (~83s measured for a managed knowledge base; a
-    # self-managed one also has to attach to your store).
+    # transient `CREATING` states.
     decimal readyTimeout = 300;
 |};
 
 # Configuration for `BedrockVectorKnowledgeBase`.
 public type VectorKnowledgeBaseConfig record {|
     # The `CUSTOM` data source to ingest into / delete from. Resolved automatically
-    # when omitted — which requires exactly one `CUSTOM` data source on the knowledge
-    # base; construction errors naming the candidates when there are none or several.
+    # when omitted, which requires exactly one `CUSTOM` data source on the knowledge
+    # base.
     string dataSourceId?;
-    # Client-side chunking before `ingest()`. Leave unset (the default) to DETECT it
-    # from the resolved data source's actual `chunkingStrategy`: `ai:DISABLE` when
-    # Bedrock chunks server-side (every strategy but `NONE`), `ai:AUTO` when it is
-    # `NONE`. Passing an explicit `ai:Chunker` against a server-chunking data source
-    # is a construction error — it would double-chunk, silently corrupting the
-    # boundaries a chunker just computed.
+    # Client-side chunking before `ingest()`. Leave unset to detect it from the data
+    # source's actual `chunkingStrategy` (`ai:DISABLE` unless it is `NONE`, in which
+    # case `ai:AUTO`). Passing an explicit `ai:Chunker` against a server-chunking
+    # data source is a construction error.
     ai:Chunker|ai:AUTO|ai:DISABLE chunker?;
-    # How long `ingest()` polls for submitted documents to leave their transient
-    # states (`PENDING`/`STARTING`/`IN_PROGRESS`) and reach a terminal one.
+    # How long `ingest()` polls for submitted documents to reach a terminal state.
     decimal ingestTimeout = 300;
-    # Default `numberOfResults` for `retrieve()` (1-100), used when `maxLimit` does
-    # not already imply a smaller cap. Bedrock's own default is 5.
+    # Default `numberOfResults` for `retrieve()` (1-100). Bedrock's own default is 5.
     int numberOfResults?;
-    # Search strategy override. Leave unset — read `SearchType` first, it is
-    # backend-dependent and two AWS sources disagree on where `SEARCH_HYBRID` works.
+    # Search strategy override. Leave unset — read `SearchType` first, support is
+    # backend-dependent.
     SearchType overrideSearchType?;
     # Reranking for `retrieve()`. Unset applies no reranking.
     VectorRerankingConfig rerankingConfiguration?;
