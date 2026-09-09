@@ -64,7 +64,7 @@ type Endpoint record {|
 // whose region segment overrides `region` still lands correctly. The signing region
 // and signing name are NOT derived from the result — a VPCE, FIPS or gateway host
 // still signs the route's own region/service scope.
-isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string {
+isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error {
     boolean mantle = route.family == MANTLE;
     string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
     // Mantle is served from the dualstack suffix family; without this flag the
@@ -75,8 +75,13 @@ isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointCon
 
 // The core behind `resolveServiceUrl` and `buildAgentEndpoint`. `forceDualstack` is
 // the Mantle case; a caller-supplied `dualstack` is honoured on top of it.
+//
+// THE SINGLE CHOKE POINT for `dualstack`, which is why the guard lives here rather
+// than in `buildEndpoint`: every host this module dials — model routes, embedding
+// routes, and BOTH knowledge-base agent planes — is built through this function, and
+// only one of the five service names has a dualstack host at all.
 isolated function resolveServiceUrlCore(string serviceName, string region,
-        aws:EndpointConfig? endpointConfig, boolean forceDualstack) returns string {
+        aws:EndpointConfig? endpointConfig, boolean forceDualstack) returns string|error {
     aws:EndpointConfig config = endpointConfig ?: {};
     string? custom = config?.customEndpoint;
     if custom is string {
@@ -86,8 +91,44 @@ isolated function resolveServiceUrlCore(string serviceName, string region,
         // https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html
         return trimTrailingSlash(custom);
     }
+    check guardDualstack(serviceName, region, config.dualstack);
     return trimTrailingSlash(aws:resolveEndpoint(serviceName, region,
             {fips: config.fips, dualstack: forceDualstack || config.dualstack}));
+}
+
+// Only `bedrock-mantle` publishes a dualstack (`.api.aws`) host in this service
+// family. Every other name in it — `bedrock-runtime` (Converse/Invoke and BOTH
+// embedding providers), `bedrock-agent` and `bedrock-agent-runtime` (the two
+// knowledge-base planes), and `bedrock` itself — has no `.api.aws` record at all.
+//
+// DNS-VERIFIED 2026-09-08, three regions each:
+//
+//   bedrock-mantle.{us-east-1,us-west-2}.api.aws          -> A records
+//   bedrock-runtime.{us-east-1,us-west-2,eu-west-1,ap-southeast-2}.api.aws -> NXDOMAIN
+//   bedrock-agent.us-east-1.api.aws                       -> NXDOMAIN
+//   bedrock-agent-runtime.{us-east-1,us-west-2}.api.aws   -> NXDOMAIN
+//   bedrock.us-east-1.api.aws                             -> NXDOMAIN
+//
+// This is the same failure mode as the China-partition and Mantle+FIPS guards above:
+// `aws:resolveEndpoint` is a string builder with a standard-pattern fallback that
+// NEVER fails, so it synthesises the unservable host happily and the mistake only
+// surfaces at call time — as a connection error after a full retry cycle, wearing the
+// same wording as a genuine network outage and naming neither the flag nor the host.
+//
+// `customEndpoint` short-circuits before this, consistent with the other host-shape
+// guards: a concrete origin means there is no derived host to validate. That is also
+// the escape hatch if AWS later publishes a dualstack host this guard does not know
+// about — pass the origin directly rather than waiting for a release.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+isolated function guardDualstack(string serviceName, string region, boolean dualstack) returns error? {
+    if !dualstack || serviceName == MANTLE_ENDPOINT_PREFIX {
+        return;
+    }
+    return error(string `'dualstack' is not available on '${serviceName}': AWS publishes a dualstack ` +
+        string `('.api.aws') host for 'bedrock-mantle' only, so '${serviceName}.${region}.api.aws' does ` +
+        string `not resolve and every request would fail as a connection error. Drop 'dualstack' ` +
+        string `(the standard host is reached over IPv4), use 'apiFamily = MANTLE' if you need the ` +
+        string `dualstack endpoint family, or set 'customEndpoint' to dial a specific origin.`);
 }
 
 // Trailing slash would double up against the route-derived path.
@@ -174,7 +215,7 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
                 string `'INVOKE', or a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
         }
         MantleEntry entry = check route.mantleEntry.ensureType();
-        string mantleBase = resolveServiceUrl(route, endpointConfig);
+        string mantleBase = check resolveServiceUrl(route, endpointConfig);
         return {
             baseUrl: mantleBase,
             host: hostOf(mantleBase),
@@ -184,7 +225,7 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
     }
 
     // Converse / Invoke on `bedrock-runtime`, partition-aware domain.
-    string base = resolveServiceUrl(route, endpointConfig);
+    string base = check resolveServiceUrl(route, endpointConfig);
     // Single-encode the model-id segment (ARNs/`-v1:0` ids carry `:` and `/`).
     string encodedId = encodePathSegment(route.effectiveModelId);
     string path = route.family == CONVERSE
@@ -220,7 +261,7 @@ isolated function buildAgentEndpoint(AgentPlane plane, string region,
         check guardBedrockPartition(partitionForRegion(region), region);
     }
     string serviceName = plane == AGENT_DATA ? AGENT_RUNTIME_ENDPOINT_PREFIX : AGENT_ENDPOINT_PREFIX;
-    string base = resolveServiceUrlCore(serviceName, region, endpointConfig, false);
+    string base = check resolveServiceUrlCore(serviceName, region, endpointConfig, false);
     return {baseUrl: base, host: hostOf(base), path: "", signingService: SIGNING_BEDROCK};
 }
 

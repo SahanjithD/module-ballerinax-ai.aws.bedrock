@@ -20,7 +20,7 @@ import ballerina/test;
 @test:Config {}
 function testTextChunkEncodesAsCustomInLineTextDocument() returns error? {
     ai:TextChunk chunk = {content: "hello world"};
-    [json, string] [wireDoc, id] = check chunkToKnowledgeBaseDocument(chunk);
+    [json, string] [wireDoc, id] = check chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, chunk);
     test:assertTrue(id.length() > 0, "a document id must always be assigned");
     map<json> content = <map<json>>(<map<json>>wireDoc)["content"];
     test:assertEquals(content["dataSourceType"], "CUSTOM");
@@ -36,14 +36,14 @@ function testTextChunkEncodesAsCustomInLineTextDocument() returns error? {
 @test:Config {}
 function testMetadataIntIdIsUsedAsTheDocumentId() returns error? {
     ai:TextChunk chunk = {content: "hi", metadata: {id: 42}};
-    [json, string] [_, id] = check chunkToKnowledgeBaseDocument(chunk);
+    [json, string] [_, id] = check chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, chunk);
     test:assertEquals(id, "42");
 }
 
 @test:Config {}
 function testNonTextDocumentReturnsACleanError() {
     ai:Document doc = {'type: "image", content: "base64-blob-not-text"};
-    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(doc);
+    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, doc);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         test:assertTrue(result.message().includes("text"), result.message());
@@ -62,7 +62,7 @@ function testEachMetadataAttributeValueTypeIsMappedCorrectly() returns error? {
             "tags": ["a", "b", "c"]
         }
     };
-    [json, string] [wireDoc, _] = check chunkToKnowledgeBaseDocument(chunk);
+    [json, string] [wireDoc, _] = check chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, chunk);
     map<json> metadata = <map<json>>(<map<json>>wireDoc)["metadata"];
     test:assertEquals(metadata["type"], "IN_LINE_ATTRIBUTE");
     json[] attributes = <json[]>metadata["inlineAttributes"];
@@ -80,7 +80,7 @@ function testEachMetadataAttributeValueTypeIsMappedCorrectly() returns error? {
 @test:Config {}
 function testMixedTypeArrayMetadataIsAClearError() {
     ai:TextChunk chunk = {content: "hi", metadata: {"bad": [1, "two", 3]}};
-    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(chunk);
+    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, chunk);
     test:assertTrue(result is ai:Error);
 }
 
@@ -91,7 +91,7 @@ function testOversizedStringMetadataValueIsRejected() {
         tooLong += "x";
     }
     ai:TextChunk chunk = {content: "hi", metadata: {"big": tooLong}};
-    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(chunk);
+    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, chunk);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         test:assertTrue(result.message().includes("2048"), result.message());
@@ -105,7 +105,7 @@ function testMoreThanFiftyMetadataAttributesIsRejected() {
         metadata["k" + i.toString()] = "v";
     }
     ai:TextChunk chunk = {content: "hi", metadata};
-    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(chunk);
+    [json, string]|ai:Error result = chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, chunk);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         test:assertTrue(result.message().includes("50"), result.message());
@@ -123,7 +123,7 @@ function testTextRetrievalResultMapsToATextChunkWithScoreAndMetadata() returns e
         metadata: {"_source_uri": "doc-1", "tenant": "acme"},
         score: 0.87
     };
-    ai:QueryMatch queryMatch = check retrievalResultToQueryMatch(result);
+    ai:QueryMatch queryMatch = check retrievalResultToQueryMatch(MANAGED_KB_PROVIDER, result);
     test:assertEquals(queryMatch.similarityScore, 0.87);
     ai:Chunk chunk = queryMatch.chunk;
     test:assertTrue(chunk is ai:TextChunk);
@@ -144,7 +144,7 @@ function testNonTextRetrievalResultIsACleanError() {
         content: {'type: "IMAGE", byteContent: "data:image/jpeg;base64,xyz"},
         score: 0.5
     };
-    ai:QueryMatch|ai:Error queryMatch = retrievalResultToQueryMatch(result);
+    ai:QueryMatch|ai:Error queryMatch = retrievalResultToQueryMatch(MANAGED_KB_PROVIDER, result);
     test:assertTrue(queryMatch is ai:Error);
     if queryMatch is ai:Error {
         test:assertTrue(queryMatch.message().includes("TEXT"), queryMatch.message());

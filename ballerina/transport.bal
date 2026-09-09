@@ -127,35 +127,61 @@ isolated client class BedrockTransport {
     // bodyless `GET`/`DELETE` — signed as the SHA-256 of the empty string, per SigV4.
     isolated function executeRequest(string method, string path, json? body, map<string> extraHeaders = {})
             returns TransportResponse|ai:Error {
+        TransportResponse|ConflictError|ai:Error result =
+            self.executeRequestRetrying(method, path, body, extraHeaders);
+        if result is ConflictError {
+            // The default surface: every call site but `createKnowledgeBase`'s A10
+            // recovery just wants a normal `ai:Error`, with the SAME message text a
+            // 409 always produced — see `executeRequestDetectingConflict` for the one
+            // caller that needs the typed distinction instead of this collapse.
+            return error ai:Error(result.message());
+        }
+        return result;
+    }
+
+    // A10 §2a: like `executeRequest`, but surfaces a 409 as the typed `ConflictError`
+    // instead of collapsing it into a generic `ai:Error`, so `createKnowledgeBase` can
+    // attempt the idempotent-create recovery (re-list by name, attach on exactly one
+    // match) rather than matching on message text. Every other status still goes
+    // through the identical retry/error-mapping path `executeRequest` uses.
+    isolated function executeRequestDetectingConflict(string method, string path, json? body,
+            map<string> extraHeaders = {}) returns TransportResponse|ConflictError|ai:Error
+        => self.executeRequestRetrying(method, path, body, extraHeaders);
+
+    // The shared retry loop behind both `executeRequest` and
+    // `executeRequestDetectingConflict`. A `ConflictError` is never retried — 409 is
+    // not in the transient-status set `executeRequestOnce`/`mapResponse` retry — so it
+    // passes straight through on the first attempt, same as any other non-retryable
+    // error.
+    isolated function executeRequestRetrying(string method, string path, json? body, map<string> extraHeaders)
+            returns TransportResponse|ConflictError|ai:Error {
         RetryConfig rc = self.retryConfig;
         int attempt = 0;
         decimal delay = rc.initialDelay;
         while true {
-            TransportResponse|RetryableError|ai:Error result =
+            TransportResponse|RetryableError|ConflictError|ai:Error result =
                 self.executeRequestOnce(method, path, body, extraHeaders);
-            if result is TransportResponse {
-                return result; // success
+            if result is TransportResponse|ConflictError {
+                return result; // success, or a non-retryable conflict
             }
             if result is ai:Error {
                 return result; // non-retryable
             }
-            if result is RetryableError {
-                // Back off unless attempts are exhausted.
-                if attempt >= rc.maxRetries {
-                    return error ai:LlmConnectionError(
-                        string `${result.message()} (retries exhausted after ${rc.maxRetries} attempts)`, result.cause());
-                }
-                runtime:sleep(delay);
-                delay = decimal:min(delay * rc.backoffFactor, rc.maxDelay);
-                attempt += 1;
+            // Back off unless attempts are exhausted.
+            if attempt >= rc.maxRetries {
+                return error ai:LlmConnectionError(
+                    string `${result.message()} (retries exhausted after ${rc.maxRetries} attempts)`, result.cause());
             }
+            runtime:sleep(delay);
+            delay = decimal:min(delay * rc.backoffFactor, rc.maxDelay);
+            attempt += 1;
         }
     }
 
     // A single signed round-trip. The path is sent single-
     // encoded; the canonical URI is double-encoded for the signature.
     isolated function executeRequestOnce(string method, string path, json? body, map<string> extraHeaders)
-            returns TransportResponse|RetryableError|ai:Error {
+            returns TransportResponse|RetryableError|ConflictError|ai:Error {
         string payload = body is () ? "" : body.toJsonString();
         map<string>|error headers = self.signedHeadersFor(method, path, payload, extraHeaders);
         if headers is error {
@@ -172,13 +198,22 @@ isolated client class BedrockTransport {
         http:Response|error resp = self.httpClient->execute(method, path, req);
         if resp is error {
             // Transport-level failure (DNS, TLS, socket) — treat as retryable.
-            return error RetryableError("Connection error while calling Bedrock", resp);
+            //
+            // NAME THE HOST. Without it every one of these reads
+            // "Connection error while calling Bedrock", which is the same string for a
+            // mistyped region in `customEndpoint`, a `dualstack` flag on a route with
+            // no dualstack host, a VPCE with no private DNS, and a genuine network
+            // outage — four different caller mistakes and one act of God, told apart
+            // only by the retry count. The host is the one fact that distinguishes
+            // them, this class already holds it, and it is not a secret.
+            return error RetryableError(
+                string `Connection error while calling Bedrock at '${self.host}'`, resp);
         }
         return self.mapResponse(resp);
     }
 
     // Maps an HTTP response to a `TransportResponse` or a typed error.
-    isolated function mapResponse(http:Response resp) returns TransportResponse|RetryableError|ai:Error {
+    isolated function mapResponse(http:Response resp) returns TransportResponse|RetryableError|ConflictError|ai:Error {
         int status = resp.statusCode;
         if status >= 200 && status < 300 {
             json|error jsonBody = resp.getJsonPayload();
@@ -244,7 +279,13 @@ isolated client class BedrockTransport {
                 return error ai:Error(string `Bedrock ResourceNotFoundException (HTTP 404): ${detail}. ${hint}`);
             }
             409 => {
-                return error ai:Error(string `Bedrock ConflictException (HTTP 409): ${detail}`);
+                // A10 §2a: typed rather than a bare `ai:Error`, so `createKnowledgeBase`
+                // can attempt the idempotent-create recovery (re-list by name, attach
+                // on exactly one match) without matching on message text. The message
+                // text itself is UNCHANGED from before this type existed — every call
+                // site that does not recover collapses this back to an identical
+                // `ai:Error` (see `executeRequest`).
+                return error ConflictError(string `Bedrock ConflictException (HTTP 409): ${detail}`, detail = detail);
             }
             424 => {
                 return error ai:LlmError(string `Bedrock ModelErrorException (HTTP 424): ${detail}`);
@@ -408,6 +449,16 @@ const REQUEST_ID_HEADER = "requestId";
 // A retryable transport outcome (408/429/500/502/503/504 or a connection failure).
 // A `distinct error` so it narrows cleanly against `json` and `ai:Error`.
 type RetryableError distinct error;
+
+// A10 §2a/prerequisite: a Bedrock `ConflictException` (HTTP 409) — the caller may be
+// able to recover by re-resolving the resource that already exists (a sequential
+// duplicate `CreateKnowledgeBase`/`CreateDataSource` name collision). Deliberately a
+// PLAIN `distinct error`, not a `distinct ai:Error` — mirrors `RetryableError` just
+// above: neither type crosses a public boundary as itself. `executeRequest` (used by
+// every call site but the one that recovers) collapses a `ConflictError` back into a
+// generic `ai:Error` with the identical message text, so existing error output for
+// every other 409 is unchanged.
+type ConflictError distinct error<record {| string detail; |}>;
 
 // Returns a response header value, or `()` if absent.
 isolated function optionalHeader(http:Response resp, string name) returns string? {

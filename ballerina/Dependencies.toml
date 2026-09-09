@@ -107,7 +107,7 @@ dependencies = [
 [[package]]
 org = "ballerina"
 name = "file"
-version = "1.13.0"
+version = "1.13.1"
 dependencies = [
 	{org = "ballerina", name = "io"},
 	{org = "ballerina", name = "jballerina.java"},
@@ -118,7 +118,7 @@ dependencies = [
 [[package]]
 org = "ballerina"
 name = "http"
-version = "2.16.6"
+version = "2.16.7"
 dependencies = [
 	{org = "ballerina", name = "auth"},
 	{org = "ballerina", name = "cache"},
@@ -441,7 +441,7 @@ modules = [
 [[package]]
 org = "dasunorg"
 name = "ai.aws.bedrock"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
 	{org = "ballerina", name = "ai"},
 	{org = "ballerina", name = "crypto"},

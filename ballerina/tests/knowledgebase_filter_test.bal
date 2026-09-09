@@ -125,23 +125,6 @@ function testEmptyFilterGroupProducesNil() returns error? {
     test:assertTrue(result is ());
 }
 
-@test:Config {}
-function testWithSourceUriFilterWithNoUserFilterIsABareLeaf() {
-    json result = withSourceUriFilter((), "doc-123");
-    test:assertEquals(result, {'equals: {key: "_source_uri", value: "doc-123"}});
-}
-
-@test:Config {}
-function testWithSourceUriFilterWithAUserFilterIsATwoElementAndAll() {
-    json userFilter = {'equals: {key: "tenant", value: "acme"}};
-    json result = withSourceUriFilter(userFilter, "doc-123");
-    test:assertTrue(result is map<json>);
-    map<json> resultMap = <map<json>>result;
-    test:assertTrue(resultMap.hasKey("andAll"));
-    json[] andAll = <json[]>resultMap["andAll"];
-    // Exactly 2 — satisfies RetrievalFilterList's min:2 by construction, no
-    // flattening needed here.
-    test:assertEquals(andAll.length(), 2);
-    test:assertEquals(andAll[0], userFilter);
-    test:assertEquals(andAll[1], {'equals: {key: "_source_uri", value: "doc-123"}});
-}
+// `withSourceUriFilter` (the per-document pinned-probe filter builder) was removed
+// with A17 — `deleteByFilter` no longer pins per document, so there is nothing here
+// to test.

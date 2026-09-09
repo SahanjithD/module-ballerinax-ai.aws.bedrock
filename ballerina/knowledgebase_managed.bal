@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerina/ai.observe;
 import ballerinax/aws;
 
 # A Bedrock managed knowledge base (`KnowledgeBaseConfiguration.type = MANAGED` —
@@ -58,7 +59,8 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *ManagedKnowledgeBaseConfig config)
             returns ai:Error? {
-        KbSpine spine = check resolveKbSpine("BedrockManagedKnowledgeBase", credentials, region,
+        check validateManagedRetrievalConfig(config);
+        KbSpine spine = check resolveKbSpine(MANAGED_KB_PROVIDER, credentials, region,
             endpoint, knowledgeBase, config?.dataSourceId, config?.httpConfig, config?.retryConfig,
             config?.rerankingModelType);
         self.controlTransport = spine.controlTransport;
@@ -78,19 +80,38 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
     # Blocks until every document reaches a terminal status or `ingestTimeout`
     # elapses, so a `retrieve()` immediately afterward sees them.
     #
+    # Bedrock upserts by document id, and this module derives that id from
+    # `ai:Metadata.id` when the caller sets one. A document that this module chunks
+    # into more than one piece therefore submits its chunks as `<id>#0`, `<id>#1`,
+    # ...; a document that does not fan out keeps `<id>` unchanged. Two documents in
+    # one call that resolve to the SAME id are rejected rather than silently
+    # overwriting each other.
+    #
     # + documents - The documents or chunks to index; only text content is supported
     # + return - An `ai:Error` if any document fails to submit or to index; `nil` otherwise
     public isolated function ingest(ai:Chunk[]|ai:Document[]|ai:Document documents) returns ai:Error? {
+        observe:KnowledgeBaseIngestSpan span = observe:createKnowledgeBaseIngestSpan(self.knowledgeBaseId);
+        span.addId(self.knowledgeBaseId);
+        ai:Error? result = self.ingestInternal(documents, span);
+        span.close(result);
+        return result;
+    }
+
+    private isolated function ingestInternal(ai:Chunk[]|ai:Document[]|ai:Document documents,
+            observe:KnowledgeBaseIngestSpan span) returns ai:Error? {
         (ai:Chunk|ai:Document)[] items = documents is ai:Chunk[]|ai:Document[] ? documents : [documents];
-        (ai:Chunk|ai:Document)[] chunked = check self.applyChunker(items);
+        KbIngestItem[] prepared = check applyKbChunker(self.chunker, items);
+        span.addInputChunks(prepared.'map(item => item.item).toJson());
 
         string[] documentIds = [];
         json[] wireDocuments = [];
-        foreach ai:Chunk|ai:Document item in chunked {
-            [json, string] [wireDoc, id] = check chunkToKnowledgeBaseDocument(item);
+        foreach KbIngestItem item in prepared {
+            [json, string] [wireDoc, id] =
+                check chunkToKnowledgeBaseDocument(MANAGED_KB_PROVIDER, item.item, item.chunkOrdinal);
             wireDocuments.push(wireDoc);
             documentIds.push(id);
         }
+        check assertDistinctDocumentIds(documentIds);
 
         foreach json[] batch in partitionJson(wireDocuments, KB_DOCUMENT_BATCH_SIZE) {
             map<json>[] _ = check ingestDocumentsBatch(self.controlTransport, self.knowledgeBaseId,
@@ -122,9 +143,29 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
     # + return - Matching chunks with similarity scores, or an `ai:Error`
     public isolated function retrieve(string query, int maxLimit = 10, ai:MetadataFilters? filters = ())
             returns ai:QueryMatch[]|ai:Error {
+        observe:KnowledgeBaseRetrieveSpan span = observe:createKnowledgeBaseRetrieveSpan(self.knowledgeBaseId);
+        span.addId(self.knowledgeBaseId);
+        span.addInputQuery(query);
+        span.addLimit(maxLimit);
+        if filters is ai:MetadataFilters {
+            span.addFilter(filters.toJson());
+        }
+        ai:QueryMatch[]|ai:Error matches = self.retrieveInternal(query, maxLimit, filters);
+        if matches is ai:Error {
+            span.close(matches);
+            return matches;
+        }
+        span.addOutput(matches.toJson());
+        span.close();
+        return matches;
+    }
+
+    private isolated function retrieveInternal(string query, int maxLimit, ai:MetadataFilters? filters)
+            returns ai:QueryMatch[]|ai:Error {
         if maxLimit != -1 && maxLimit <= 0 {
             return error ai:Error("'maxLimit' must be a positive integer, or -1 for no limit");
         }
+        check guardRetrieveQuery(query);
         json? userFilter = ();
         if filters is ai:MetadataFilters {
             userFilter = check metadataFiltersToRetrievalFilter(filters);
@@ -140,7 +181,7 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
             [json[], string?] [results, respNextToken] = check callRetrieve(self.dataTransport,
                 self.knowledgeBaseId, query, userFilter, perCall, self.rerankingModelType, nextToken);
             foreach json result in results {
-                matches.push(check retrievalResultToQueryMatch(result));
+                matches.push(check retrievalResultToQueryMatch(MANAGED_KB_PROVIDER, result));
                 if maxLimit != -1 && matches.length() >= maxLimit {
                     return matches.slice(0, maxLimit);
                 }
@@ -156,21 +197,41 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
     # Deletes documents matching `filters`.
     #
     # Bedrock has no metadata-based delete, so this enumerates every document on
-    # every data source and probes each one against `filters` through `Retrieve`.
-    # Costs one `Retrieve` call per document — a maintenance operation, not
-    # something to put on a request path. Only `CUSTOM`/`S3` data sources support
-    # deletion; documents on other data source types (SharePoint, Confluence,
-    # Drive, Web, ...) are named in the returned error rather than silently
-    # skipped, and deletes that can be made still happen even when some data
-    # sources cannot be reached.
+    # every data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO
+    # PAGED `Retrieve` enumerations — filtered by `filters`, then unfiltered — to
+    # classify every candidate as a confirmed match, genuinely excluded, or
+    # indeterminate. See `resolveDataSourceDeletes` (knowledgebase_common.bal) for the
+    # algorithm (A17).
     #
-    # + filters - The metadata filters used to identify which documents to delete
-    # + return - An `ai:Error` naming any undeletable data sources; `nil` otherwise
+    # **Cost: two paged `Retrieve` enumerations PER DATA SOURCE** (a small, bounded
+    # number of round trips regardless of how many documents the data source holds —
+    # `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results each, at most), not one
+    # to two round trips per document. A maintenance operation, not something to put
+    # on a request path, but no longer scales with the knowledge base's size.
+    #
+    # `filters` must contain at least one leaf predicate: a filter set that
+    # constrains nothing matches every document, and "delete everything" has to be
+    # explicit rather than a degenerate case of an empty collection.
+    #
+    # Only `CUSTOM`/`S3` data sources support deletion; documents on other data
+    # source types (SharePoint, Confluence, Drive, Web, ...) are named in the
+    # returned error rather than silently skipped, and deletes that can be made still
+    # happen even when some documents or data sources cannot be reached.
+    #
+    # + filters - The metadata filters used to identify which documents to delete;
+    #             must contain at least one leaf predicate
+    # + return - An `ai:Error` naming indeterminate documents, documents the service
+    #            did not confirm deleted, undeletable data sources, or data sources
+    #            refused outright (enumeration truncation, or a store that does not
+    #            appear to honour metadata filters); `nil` otherwise
     public isolated function deleteByFilter(ai:MetadataFilters filters) returns ai:Error? {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
+        check guardDeleteFilter(userFilter, filters);
 
         map<json>[] dataSourceSummaries = check listDataSources(self.controlTransport, self.knowledgeBaseId);
         string[] undeletableDataSources = [];
+        string[] indeterminate = [];
+        string[] refused = [];
         map<json[]> toDeleteByDataSource = {};
 
         foreach map<json> summary in dataSourceSummaries {
@@ -187,48 +248,32 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
 
             DeletableDocument[] candidates =
                 check listDeletableDocuments(self.controlTransport, self.knowledgeBaseId, dsId, effectiveType);
-            json[] matchesForThisSource = [];
-            foreach DeletableDocument candidate in candidates {
-                json probeFilter = withSourceUriFilter(userFilter, candidate.sourceValue);
-                // Pinned to one document, so a zero-hit result means the filter
-                // genuinely excluded it — never that the floor hid it.
-                if check retrieveHasMatch(self.dataTransport, self.knowledgeBaseId, probeFilter) {
-                    matchesForThisSource.push(candidate.identifier);
-                }
+            if candidates.length() == 0 {
+                // Nothing to classify — skip the two enumeration round trips entirely.
+                continue;
             }
-            if matchesForThisSource.length() > 0 {
-                toDeleteByDataSource[dsId] = matchesForThisSource;
+            DataSourceDeleteResult result = check resolveDataSourceDeletes(self.dataTransport, self.knowledgeBaseId,
+                dsId, userFilter, candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+            string? refusalReason = result.refusalReason;
+            if refusalReason is string {
+                refused.push(refusalReason);
+                continue;
+            }
+            indeterminate.push(...result.indeterminate);
+            if result.toDelete.length() > 0 {
+                toDeleteByDataSource[dsId] = result.toDelete;
             }
         }
 
+        string[] notDeleted = [];
         foreach [string, json[]] [dsId, identifiers] in toDeleteByDataSource.entries() {
-            foreach json[] batch in partitionJson(identifiers, KB_DOCUMENT_BATCH_SIZE) {
-                map<json>[] _ = check deleteDocumentsBatch(self.controlTransport, self.knowledgeBaseId, dsId, batch);
-            }
+            notDeleted.push(...check deleteDocuments(self.controlTransport, self.knowledgeBaseId, dsId,
+                identifiers));
         }
 
-        if undeletableDataSources.length() == 0 {
-            return;
-        }
-        return error ai:Error(
-            string `deleteByFilter deleted every match it could reach, but ` +
-            string `${undeletableDataSources.length()} data source(s) are not deletable through this API — ` +
-            string `only CUSTOM/S3 support 'DeleteKnowledgeBaseDocuments': ` +
-            string:'join(", ", ...undeletableDataSources));
+        return deleteByFilterOutcome(indeterminate, notDeleted, undeletableDataSources, refused);
     }
 
-    private isolated function applyChunker((ai:Chunk|ai:Document)[] items) returns (ai:Chunk|ai:Document)[]|ai:Error {
-        ai:Chunker|ai:AUTO|ai:DISABLE chunker = self.chunker;
-        if chunker is ai:DISABLE {
-            return items;
-        }
-        (ai:Chunk|ai:Document)[] chunked = [];
-        foreach ai:Chunk|ai:Document item in items {
-            ai:Chunker chunkerToUse = chunker is ai:Chunker ? chunker : guessChunkerForKb(item);
-            chunked.push(...check chunkerToUse.chunk(item));
-        }
-        return chunked;
-    }
 }
 
 // Resolves `ManagedKnowledgeBaseConfig.chunker`'s default from the DETECTED
@@ -274,4 +319,124 @@ isolated function guessChunkerForKb(ai:Document|ai:Chunk doc) returns ai:Chunker
         }
     }
     return new ai:GenericRecursiveChunker();
+}
+
+# One document ready to submit, with the position of the chunk within its parent when
+# this module produced it client-side.
+#
+# + item - The chunk or document to encode
+# + chunkOrdinal - 0-based position within the parent's chunks, or `()` when the item
+#                  was passed through as the caller gave it
+type KbIngestItem record {|
+    ai:Chunk|ai:Document item;
+    int? chunkOrdinal;
+|};
+
+// Client-side chunking, shared by both classes.
+//
+// `chunkOrdinal` is set only where it is NEEDED: on the chunks of a parent that fanned
+// out into more than one. Ballerina's chunkers copy the parent's metadata — `id`
+// included — onto every chunk, and Bedrock upserts by `customDocumentIdentifier.id`,
+// so without a per-chunk id a 20-chunk document submits 20 documents under one id and
+// keeps exactly one. See `documentIdFor`.
+isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chunk|ai:Document)[] items)
+        returns KbIngestItem[]|ai:Error {
+    if chunker is ai:DISABLE {
+        return from ai:Chunk|ai:Document item in items
+            select {item, chunkOrdinal: ()};
+    }
+    KbIngestItem[] prepared = [];
+    foreach ai:Chunk|ai:Document item in items {
+        ai:Chunker chunkerToUse = chunker is ai:Chunker ? chunker : guessChunkerForKb(item);
+        ai:Chunk[] chunks = check chunkerToUse.chunk(item);
+        if chunks.length() == 1 {
+            // A 1:1 chunking keeps the caller's own id — see `documentIdFor`.
+            prepared.push({item: chunks[0], chunkOrdinal: ()});
+            continue;
+        }
+        foreach int i in 0 ..< chunks.length() {
+            prepared.push({item: chunks[i], chunkOrdinal: i});
+        }
+    }
+    return prepared;
+}
+
+// `Retrieve` REJECTS an empty query: `{"text": ""}`, `{"text": " "}` and an omitted
+// `text` all return 400 "Text input is required." (The service model's
+// `KnowledgeBaseQueryTextString` declares `min: 0`, which the live API contradicts.)
+// Caught here so a trivial caller mistake never costs a signed round trip.
+isolated function guardRetrieveQuery(string query) returns ai:Error? {
+    if query.trim().length() == 0 {
+        return error ai:Error("'query' must be a non-empty, non-whitespace string — Bedrock's 'Retrieve' " +
+            "rejects an empty query with 'Text input is required.'");
+    }
+    return;
+}
+
+// The guard both `deleteByFilter` implementations run before touching anything.
+//
+// A filter set that constrains nothing makes every per-document probe "does this
+// document exist" — every one hits, and the whole knowledge base is deleted.
+// `ai:KnowledgeBase.deleteByFilter` takes filters as a REQUIRED argument, so a caller
+// assembling them from a collection that happened to be empty would get silent total
+// deletion. Refuse instead: "delete everything" must be explicit, never a degenerate
+// case.
+//
+// Both conditions are checked. The nil test catches an empty group; the leaf count
+// answers the question the nil test is really asking — did the caller constrain
+// anything at all? — without depending on how the wire encoder folds nested empty
+// groups. Total deletion is not a case to protect against with one check.
+isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters) returns ai:Error? {
+    if userFilter is () || filterLeafCount(filters) == 0 {
+        return error ai:Error(
+            "deleteByFilter requires at least one metadata filter — an 'ai:MetadataFilters' with no " +
+            "leaf predicates matches every document, which would delete the entire knowledge base. " +
+            "Pass a filter that selects the documents to remove.");
+    }
+    return;
+}
+
+// The shared tail of `deleteByFilter`: everything that could not be confirmed, in one
+// error, after every delete that COULD be made has been made.
+isolated function deleteByFilterOutcome(string[] indeterminate, string[] notDeleted,
+        string[] undeletableDataSources, string[] refused = []) returns ai:Error? {
+    string[] problems = [];
+    if indeterminate.length() > 0 {
+        problems.push(string `${indeterminate.length()} document(s) could not be confirmed to match or not ` +
+            string `match the filter (the enumeration did not identify them): ` +
+            string:'join(", ", ...indeterminate));
+    }
+    if notDeleted.length() > 0 {
+        problems.push(string `${notDeleted.length()} document(s) matched the filter but were not confirmed ` +
+            string `deleted by 'DeleteKnowledgeBaseDocuments': ${string:'join(", ", ...notDeleted)}`);
+    }
+    if undeletableDataSources.length() > 0 {
+        problems.push(string `${undeletableDataSources.length()} data source(s) are not deletable through ` +
+            string `this API — only CUSTOM/S3 support 'DeleteKnowledgeBaseDocuments': ` +
+            string:'join(", ", ...undeletableDataSources));
+    }
+    // A17: a data source refused outright — enumeration truncation, or a store that
+    // does not appear to honour metadata filters — contributes NOTHING to `toDelete`,
+    // so it is reported here rather than folded into `indeterminate`.
+    if refused.length() > 0 {
+        problems.push(string:'join("; ", ...refused));
+    }
+    if problems.length() == 0 {
+        return;
+    }
+    return error ai:Error(
+        string `deleteByFilter deleted every confirmed match, but: ${string:'join("; ", ...problems)}`);
+}
+
+// Rejects retrieve-time configuration Bedrock would reject, before any I/O. The
+// vector class's `validateVectorRetrievalConfig` is the same bound on the same
+// service-side shape, `KnowledgeBaseVectorSearchConfigurationNumberOfResultsInteger`
+// (min 1, max 100).
+isolated function validateManagedRetrievalConfig(ManagedKnowledgeBaseConfig config) returns ai:Error? {
+    int? numberOfResults = config?.numberOfResults;
+    if numberOfResults is int && (numberOfResults < 1 || numberOfResults > KB_MAX_RESULTS_PER_CALL) {
+        return error ai:Error(
+            string `'numberOfResults' must be between 1 and ${KB_MAX_RESULTS_PER_CALL}, got ${numberOfResults}`);
+    }
+    return;
 }

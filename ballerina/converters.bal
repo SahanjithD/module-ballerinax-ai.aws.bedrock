@@ -21,7 +21,9 @@ final readonly & ModelConverter CONVERSE_CONVERTER = {
     encode: encodeConverse,
     decode: decodeConverse,
     toolChoice: CONVERSE_TOOL_CHOICE,
-    supportsStreaming: true
+    supportsStreaming: true,
+    dialect: "Converse",
+    supports: {stopSequences: true, thinking: true, effort: true, reasoningEffort: true}
 };
 
 // Invoke-Anthropic — `anthropic_version: bedrock-2023-05-31` body field.
@@ -29,7 +31,9 @@ final readonly & ModelConverter INVOKE_ANTHROPIC_CONVERTER = {
     encode: encodeInvokeAnthropic,
     decode: decodeAnthropicMessages,
     toolChoice: ANTHROPIC_TOOL_CHOICE,
-    supportsStreaming: true
+    supportsStreaming: true,
+    dialect: "Anthropic Messages (InvokeModel)",
+    supports: {stopSequences: true, thinking: true, effort: true, reasoningEffort: false}
 };
 
 // Mantle Messages — `anthropic-version: 2023-06-01` header (added by transport).
@@ -37,7 +41,9 @@ final readonly & ModelConverter MANTLE_MESSAGES_CONVERTER = {
     encode: encodeMantleMessages,
     decode: decodeAnthropicMessages,
     toolChoice: ANTHROPIC_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "Anthropic Messages (bedrock-mantle)",
+    supports: {stopSequences: true, thinking: true, effort: true, reasoningEffort: false}
 };
 
 // Mantle Responses — OpenAI Responses API (GPT-5.x on `/openai/v1/responses`).
@@ -47,7 +53,9 @@ final readonly & ModelConverter MANTLE_RESPONSES_CONVERTER = {
     // Responses forces tools with a FLAT `tool_choice`, unlike the Chat Completions
     // converters below — same vendor, different dialect.
     toolChoice: RESPONSES_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "OpenAI Responses (bedrock-mantle)",
+    supports: {stopSequences: false, thinking: false, effort: false, reasoningEffort: true}
 };
 
 // Mantle Chat Completions — OpenAI chat shape (GLM on `/v1/chat/completions`).
@@ -55,7 +63,9 @@ final readonly & ModelConverter MANTLE_CHAT_CONVERTER = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
     toolChoice: OPENAI_CHAT_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "OpenAI Chat Completions (bedrock-mantle)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: true}
 };
 
 // Nova InvokeModel — `schemaVersion: messages-v1`; Converse-shaped response.
@@ -65,7 +75,9 @@ final readonly & ModelConverter INVOKE_NOVA_CONVERTER = {
     encode: encodeNovaInvoke,
     decode: decodeConverse,
     toolChoice: CONVERSE_TOOL_CHOICE,
-    supportsStreaming: true
+    supportsStreaming: true,
+    dialect: "Nova (InvokeModel)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: false}
 };
 
 // OpenAI-shaped InvokeModel — GPT-OSS, Qwen, DeepSeek. NOT Mistral: that
@@ -74,7 +86,9 @@ final readonly & ModelConverter INVOKE_OPENAI_CHAT_CONVERTER = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
     toolChoice: OPENAI_CHAT_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "OpenAI Chat Completions (InvokeModel)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: true}
 };
 
 // Invoke-DeepSeek — text completion: `prompt` → `choices[].text`. NOT the OpenAI
@@ -83,7 +97,9 @@ final readonly & ModelConverter INVOKE_DEEPSEEK_CONVERTER = {
     encode: encodeDeepSeekInvoke,
     decode: decodeDeepSeekInvoke,
     toolChoice: NO_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "DeepSeek text completion (InvokeModel)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: false}
 };
 
 // Invoke-Mistral chat completion — `messages`/`choices`, `tool_choice: "any"`.
@@ -91,7 +107,9 @@ final readonly & ModelConverter INVOKE_MISTRAL_CHAT_CONVERTER = {
     encode: encodeMistralChat,
     decode: decodeMistralChat,
     toolChoice: MISTRAL_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "Mistral chat completion (InvokeModel)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: false}
 };
 
 // Invoke-Mistral text completion — `prompt`/`outputs`; no tools at all.
@@ -99,7 +117,9 @@ final readonly & ModelConverter INVOKE_MISTRAL_TEXT_CONVERTER = {
     encode: encodeMistralText,
     decode: decodeMistralText,
     toolChoice: NO_TOOL_CHOICE,
-    supportsStreaming: false
+    supportsStreaming: false,
+    dialect: "Mistral text completion (InvokeModel)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: false}
 };
 
 // Selects the converter for a resolved route. Runs at construction.

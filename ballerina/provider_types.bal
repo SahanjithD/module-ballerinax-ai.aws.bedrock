@@ -76,17 +76,28 @@ public type CommonModelConfig record {|
     # Provider-level stop sequences; a per-call `stop` overrides these.
     string[] stopSequences?;
 
-    // --- Converse passthrough ---
-    # Forwarded verbatim on Converse; ignored elsewhere.
+    // --- Passthrough ---
+    # Forwarded VERBATIM into the request body on every route: Converse's
+    # `additionalModelRequestFields`, and the top level of each Invoke/Mantle vendor
+    # dialect. The escape hatch for anything Bedrock exposes that this module does not
+    # model, and the reason it is spliced untouched — the module never rewrites,
+    # renames or reshapes what you put here.
     # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
     AdditionalRequestFields additionalModelRequestFields?;
 
-    # `serviceTier`.
+    # Processing tier for the request. Carried as the `serviceTier` body field on
+    # Converse and the `X-Amzn-Bedrock-Service-Tier` request header on Invoke.
+    # NOT available on `bedrock-mantle` — setting it on a Mantle-resolved model is a
+    # construction error rather than a silent drop.
     ServiceTier serviceTier?;
 
-    # Request latency-optimized inference on Converse — a speed/cost dial only, same
-    # output. Support is per model and region; unsupported combinations are rejected
-    # by AWS.
+    # Request latency-optimized inference — a speed/cost dial only, same output.
+    # Carried as the `performanceConfig` body field on Converse and the
+    # `X-Amzn-Bedrock-PerformanceConfig-Latency` request header on Invoke. NOT
+    # available on `bedrock-mantle`, where setting it is a construction error rather
+    # than a silent drop. Support is per model and region; unsupported combinations
+    # are rejected by AWS.
+    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
     boolean latencyOptimized?;
 
     // --- Cross-cutting ---
@@ -116,9 +127,11 @@ type InferenceParams record {|
     string[] stopSequences?;
     # Converse `additionalModelRequestFields` passthrough.
     AdditionalRequestFields additionalModelRequestFields?;
-    # Converse `serviceTier`.
+    # Processing tier: Converse `serviceTier` body field, or the Invoke
+    # `X-Amzn-Bedrock-Service-Tier` header. Refused on Mantle at construction.
     ServiceTier serviceTier?;
-    # Converse `performanceConfig.latency = "optimized"` when set.
+    # Converse `performanceConfig.latency = "optimized"`, or the Invoke
+    # `X-Amzn-Bedrock-PerformanceConfig-Latency` header. Refused on Mantle.
     boolean latencyOptimized?;
     # Claude thinking. Emitted as a top-level `thinking` body field on the Anthropic
     # Messages dialects, and through `additionalModelRequestFields` on Converse
@@ -126,6 +139,16 @@ type InferenceParams record {|
     ThinkingConfig thinking?;
     # `output_config.effort` — a SIBLING of `thinking`, never nested inside it.
     Effort effort?;
+    # OpenAI reasoning depth. FIRST-CLASS rather than folded into the passthrough,
+    # because its wire SHAPE differs per dialect and only the converter knows which
+    # dialect it is building: Chat Completions spells it as a top-level
+    # `reasoning_effort`, the Responses API nests it as `reasoning: {effort: ...}`.
+    # Folding it into `additionalModelRequestFields` at the provider erased that
+    # distinction — the passthrough is spliced verbatim, so a GPT-5.x model on
+    # `/openai/v1/responses` received the Chat Completions spelling and answered
+    # `Unknown parameter: 'reasoning_effort'` (400). It also conflated a knob the
+    # module owns with an escape hatch the CALLER owns, which must stay verbatim.
+    string reasoningEffort?;
     # Converse `guardrailConfig` body field; Invoke uses headers instead.
     GuardrailConfig guardrail?;
 |};
@@ -175,6 +198,32 @@ type RequestEncoder isolated function (
 # Decode: wire JSON → `DecodedResponse`. Module-private converter plumbing.
 type ResponseDecoder isolated function (json response) returns DecodedResponse|ai:Error;
 
+# Which optional `InferenceParams` members a wire dialect can actually put on the
+# wire. Declared per converter so that "this route cannot carry that field" is a
+# fact the registry states ONCE, checked in ONE place, rather than something each
+# encoder is trusted to remember.
+#
+# The alternative — letting an encoder ignore what it does not understand — is a
+# silent drop: the caller sets a field, the constructor accepts it, the request
+# succeeds, and nothing happened. From the `ai:ModelProvider` contract that is
+# indistinguishable from a request that honoured it. The module's own precedent is to
+# refuse (the Responses dialect errors on stop sequences rather than ignoring them);
+# this makes that precedent the default for every field on every dialect.
+#
+# `serviceTier` and `latencyOptimized` are NOT here: they are honoured by the route
+# FAMILY rather than the dialect — a Converse body field, an InvokeModel request
+# header, nothing on Mantle — so they are decided by `familyCarriesRequestOptions`.
+type DialectSupport record {|
+    # A stop-sequence parameter exists in this dialect's request schema.
+    boolean stopSequences = true;
+    # Claude `thinking`.
+    boolean thinking = false;
+    # Claude `output_config.effort`.
+    boolean effort = false;
+    # OpenAI reasoning depth, in whatever spelling this dialect uses.
+    boolean reasoningEffort = false;
+|};
+
 # An encode/decode pair. Module-private converter registry record.
 type ModelConverter record {|
     # Messages → request body.
@@ -186,4 +235,8 @@ type ModelConverter record {|
     ToolChoiceStyle toolChoice;
     # Populated, unused today — streaming is out of scope.
     boolean supportsStreaming;
+    # Wire-dialect name, as it appears in "not supported on this route" messages.
+    string dialect;
+    # What this dialect can carry.
+    DialectSupport supports;
 |};

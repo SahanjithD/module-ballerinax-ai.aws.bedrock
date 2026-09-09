@@ -27,7 +27,7 @@ import ballerinax/aws.auth;
 // constructions, `listKnowledgeBaseIdsByName`, `getKnowledgeBase`,
 // `pollKnowledgeBaseActive`, `failureReasonsOf`, `pollDataSourceAvailable`,
 // `getDataSource`, `listDataSources`, `resolveCustomDataSource`,
-// `effectiveDataSourceType`, `detectChunkingStrategy`, every document operation, the
+// `effectiveDataSourceType`, `validateResolvedDataSource`, every document operation, the
 // `KB_*` constants, `asMap`/`stringField`/`partitionJson`, plus
 // knowledgebase_convert.bal and knowledgebase_filter.bal in full.
 
@@ -346,7 +346,7 @@ isolated function vectorSearchConfigJson(json? filter, int numberOfResults, Sear
         vectorSearch["overrideSearchType"] = overrideSearchType;
     }
     if reranking is VectorRerankingConfig {
-        vectorSearch["rerankingConfiguration"] = rerankingConfigJson(reranking);
+        vectorSearch["rerankingConfiguration"] = rerankingConfigJson(reranking, numberOfResults);
     }
     return vectorSearch;
 }
@@ -354,29 +354,25 @@ isolated function vectorSearchConfigJson(json? filter, int numberOfResults, Sear
 // `VectorRerankingConfig` -> `VectorSearchRerankingConfiguration`. `type` is the only
 // required member and `BEDROCK_RERANKING_MODEL` its only valid value.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_VectorSearchRerankingConfiguration.html
-isolated function rerankingConfigJson(VectorRerankingConfig reranking) returns json {
+//
+// B5b: `numberOfRerankedResults` is CLAMPED to the effective `numberOfResults` this
+// call is actually making — not just construction's static config, but the per-call
+// value after `retrieve(maxLimit=...)` has narrowed it (see `retrieveInternal`).
+// `validateVectorRetrievalConfig` (B5a) can only catch the construction-time case:
+// a config with `numberOfResults` left unset (falling back to Bedrock's own default
+// of 5) still reaches the wire with `numberOfRerankedResults` uncapped, and a small
+// per-call `maxLimit` narrows the search further still. Clamping rather than erroring
+// here is deliberate: `maxLimit` is caller intent on ONE call, and erroring would make
+// a construction-time-legal config fail on a small `maxLimit` — a clamp degrades
+// gracefully to "rerank everything the search returned" instead.
+isolated function rerankingConfigJson(VectorRerankingConfig reranking, int numberOfResults) returns json {
     map<json> bedrockReranking = {modelConfiguration: {modelArn: reranking.modelArn}};
     int? numberOfRerankedResults = reranking?.numberOfRerankedResults;
     if numberOfRerankedResults is int {
-        bedrockReranking["numberOfRerankedResults"] = numberOfRerankedResults;
+        bedrockReranking["numberOfRerankedResults"] =
+            numberOfRerankedResults < numberOfResults ? numberOfRerankedResults : numberOfResults;
     }
     return {'type: "BEDROCK_RERANKING_MODEL", bedrockRerankingConfiguration: bedrockReranking};
-}
-
-// Combines an already-built `RetrievalFilter` (or none) with a leaf
-// `x-amz-bedrock-kb-source-uri == id` filter — the probe `deleteByFilter` runs per
-// candidate document. Always produces either a bare leaf or a 2-element `andAll`, so
-// `RetrievalFilterList`'s `min: 2` holds by construction.
-//
-// Duplicates `withSourceUriFilter` (knowledgebase_filter.bal) apart from the key,
-// which cannot be shared without editing that file. Merge candidate: give the shared
-// function a `key` parameter defaulted to `SOURCE_URI_METADATA_KEY` and delete this.
-isolated function withVectorSourceUriFilter(json? userFilter, string documentId) returns json {
-    json idLeaf = {'equals: {key: VECTOR_SOURCE_URI_METADATA_KEY, value: documentId}};
-    if userFilter is () {
-        return idLeaf;
-    }
-    return {andAll: [userFilter, idLeaf]};
 }
 
 // ============================================================================
@@ -445,6 +441,19 @@ isolated function validateVectorRetrievalConfig(VectorKnowledgeBaseConfig config
                 string `'numberOfRerankedResults' must be between 1 and ${MAX_RERANKED_RESULTS}, ` +
                 string `got ${rerankedResults}`);
         }
+        // B5a: asking to rerank more results than the search itself returns is
+        // accepted by the service model's independent bounds (each is checked only
+        // against 1-100) but is nonsensical — Bedrock would rerank at most
+        // `numberOfResults` results regardless of what `numberOfRerankedResults` asks
+        // for. Only checkable when BOTH are set here; a `numberOfResults` left unset
+        // falls back to Bedrock's own default (5) or, per call, `maxLimit` — neither
+        // of which is visible at construction — so 4b clamps the per-call case instead.
+        if rerankedResults is int && numberOfResults is int && rerankedResults > numberOfResults {
+            return error ai:Error(
+                string `'numberOfRerankedResults' (${rerankedResults}) cannot exceed 'numberOfResults' ` +
+                string `(${numberOfResults}) — cannot rerank ${rerankedResults} results out of a search ` +
+                string `that returns at most ${numberOfResults}.`);
+        }
     }
     return;
 }
@@ -464,6 +473,22 @@ isolated function validateStorageConfiguration(StorageConfiguration storage) ret
                 "S3 Vectors storage needs either 'indexArn', or both 'vectorBucketArn' and 'indexName'. " +
                 "Neither was set, so there is no vector index to attach to.");
         }
+        // B4: `indexArn` and `vectorBucketArn`/`indexName` are both `Required: No`
+        // individually, so nothing in the service model stops a caller setting
+        // `indexArn` AND a `vectorBucketArn`/`indexName` naming a DIFFERENT index.
+        // `storageConfigurationJson` forwards every member it is given, so Bedrock —
+        // not this module, not the caller — would silently pick one. Refuse the
+        // ambiguity here, naming both, rather than letting the wrong index win quietly.
+        if hasIndexArn && (storage?.vectorBucketArn is string || storage?.indexName is string) {
+            string? indexArn = storage?.indexArn;
+            string other = storage?.vectorBucketArn is string
+                ? string `vectorBucketArn '${storage?.vectorBucketArn ?: ""}'`
+                : string `indexName '${storage?.indexName ?: ""}'`;
+            return error ai:Error(
+                string `S3 Vectors storage sets both 'indexArn' ('${indexArn ?: ""}') and ${other} — these ` +
+                "may name different indexes, and which one Bedrock would attach to is not documented. Pass " +
+                "exactly one of the two valid forms: 'indexArn', or 'vectorBucketArn' + 'indexName'.");
+        }
     }
     return;
 }
@@ -477,8 +502,10 @@ isolated function validateStorageConfiguration(StorageConfiguration storage) ret
 // the reserved attribute is spelled `_source_uri`, so `retrieve()` and
 // `deleteByFilter()` would both misbehave — the latter silently, by matching nothing.
 // Refuse at construction rather than half-work at runtime.
+// Returns the fetched knowledge base so the attach-by-definition comparison can
+// reuse it rather than issuing a second identical `GetKnowledgeBase`.
 isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId)
-        returns ai:Error? {
+        returns map<json>|ai:Error {
     map<json> kb = check getKnowledgeBase(controlTransport, kbId);
     string status = stringField(kb, "status") ?: "";
     if status != "ACTIVE" {
@@ -498,7 +525,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
             "different reserved metadata prefix, so retrieve() and deleteByFilter() are not valid " +
             "against it. Use BedrockManagedKnowledgeBase instead.");
     }
-    return;
+    return kb;
 }
 
 // ============================================================================
@@ -542,8 +569,8 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredent
         } else {
             dataSourceId = check resolveCustomDataSource(controlTransport, attach.knowledgeBaseId);
         }
-        ChunkingStrategy strategy =
-            check detectChunkingStrategy(controlTransport, attach.knowledgeBaseId, dataSourceId);
+        ChunkingStrategy strategy = check validateResolvedDataSource(controlTransport,
+            attach.knowledgeBaseId, dataSourceId);
         return {
             controlTransport,
             dataTransport,
@@ -562,45 +589,74 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredent
 // `string` -> verify and attach (no writes). `VectorKnowledgeBaseDefinition` -> find
 // by name; exactly one match attaches, no match creates, more than one is a
 // construction error. Same reasoning as the managed path: `CreateKnowledgeBase` has
-// no upsert and names are not unique per account.
+// no upsert, and while knowledge base names ARE unique per account, AWS's own
+// enforcement has a race window — see A10 (§2a/§2b) below, mirrored from
+// `resolveKnowledgeBase` in knowledgebase_common.bal.
 isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
         string|VectorKnowledgeBaseDefinition knowledgeBase) returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
-        check verifyVectorKnowledgeBaseUsable(controlTransport, knowledgeBase);
+        map<json> _ = check verifyVectorKnowledgeBaseUsable(controlTransport, knowledgeBase);
         return {knowledgeBaseId: knowledgeBase, createdDataSourceId: ()};
     }
     string[] candidates = check listKnowledgeBaseIdsByName(controlTransport, knowledgeBase.name);
     if candidates.length() == 1 {
-        check verifyVectorKnowledgeBaseUsable(controlTransport, candidates[0]);
+        map<json> existing = check verifyVectorKnowledgeBaseUsable(controlTransport, candidates[0]);
+        // `storageConfiguration` matters even more here than on the managed path: it
+        // names the vector store the caller believes it is reading and writing.
+        check assertDefinitionMatches(candidates[0], createVectorKnowledgeBaseRequestBody(knowledgeBase),
+            existing);
         return {knowledgeBaseId: candidates[0], createdDataSourceId: ()};
     }
     if candidates.length() > 1 {
-        return error ai:Error(
-            string `${candidates.length()} knowledge bases are named '${knowledgeBase.name}' ` +
-            string `(${string:'join(", ", ...candidates)}) — names are not unique per account, so which one ` +
-            "was meant is ambiguous. Pass the knowledge base id directly instead of a definition.");
+        return error ai:Error(nameAmbiguityMessage(knowledgeBase.name, candidates));
     }
-    string kbId = check createVectorKnowledgeBase(controlTransport, knowledgeBase);
+    // A10: same two race windows as the managed path (knowledgebase_common.bal) —
+    // §2a (sequential 409, recovered by attaching) and §2b (genuinely concurrent
+    // in-flight creates, detected after this call's own create is ACTIVE and
+    // reported, never silently duplicated or deleted).
+    KbCreateOutcome created = check createVectorKnowledgeBaseRecoveringFromConflict(controlTransport, knowledgeBase);
+    if created.recovered {
+        return {knowledgeBaseId: created.knowledgeBaseId, createdDataSourceId: ()};
+    }
+    string kbId = created.knowledgeBaseId;
     check pollKnowledgeBaseActive(controlTransport, kbId, knowledgeBase.readyTimeout);
     string dsId = check createVectorCustomDataSource(controlTransport, kbId, knowledgeBase.dataSource);
+    check guardAgainstConcurrentDuplicate(controlTransport, knowledgeBase.name, kbId);
     return {knowledgeBaseId: kbId, createdDataSourceId: dsId};
 }
 
-isolated function createVectorKnowledgeBase(BedrockTransport controlTransport, VectorKnowledgeBaseDefinition def)
-        returns string|ai:Error {
+// A10 §2a, vector counterpart of `createKnowledgeBaseRecoveringFromConflict` — same
+// recovery, using the VECTOR create body and `verifyVectorKnowledgeBaseUsable`.
+isolated function createVectorKnowledgeBaseRecoveringFromConflict(BedrockTransport controlTransport,
+        VectorKnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
     map<json> body = createVectorKnowledgeBaseRequestBody(def);
-    TransportResponse response = check controlTransport.executeRequest("PUT", "/knowledgebases/", body);
+    body["clientToken"] = idempotencyToken(body);
+    TransportResponse|ConflictError|ai:Error response =
+        controlTransport.executeRequestDetectingConflict("PUT", "/knowledgebases/", body);
+    if response is ConflictError {
+        string[] candidates = check listKnowledgeBaseIdsByName(controlTransport, def.name);
+        if candidates.length() == 1 {
+            map<json> existing = check verifyVectorKnowledgeBaseUsable(controlTransport, candidates[0]);
+            check assertDefinitionMatches(candidates[0], createVectorKnowledgeBaseRequestBody(def), existing);
+            return {knowledgeBaseId: candidates[0], recovered: true};
+        }
+        return error ai:Error(response.message());
+    }
+    if response is ai:Error {
+        return response;
+    }
     map<json> kb = asMap(asMap(response.body)["knowledgeBase"] ?: {});
     string? id = stringField(kb, "knowledgeBaseId");
     if id is () {
         return error ai:Error("CreateKnowledgeBase response carried no 'knowledgeBaseId'");
     }
-    return id;
+    return {knowledgeBaseId: id, recovered: false};
 }
 
 isolated function createVectorCustomDataSource(BedrockTransport controlTransport, string kbId,
         VectorDataSourceDefinition def) returns string|ai:Error {
     map<json> body = check createVectorDataSourceRequestBody(def);
+    body["clientToken"] = idempotencyToken({kbId, dataSource: body});
     string path = string `/knowledgebases/${kbId}/datasources/`;
     TransportResponse response = check controlTransport.executeRequest("PUT", path, body);
     map<json> dataSource = asMap(asMap(response.body)["dataSource"] ?: {});
@@ -647,85 +703,13 @@ isolated function callVectorRetrieve(BedrockTransport dataTransport, string kbId
     return [results, stringField(respBody, "nextToken")];
 }
 
-// The `deleteByFilter` probe: does at least one result come back for the pinned
-// document under `filter`? `numberOfResults: 1` is enough even for a document that
-// split into dozens of chunks — metadata is attached per-DOCUMENT on
-// `IngestKnowledgeBaseDocuments` and there is no per-chunk metadata input, so a
-// filter matches ALL of a document's chunks or NONE of them.
-//
-// Neither reranking nor `overrideSearchType` is applied: reranking imposes its own
-// relevance cut which could drop the single result this existence check depends on,
-// and forcing a search type here would make the probe's behaviour differ from the
-// `retrieve()` the caller's filter was written against.
-//
-// IDENTITY IS CHECKED, NOT JUST RESULT COUNT. "Non-empty response" would mean
-// trusting the store to honour the `x-amz-bedrock-kb-source-uri` pin, and on a
-// customer-owned store that trust is unsafe: AWS documents that on MongoDB Atlas
-// "Metadata filtering doesn't work by default and requires additional setup in your
-// MongoDB Atlas vector index configuration"
-// (https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html).
-// If a filter is silently ignored, every probe would return the same top-scoring
-// chunk, every document would look like a match, and `deleteByFilter` would delete
-// the ENTIRE knowledge base. Verifying that a returned result really is the pinned
-// document degrades that failure to "no match", which the caller's reachability
-// re-probe then reports as indeterminate — under-delete and loud, never
-// over-delete and silent.
-isolated function vectorRetrieveHasMatch(BedrockTransport dataTransport, string kbId, json filter,
-        string pinnedDocumentId) returns boolean|ai:Error {
-    [json[], string?] [results, _] =
-        check callVectorRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, 1, (), (), ());
-    foreach json result in results {
-        if retrievalResultIdentifies(result, pinnedDocumentId) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Does this retrieval result belong to `documentId`? Checks the injected metadata
-// attribute first, then the two DOCUMENTED, contractual identity members —
-// `location.customDocumentLocation.id` / `location.s3Location.uri` and `documentId`
-// are all declared in the service model, unlike the metadata key, so the check does
-// not rest on the undocumented attribute alone.
-// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_KnowledgeBaseRetrievalResult.html
-isolated function retrievalResultIdentifies(json result, string documentId) returns boolean {
-    map<json> resultMap = asMap(result);
-    if stringField(asMap(resultMap["metadata"] ?: {}), VECTOR_SOURCE_URI_METADATA_KEY) == documentId {
-        return true;
-    }
-    // These two mirror exactly how `listDeletableDocuments` builds `sourceValue`:
-    // `identifier.custom.id` for a CUSTOM data source, `identifier.s3.uri` for S3.
-    map<json> location = asMap(resultMap["location"] ?: {});
-    if stringField(asMap(location["customDocumentLocation"] ?: {}), "id") == documentId {
-        return true;
-    }
-    return stringField(asMap(location["s3Location"] ?: {}), "uri") == documentId;
-    // `KnowledgeBaseRetrievalResult.documentId` is deliberately NOT accepted as
-    // proof of identity. AWS documents it as "the unique identifier of the document.
-    // Use with GetDocumentContent" — a service-side id with no documented equality to
-    // `customDocumentIdentifier.id` or to an S3 URI. Treating it as equal would admit
-    // an identity AWS never promised, and a false positive here DELETES a document
-    // that may not match the filter, which is the exact direction this check exists
-    // to prevent. The two `location` members above already cover both data source
-    // types that `DocumentIdentifier` can even express.
-}
-
-// The number of real leaf predicates in a (possibly nested) `ai:MetadataFilters`.
-//
-// Guards `deleteByFilter` against a filter set that LOOKS populated but constrains
-// nothing. `metadataFiltersToRetrievalFilter` (knowledgebase_filter.bal) returns `()`
-// for an empty group, but its `if childJson is json` test does not reject that `()`
-// when it comes back from a nested group — `()` is a member of `json` — so two empty
-// sub-groups produce `{"andAll": [null, null]}`, which is non-nil and would sail past
-// a plain nil check while selecting every document.
-//
-// Counting leaves answers the question the nil check is really asking: did the caller
-// actually constrain anything? That shared-file behaviour cannot be fixed from here
-// without editing knowledgebase_filter.bal.
-isolated function vectorFilterLeafCount(ai:MetadataFilters filters) returns int {
-    int count = 0;
-    foreach ai:MetadataFilters|ai:MetadataFilter child in filters.filters {
-        count += child is ai:MetadataFilter ? 1 : vectorFilterLeafCount(child);
-    }
-    return count;
-}
+// The VECTOR adapter for `DeleteRetrieveCaller` (knowledgebase_common.bal) — A17's
+// two-enumeration `deleteByFilter` algorithm, on the `vectorSearchConfiguration`
+// branch. Neither reranking nor `overrideSearchType` is applied: reranking imposes
+// its own relevance cut, which is exactly the kind of cutoff the unfiltered
+// (reachability) enumeration exists to see past, and forcing a search type here
+// would make the enumeration's behaviour differ from the `retrieve()` the caller's
+// filter was written against.
+isolated function vectorDeleteRetrieve(BedrockTransport dataTransport, string kbId, json? filter,
+        int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error
+    => callVectorRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, numberOfResults, (), (), nextToken);

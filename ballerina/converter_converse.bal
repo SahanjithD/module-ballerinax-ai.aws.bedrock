@@ -76,6 +76,14 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
     if effort is Effort {
         additionalRequest = foldRequestFields(additionalRequest, {"output_config": {"effort": effort}});
     }
+    // `reasoning_effort` has no native Converse member either, so it rides the
+    // passthrough down to the model's own parser — which is the vendor's Chat
+    // Completions parser, hence the Chat Completions spelling here and the nested
+    // `reasoning.effort` in the Responses converter.
+    string? reasoningEffort = params?.reasoningEffort;
+    if reasoningEffort is string {
+        additionalRequest = foldRequestFields(additionalRequest, {"reasoning_effort": reasoningEffort});
+    }
     map<json>? additionalJson = additionalFieldsToJson(additionalRequest);
     if additionalJson != () {
         body["additionalModelRequestFields"] = additionalJson;

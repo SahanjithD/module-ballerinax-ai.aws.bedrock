@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerina/ai.observe;
 import ballerinax/aws;
 
 # A Bedrock self-managed knowledge base (`KnowledgeBaseConfiguration.type = VECTOR`)
@@ -65,7 +66,7 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *VectorKnowledgeBaseConfig config)
             returns ai:Error? {
-        KbSpine spine = check resolveVectorKbSpine("BedrockVectorKnowledgeBase", credentials, region, endpoint,
+        KbSpine spine = check resolveVectorKbSpine(VECTOR_KB_PROVIDER, credentials, region, endpoint,
             knowledgeBase, config);
         self.controlTransport = spine.controlTransport;
         self.dataTransport = spine.dataTransport;
@@ -86,19 +87,38 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
     # Blocks until every document reaches a terminal status or `ingestTimeout`
     # elapses, so a `retrieve()` immediately afterward sees them.
     #
+    # Bedrock upserts by document id, and this module derives that id from
+    # `ai:Metadata.id` when the caller sets one. A document that this module chunks
+    # into more than one piece therefore submits its chunks as `<id>#0`, `<id>#1`,
+    # ...; a document that does not fan out keeps `<id>` unchanged. Two documents in
+    # one call that resolve to the SAME id are rejected rather than silently
+    # overwriting each other.
+    #
     # + documents - The documents or chunks to index; only text content is supported
     # + return - An `ai:Error` if any document fails to submit or to index; `nil` otherwise
     public isolated function ingest(ai:Chunk[]|ai:Document[]|ai:Document documents) returns ai:Error? {
+        observe:KnowledgeBaseIngestSpan span = observe:createKnowledgeBaseIngestSpan(self.knowledgeBaseId);
+        span.addId(self.knowledgeBaseId);
+        ai:Error? result = self.ingestInternal(documents, span);
+        span.close(result);
+        return result;
+    }
+
+    private isolated function ingestInternal(ai:Chunk[]|ai:Document[]|ai:Document documents,
+            observe:KnowledgeBaseIngestSpan span) returns ai:Error? {
         (ai:Chunk|ai:Document)[] items = documents is ai:Chunk[]|ai:Document[] ? documents : [documents];
-        (ai:Chunk|ai:Document)[] chunked = check self.applyChunker(items);
+        KbIngestItem[] prepared = check applyKbChunker(self.chunker, items);
+        span.addInputChunks(prepared.'map(item => item.item).toJson());
 
         string[] documentIds = [];
         json[] wireDocuments = [];
-        foreach ai:Chunk|ai:Document item in chunked {
-            [json, string] [wireDoc, id] = check chunkToKnowledgeBaseDocument(item);
+        foreach KbIngestItem item in prepared {
+            [json, string] [wireDoc, id] =
+                check chunkToKnowledgeBaseDocument(VECTOR_KB_PROVIDER, item.item, item.chunkOrdinal);
             wireDocuments.push(wireDoc);
             documentIds.push(id);
         }
+        check assertDistinctDocumentIds(documentIds);
 
         foreach json[] batch in partitionJson(wireDocuments, KB_DOCUMENT_BATCH_SIZE) {
             map<json>[] _ = check ingestDocumentsBatch(self.controlTransport, self.knowledgeBaseId,
@@ -129,9 +149,29 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
     # + return - Matching chunks with similarity scores, or an `ai:Error`
     public isolated function retrieve(string query, int maxLimit = 10, ai:MetadataFilters? filters = ())
             returns ai:QueryMatch[]|ai:Error {
+        observe:KnowledgeBaseRetrieveSpan span = observe:createKnowledgeBaseRetrieveSpan(self.knowledgeBaseId);
+        span.addId(self.knowledgeBaseId);
+        span.addInputQuery(query);
+        span.addLimit(maxLimit);
+        if filters is ai:MetadataFilters {
+            span.addFilter(filters.toJson());
+        }
+        ai:QueryMatch[]|ai:Error matches = self.retrieveInternal(query, maxLimit, filters);
+        if matches is ai:Error {
+            span.close(matches);
+            return matches;
+        }
+        span.addOutput(matches.toJson());
+        span.close();
+        return matches;
+    }
+
+    private isolated function retrieveInternal(string query, int maxLimit, ai:MetadataFilters? filters)
+            returns ai:QueryMatch[]|ai:Error {
         if maxLimit != -1 && maxLimit <= 0 {
             return error ai:Error("'maxLimit' must be a positive integer, or -1 for no limit");
         }
+        check guardRetrieveQuery(query);
         json? userFilter = ();
         if filters is ai:MetadataFilters {
             userFilter = check metadataFiltersToRetrievalFilter(filters);
@@ -148,7 +188,7 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
                 self.knowledgeBaseId, query, userFilter, perCall, self.overrideSearchType,
                 self.rerankingConfiguration, nextToken);
             foreach json result in results {
-                matches.push(check retrievalResultToQueryMatch(result));
+                matches.push(check retrievalResultToQueryMatch(VECTOR_KB_PROVIDER, result));
                 if maxLimit != -1 && matches.length() >= maxLimit {
                     return matches.slice(0, maxLimit);
                 }
@@ -164,37 +204,44 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
     # Deletes documents matching `filters`.
     #
     # Bedrock has no metadata-based delete, so this enumerates every document on
-    # every data source and probes each one against `filters` through `Retrieve`.
-    # Costs one to two `Retrieve` calls per document — a maintenance operation, not
-    # something to put on a request path. Only `CUSTOM`/`S3` data sources support
+    # every data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO
+    # PAGED `Retrieve` enumerations — filtered by `filters`, then unfiltered — to
+    # classify every candidate as a confirmed match, genuinely excluded, or
+    # indeterminate. See `resolveDataSourceDeletes` (knowledgebase_common.bal) for the
+    # algorithm (A17) — the same implementation `BedrockManagedKnowledgeBase` uses,
+    # parameterised here by the self-managed reserved metadata key
+    # (`VECTOR_SOURCE_URI_METADATA_KEY`, NOT the managed `_source_uri`) and the
+    # `vectorSearchConfiguration` branch (`vectorDeleteRetrieve`).
+    #
+    # **Cost: two paged `Retrieve` enumerations PER DATA SOURCE** (a small, bounded
+    # number of round trips regardless of how many documents the data source holds —
+    # `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results each, at most), not one
+    # to two round trips per document. A maintenance operation, not something to put
+    # on a request path, but no longer scales with the knowledge base's size.
+    #
+    # `filters` must contain at least one leaf predicate: a filter set that
+    # constrains nothing matches every document, and "delete everything" has to be
+    # explicit rather than a degenerate case of an empty collection.
+    #
+    # Only `CUSTOM`/`S3` data sources support
     # deletion; documents on other data source types are named in the returned error
     # rather than silently skipped, and deletes that can be made still happen even
     # when some documents or data sources cannot be reached.
     #
-    # + filters - The metadata filters used to identify which documents to delete
-    # + return - An `ai:Error` naming indeterminate documents or undeletable data sources; `nil` otherwise
+    # + filters - The metadata filters used to identify which documents to delete;
+    #             must contain at least one leaf predicate
+    # + return - An `ai:Error` naming indeterminate documents, documents the service
+    #            did not confirm deleted, undeletable data sources, or data sources
+    #            refused outright (enumeration truncation, or a store that does not
+    #            appear to honour metadata filters); `nil` otherwise
     public isolated function deleteByFilter(ai:MetadataFilters filters) returns ai:Error? {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
-        // A filter set that constrains nothing would make every per-document probe
-        // "does this document exist" — every one hits, and the whole knowledge base
-        // is deleted. `ai:KnowledgeBase.deleteByFilter` takes filters as a required
-        // argument, so a caller assembling them from a collection that happened to be
-        // empty would get silent total deletion. Refuse instead: "delete everything"
-        // must be explicit, never a degenerate case.
-        //
-        // Both conditions are needed. A wholly empty group yields `()`; a group of
-        // nested EMPTY groups instead yields a non-nil `{"andAll": [null, null]}`
-        // (see `vectorFilterLeafCount`), which a nil check alone would let through.
-        if userFilter is () || vectorFilterLeafCount(filters) == 0 {
-            return error ai:Error(
-                "deleteByFilter requires at least one metadata filter — an 'ai:MetadataFilters' with no " +
-                "leaf predicates matches every document, which would delete the entire knowledge base. " +
-                "Pass a filter that selects the documents to remove.");
-        }
+        check guardDeleteFilter(userFilter, filters);
 
         map<json>[] dataSourceSummaries = check listDataSources(self.controlTransport, self.knowledgeBaseId);
         string[] undeletableDataSources = [];
         string[] indeterminate = [];
+        string[] refused = [];
         map<json[]> toDeleteByDataSource = {};
 
         foreach map<json> summary in dataSourceSummaries {
@@ -211,63 +258,30 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
 
             DeletableDocument[] candidates =
                 check listDeletableDocuments(self.controlTransport, self.knowledgeBaseId, dsId, effectiveType);
-            json[] matchesForThisSource = [];
-            foreach DeletableDocument candidate in candidates {
-                json probeFilter = withVectorSourceUriFilter(userFilter, candidate.sourceValue);
-                if check vectorRetrieveHasMatch(self.dataTransport, self.knowledgeBaseId, probeFilter,
-                        candidate.sourceValue) {
-                    matchesForThisSource.push(candidate.identifier);
-                    continue;
-                }
-                // Zero hits: re-probe with the id leaf alone to tell "genuinely
-                // excluded by the filter" from "the store's relevance floor hid it
-                // from the first probe too" (or ignored the pin entirely).
-                json reachabilityFilter = withVectorSourceUriFilter((), candidate.sourceValue);
-                if !check vectorRetrieveHasMatch(self.dataTransport, self.knowledgeBaseId, reachabilityFilter,
-                        candidate.sourceValue) {
-                    indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
-                }
-                // else: reachable and genuinely excluded by the filter — skip, sound.
+            if candidates.length() == 0 {
+                // Nothing to classify — skip the two enumeration round trips entirely.
+                continue;
             }
-            if matchesForThisSource.length() > 0 {
-                toDeleteByDataSource[dsId] = matchesForThisSource;
+            DataSourceDeleteResult result = check resolveDataSourceDeletes(self.dataTransport, self.knowledgeBaseId,
+                dsId, userFilter, candidates, VECTOR_SOURCE_URI_METADATA_KEY, vectorDeleteRetrieve);
+            string? refusalReason = result.refusalReason;
+            if refusalReason is string {
+                refused.push(refusalReason);
+                continue;
+            }
+            indeterminate.push(...result.indeterminate);
+            if result.toDelete.length() > 0 {
+                toDeleteByDataSource[dsId] = result.toDelete;
             }
         }
 
+        string[] notDeleted = [];
         foreach [string, json[]] [dsId, identifiers] in toDeleteByDataSource.entries() {
-            foreach json[] batch in partitionJson(identifiers, KB_DOCUMENT_BATCH_SIZE) {
-                map<json>[] _ = check deleteDocumentsBatch(self.controlTransport, self.knowledgeBaseId, dsId, batch);
-            }
+            notDeleted.push(...check deleteDocuments(self.controlTransport, self.knowledgeBaseId, dsId,
+                identifiers));
         }
 
-        if indeterminate.length() == 0 && undeletableDataSources.length() == 0 {
-            return;
-        }
-        string[] problems = [];
-        if indeterminate.length() > 0 {
-            problems.push(string `${indeterminate.length()} document(s) could not be confirmed to match or not ` +
-                string `match the filter (the vector store's relevance floor hid them from the probe): ` +
-                string:'join(", ", ...indeterminate));
-        }
-        if undeletableDataSources.length() > 0 {
-            problems.push(string `${undeletableDataSources.length()} data source(s) are not deletable through ` +
-                string `this API — only CUSTOM/S3 support 'DeleteKnowledgeBaseDocuments': ` +
-                string:'join(", ", ...undeletableDataSources));
-        }
-        return error ai:Error(
-            string `deleteByFilter deleted every confirmed match, but: ${string:'join("; ", ...problems)}`);
+        return deleteByFilterOutcome(indeterminate, notDeleted, undeletableDataSources, refused);
     }
 
-    private isolated function applyChunker((ai:Chunk|ai:Document)[] items) returns (ai:Chunk|ai:Document)[]|ai:Error {
-        ai:Chunker|ai:AUTO|ai:DISABLE chunker = self.chunker;
-        if chunker is ai:DISABLE {
-            return items;
-        }
-        (ai:Chunk|ai:Document)[] chunked = [];
-        foreach ai:Chunk|ai:Document item in items {
-            ai:Chunker chunkerToUse = chunker is ai:Chunker ? chunker : guessChunkerForKb(item);
-            chunked.push(...check chunkerToUse.chunk(item));
-        }
-        return chunked;
-    }
 }

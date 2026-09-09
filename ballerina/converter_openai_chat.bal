@@ -57,6 +57,14 @@ isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
         }
         body["tools"] = toolDefs;
     }
+    // `reasoning_effort` — TOP LEVEL on Chat Completions, unlike the Responses
+    // dialect, which nests the same value as `reasoning: {effort: ...}`. One vendor,
+    // two spellings; this is the half that made folding the knob into the passthrough
+    // look correct for as long as only this route was exercised.
+    string? reasoningEffort = params?.reasoningEffort;
+    if reasoningEffort is string {
+        body["reasoning_effort"] = reasoningEffort;
+    }
     // Vendor passthrough (e.g. Qwen `enable_thinking`) rides additionalModelRequestFields.
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
