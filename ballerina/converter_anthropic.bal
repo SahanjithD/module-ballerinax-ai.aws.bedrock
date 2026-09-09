@@ -79,6 +79,21 @@ isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] mess
     if effort is Effort {
         body["output_config"] = {"effort": effort};
     }
+    // The caller's passthrough, spliced at top level.
+    //
+    // These two encoders were the ONLY ones that dropped it — the other eight all
+    // splice it — which made `additionalModelRequestFields` silently inert on exactly
+    // the dialect it is most needed for: `top_k`, `anthropic_beta` and prompt-caching
+    // `cache_control` are Anthropic Messages body fields and have no other way in.
+    // Merged rather than assigned, so a key the module already set (`thinking`,
+    // `output_config`) is not clobbered by an unrelated passthrough entry, and a
+    // caller who deliberately overrides one still wins on the key they named.
+    map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
+    if extra is map<json> {
+        foreach [string, json] [k, v] in extra.entries() {
+            body[k] = v;
+        }
+    }
     return body;
 }
 

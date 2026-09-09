@@ -32,6 +32,11 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     // request schema entirely (unlike Chat Completions' `stop`), so there is nothing
     // to map onto. Accepting one silently would let the model run past the caller's
     // stop text: wrong output, and billed tokens they asked us not to spend.
+    //
+    // A CONFIGURED `stopSequences` is now refused earlier still, at construction, by
+    // `validateParamsForRoute` reading this dialect's `DialectSupport.stopSequences`.
+    // This stays for the PER-CALL `stop` argument, which no construction-time check
+    // can see.
     // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py
     string[]? configuredStops = params.stopSequences;
     if stop is string || (configuredStops is string[] && configuredStops.length() > 0) {
@@ -52,6 +57,16 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
             toolDefs.push({"type": "function", "name": t.name, "description": t.description, "parameters": toolParameters(t)});
         }
         body["tools"] = toolDefs;
+    }
+    // `reasoning: { effort: ... }` — NESTED. The Responses API has no top-level
+    // `reasoning_effort`; that is the Chat Completions spelling, and sending it here
+    // is a hard 400 (`Unknown parameter: 'reasoning_effort'`). Verified against
+    // openai-python: `ResponseCreateParams.reasoning` is a `Reasoning` object whose
+    // `effort` member carries the value, and no `reasoning_effort` member exists.
+    // https://github.com/openai/openai-python/blob/main/src/openai/types/shared_params/reasoning.py
+    string? reasoningEffort = params?.reasoningEffort;
+    if reasoningEffort is string {
+        body["reasoning"] = {"effort": reasoningEffort};
     }
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerina/crypto;
 import ballerina/http;
 import ballerina/lang.runtime;
 import ballerina/time;
@@ -34,22 +35,55 @@ import ballerinax/aws.auth;
 // document's metadata back any other way.
 const string SOURCE_URI_METADATA_KEY = "_source_uri";
 
-// `deleteByFilter`'s probe query text. Its CONTENT is irrelevant and this is not a
-// tuning knob: every probe ANDs the caller's filter with a `_source_uri` leaf
-// pinning ONE document, and pinning takes the result off the scoring path
-// entirely. Measured 2026-08-14 with a deliberately nonsensical query
-// ("zqxjkv quantum chromodynamics platypus 7823 borogoves"):
+// The public class names, threaded into every error message raised from a file both
+// classes share. Without this a `BedrockVectorKnowledgeBase` user gets errors naming
+// `BedrockManagedKnowledgeBase` — a class they are not using.
+const string MANAGED_KB_PROVIDER = "BedrockManagedKnowledgeBase";
+const string VECTOR_KB_PROVIDER = "BedrockVectorKnowledgeBase";
+
+// `deleteByFilter`'s enumeration query text. Its CONTENT is irrelevant and this is
+// not a tuning knob — it exists solely because `Retrieve` REJECTS an empty query:
+// `{"text": ""}`, `{"text": " "}` and an omitted `text` all return 400 "Text input is
+// required." (The service model's `KnowledgeBaseQueryTextString` declares `min: 0`,
+// which the live API contradicts.)
 //
-//   - single-chunk document, pinned  -> returned at score 1.0
-//   - 69-chunk document, pinned      -> top chunk at 0.88 (floor sits near 0.15)
-//   - a topically RELEVANT query on the same document scored LOWER (0.43),
-//     confirming the pinned score is not query similarity
-//
-// It exists solely because `Retrieve` REJECTS an empty query: `{"text": ""}`,
-// `{"text": " "}` and an omitted `text` all return 400 "Text input is required."
-// (The service model's `KnowledgeBaseQueryTextString` declares `min: 0`, which the
-// live API contradicts.)
+// A17: this constant PREVIOUSLY also carried the reasoning for a per-document PINNED
+// probe (`_source_uri == id` ANDed onto the query, taking the single pinned result
+// off the scoring path). That algorithm is gone — see `resolveDataSourceDeletes` —
+// replaced by two PAGED enumerations per data source that page through every result
+// via `nextToken` up to `KB_DELETE_ENUMERATION_MAX_PAGES`, so no individual result's
+// relevance score matters to correctness the way a single pinned probe's did.
 const string FILTER_PROBE_QUERY = "PLACE HOLDER";
+
+// A17: page cap for each of the two enumeration passes `resolveDataSourceDeletes`
+// runs per data source (100 pages x 100 results/page = 10 000 results). If EITHER
+// pass hits this cap, the result set may be INCOMPLETE — which breaks the "reachable
+// but unmatched -> excluded by the filter" conclusion (see
+// `KB_TRUST_UNFILTERED_ENUMERATION` below) — so a data source that hits the cap has
+// NOTHING deleted from it, reported rather than silently under- or over-deleting.
+const int KB_DELETE_ENUMERATION_MAX_PAGES = 100;
+
+// A17 — UNVERIFIED PREMISE, flip this in one line if it turns out false. The
+// "reachable under the unfiltered enumeration but not matched by the filtered one ->
+// genuinely excluded by the filter, skip" branch in `resolveDataSourceDeletes` rests
+// on the paged UNFILTERED `Retrieve` enumeration being EXHAUSTIVE — that it visits
+// every document `listDeletableDocuments` can see, the same way `List*` calls are
+// documented to be. This could NOT be established from the AWS docs: `Retrieve`'s
+// own API reference documents it as returning "the most relevant results", i.e. as a
+// relevance-bounded search, never as an exhaustive-enumeration primitive the way
+// `ListKnowledgeBaseDocuments` is documented — nothing states whether paging an
+// UNFILTERED `Retrieve` to its last `nextToken` visits every document or stops at
+// some internal relevance/result-count ceiling first. Needs a LIVE measurement: on a
+// fixture with more documents than fit in one page (>100 chunks), assert the
+// unfiltered-pass `reachable` set equals the `listDeletableDocuments` set.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Retrieve.html
+//
+// `true`: trust it — an unmatched-but-reachable candidate is skipped (sound, IF the
+// premise holds).
+// `false`: the safe fallback — every unmatched candidate (reachable or not) is
+// reported as indeterminate instead, and `deleteByFilter` degrades to deleting only
+// what the filtered pass matched.
+const boolean KB_TRUST_UNFILTERED_ENUMERATION = true;
 
 // `ListKnowledgeBases`/`ListDataSources`/`ListKnowledgeBaseDocuments` share one
 // `MaxResults` shape declaring `max: 1000` — but the LIVE `ListKnowledgeBaseDocuments`
@@ -66,21 +100,49 @@ const int KB_DOCUMENT_BATCH_SIZE = 10;
 // Poll interval for knowledge base / data source / document status.
 const decimal KB_POLL_INTERVAL_SECONDS = 3;
 
-// `CreateDataSource` is SYNCHRONOUS on the managed-KB path (measured against the
-// live API: 200 AVAILABLE in the response, unlike `CreateKnowledgeBase`'s 202
-// CREATING) — this bound is a defensive fallback only, used if a future data source
-// is not already AVAILABLE in the create response.
+// `CreateDataSource` returns 200 with an AVAILABLE status on the managed-KB path in
+// the common case, but it is NOT synchronous: AWS documents the status as
+// transitioning CREATING -> AVAILABLE, and a create can return 200 with a real
+// `dataSourceId` for a payload the service then rejects, surfacing only as
+// `status: FAILED` + `failureReasons` on a later `GetDataSource`. `pollDataSourceAvailable`
+// is therefore live code, and `validateResolvedDataSource` re-reads the status even
+// when the create response said AVAILABLE.
 const decimal DEFAULT_DATA_SOURCE_READY_TIMEOUT = 60;
 
 // Document statuses that are retrievable (usable in `retrieve()` results and safe
 // to enumerate for `deleteByFilter()`).
 final readonly & string[] KB_DOC_USABLE_STATUSES = ["INDEXED", "PARTIALLY_INDEXED", "METADATA_PARTIALLY_INDEXED"];
-// Terminal statuses that are NOT usable. `NOT_FOUND` is a tombstone for a deleted
-// document — it arrives as HTTP 200 with this status, never a 404 (confirmed
-// against the live API).
-final readonly & string[] KB_DOC_FAILED_STATUSES = ["FAILED", "METADATA_UPDATE_FAILED", "IGNORED", "NOT_FOUND"];
-// Transient statuses `ingest()` keeps polling through.
-final readonly & string[] KB_DOC_IN_FLIGHT_STATUSES = ["PENDING", "STARTING", "IN_PROGRESS"];
+// Terminal statuses that are NOT usable.
+//
+// `NOT_FOUND` is DELIBERATELY ABSENT. It is a tombstone only AFTER a delete; during
+// an ingest poll it means "accepted, not yet visible to the read path", and
+// `KB_DOC_POLL_TRANSIENT_STATUSES` below polls through it, so it can never reach the
+// outcome map this list classifies.
+final readonly & string[] KB_DOC_FAILED_STATUSES = ["FAILED", "METADATA_UPDATE_FAILED", "IGNORED"];
+// Statuses `ingest()`'s poll keeps WAITING through, rather than treating as terminal:
+// the three genuinely in-flight ones, plus `NOT_FOUND`.
+//
+// `NOT_FOUND` is the addition, and it is the difference between a correct ingest and
+// a non-deterministic false failure. `IngestKnowledgeBaseDocuments` is accepted with
+// a 202; a `GetKnowledgeBaseDocuments` issued immediately afterwards can answer
+// `NOT_FOUND` for a document that has been accepted but is not yet visible to the
+// read path. Treating that as terminal exits the poll on its first iteration and
+// reports "N of N document(s) failed to index (NOT_FOUND)" for documents that go on
+// to index successfully — read-after-write timing, nothing else.
+//
+// Polling through it costs nothing when the document really is absent: the deadline
+// still bounds the wait, and the timeout names the ids.
+final readonly & string[] KB_DOC_POLL_TRANSIENT_STATUSES = ["PENDING", "STARTING", "IN_PROGRESS", "NOT_FOUND"];
+// Per-document statuses in a `DeleteKnowledgeBaseDocuments` response that mean the
+// delete was accepted: the two delete-in-flight states, plus `NOT_FOUND` — already
+// gone is exactly the outcome the caller asked for.
+//
+// There is NO `DELETE_UNSUCCESSFUL` in `DocumentStatus` (that value belongs to the
+// knowledge base / data source status enums), so a failed delete surfaces as the
+// document simply keeping a non-delete status. Anything outside this set is
+// therefore reported rather than assumed successful.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_KnowledgeBaseDocumentDetail.html
+final readonly & string[] KB_DOC_DELETE_ACCEPTED_STATUSES = ["DELETING", "DELETE_IN_PROGRESS", "NOT_FOUND"];
 
 // Which bedrock-agent-runtime search branch `retrieve()` uses. Fixed to managed —
 // `vectorSearchConfiguration`'s knobs (`overrideSearchType`, `implicitFilterConfiguration`)
@@ -138,8 +200,8 @@ isolated function resolveKbSpine(string providerName, KnowledgeBaseCredentials c
         } else {
             dataSourceId = check resolveCustomDataSource(controlTransport, attach.knowledgeBaseId);
         }
-        ChunkingStrategy strategy =
-            check detectChunkingStrategy(controlTransport, attach.knowledgeBaseId, dataSourceId);
+        ChunkingStrategy strategy = check validateResolvedDataSource(controlTransport,
+            attach.knowledgeBaseId, dataSourceId);
         return {
             controlTransport,
             dataTransport,
@@ -174,33 +236,61 @@ type KbAttachResult record {|
 // `string` -> verify and attach (no writes). `KnowledgeBaseDefinition` -> find by
 // name; exactly one match attaches, no match creates (knowledge base + its `CUSTOM`
 // data source), more than one match is a construction error — `CreateKnowledgeBase`
-// has no upsert and names are not unique per account, so guessing would risk
-// creating a duplicate or attaching to the wrong one.
+// has no upsert, and while knowledge base NAMES ARE UNIQUE PER ACCOUNT (measured
+// live 2026-09-08: a sequential duplicate-name create is rejected with a 409), a
+// race window at AWS's own layer means more than one can still exist — see A10
+// below. Guessing which one was meant would risk attaching to the wrong one.
 isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string|KnowledgeBaseDefinition knowledgeBase)
         returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
-        check verifyKnowledgeBaseUsable(controlTransport, knowledgeBase);
+        map<json> _ = check verifyKnowledgeBaseUsable(controlTransport, knowledgeBase);
         return {knowledgeBaseId: knowledgeBase, createdDataSourceId: ()};
     }
     string[] candidates = check listKnowledgeBaseIdsByName(controlTransport, knowledgeBase.name);
     if candidates.length() == 1 {
-        check verifyKnowledgeBaseUsable(controlTransport, candidates[0]);
+        map<json> existing = check verifyKnowledgeBaseUsable(controlTransport, candidates[0]);
+        check assertDefinitionMatches(candidates[0], createKnowledgeBaseRequestBody(knowledgeBase), existing);
         return {knowledgeBaseId: candidates[0], createdDataSourceId: ()};
     }
     if candidates.length() > 1 {
-        return error ai:Error(
-            string `${candidates.length()} knowledge bases are named '${knowledgeBase.name}' ` +
-            string `(${string:'join(", ", ...candidates)}) — names are not unique per account, so which one ` +
-            "was meant is ambiguous. Pass the knowledge base id directly instead of a definition.");
+        return error ai:Error(nameAmbiguityMessage(knowledgeBase.name, candidates));
     }
     // No match: create the knowledge base, wait for it to leave CREATING, then
     // create its CUSTOM data source and wait for that too — two asynchronously
     // provisioned resources, not one, is the real cost of this path.
-    string kbId = check createKnowledgeBase(controlTransport, knowledgeBase);
+    //
+    // A10 has TWO distinct race windows here, both from the same read-then-write
+    // (list-by-name, see nothing, create):
+    //   - SEQUENTIAL: `createKnowledgeBaseRecoveringFromConflict` recovers from a 409
+    //     by attaching to the one existing match (§2a) — this branch never creates a
+    //     duplicate.
+    //   - GENUINELY CONCURRENT: two `init()` calls already in flight, sharing the
+    //     SAME deterministic `clientToken`, were measured BOTH accepted live
+    //     2026-09-08 — the token collapses retries, not requests already in flight.
+    //     Undetectable until after this call's own create is ACTIVE, so it is
+    //     checked below, after `pollKnowledgeBaseActive` (§2b).
+    KbCreateOutcome created = check createKnowledgeBaseRecoveringFromConflict(controlTransport, knowledgeBase);
+    if created.recovered {
+        return {knowledgeBaseId: created.knowledgeBaseId, createdDataSourceId: ()};
+    }
+    string kbId = created.knowledgeBaseId;
     check pollKnowledgeBaseActive(controlTransport, kbId, knowledgeBase.readyTimeout);
     string dsId = check createCustomDataSource(controlTransport, kbId, knowledgeBase.dataSource);
+
+    // §2b: now that this call's own create is ACTIVE, re-list by name. AWS's
+    // idempotency token cannot serialize two requests already in flight, so a
+    // genuinely concurrent race can still have produced more than one knowledge base
+    // under this name even though this call's own create looked clean throughout.
+    check guardAgainstConcurrentDuplicate(controlTransport, knowledgeBase.name, kbId);
     return {knowledgeBaseId: kbId, createdDataSourceId: dsId};
 }
+
+// The message for "more than one knowledge base already carries this name" —
+// shared by the ordinary find-by-name path above and the §2a conflict-recovery path.
+isolated function nameAmbiguityMessage(string name, string[] candidates) returns string
+    => string `${candidates.length()} knowledge bases are named '${name}' ` +
+        string `(${string:'join(", ", ...candidates)}) — construction cannot tell which one was meant. ` +
+        "Pass the knowledge base id directly instead of a definition.";
 
 // Both that the knowledge base is ACTIVE and that it is actually a MANAGED one.
 //
@@ -214,7 +304,10 @@ isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string
 // none of that was measured and the pinned probe may score normally — which would
 // put `deleteByFilter` back to silently under-deleting. Refuse at construction
 // rather than half-work at runtime.
-isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId) returns ai:Error? {
+// Returns the fetched knowledge base so the attach-by-definition comparison can
+// reuse it rather than issuing a second identical `GetKnowledgeBase`.
+isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId)
+        returns map<json>|ai:Error {
     map<json> kb = check getKnowledgeBase(controlTransport, kbId);
     string status = stringField(kb, "status") ?: "";
     if status != "ACTIVE" {
@@ -234,6 +327,7 @@ isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, s
             "search branch, so retrieve() and deleteByFilter() are not valid against it. Use " +
             "BedrockVectorKnowledgeBase for a 'VECTOR' knowledge base.");
     }
+    return kb;
 }
 
 isolated function listKnowledgeBaseIdsByName(BedrockTransport controlTransport, string name) returns string[]|ai:Error {
@@ -342,20 +436,109 @@ isolated function createKnowledgeBaseRequestBody(KnowledgeBaseDefinition def) re
     return body;
 }
 
-isolated function createKnowledgeBase(BedrockTransport controlTransport, KnowledgeBaseDefinition def)
-        returns string|ai:Error {
+# Outcome of `createKnowledgeBaseRecoveringFromConflict` — distinguishes an ordinary
+# create from an A10 §2a recovery, so the caller knows whether a `CUSTOM` data source
+# still needs to be created (a recovery attached to something that already has one).
+#
+# + knowledgeBaseId - The created id, or, on recovery, the id of the existing match
+# + recovered - `true` when this is a §2a 409-recovery attach rather than a fresh create
+type KbCreateOutcome record {|
+    string knowledgeBaseId;
+    boolean recovered;
+|};
+
+// A10 §2a: `CreateKnowledgeBase`'s deterministic `clientToken` (see
+// `idempotencyToken`) collapses a RETRIED identical create, but a SEQUENTIAL
+// duplicate — a different `init()` call that already created a knowledge base under
+// this name — is answered with a 409 `ConflictException`. AWS enforces name
+// uniqueness (measured live 2026-09-08: "KnowledgeBase with name ... already
+// exists."), so this is fully recoverable: re-resolve the name exactly as the
+// ordinary attach-by-name path does (`verifyKnowledgeBaseUsable` +
+// `assertDefinitionMatches`), so A9's definition check is never bypassed by this
+// recovery path. Zero or more than one match surfaces the ORIGINAL 409 unchanged —
+// neither case is resolvable from here (no match: the 409 raced against a delete
+// that has not been observed; more than one: a genuinely concurrent creation, §2b's
+// territory instead, which this function cannot distinguish from here).
+isolated function createKnowledgeBaseRecoveringFromConflict(BedrockTransport controlTransport,
+        KnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
     map<json> body = createKnowledgeBaseRequestBody(def);
-    TransportResponse response = check controlTransport.executeRequest("PUT", "/knowledgebases/", body);
+    body["clientToken"] = idempotencyToken(body);
+    TransportResponse|ConflictError|ai:Error response =
+        controlTransport.executeRequestDetectingConflict("PUT", "/knowledgebases/", body);
+    if response is ConflictError {
+        string[] candidates = check listKnowledgeBaseIdsByName(controlTransport, def.name);
+        if candidates.length() == 1 {
+            map<json> existing = check verifyKnowledgeBaseUsable(controlTransport, candidates[0]);
+            check assertDefinitionMatches(candidates[0], createKnowledgeBaseRequestBody(def), existing);
+            return {knowledgeBaseId: candidates[0], recovered: true};
+        }
+        // The original 409's message text, unchanged — this module cannot resolve
+        // zero or an ambiguous number of matches on its own.
+        return error ai:Error(response.message());
+    }
+    if response is ai:Error {
+        return response;
+    }
     map<json> kb = asMap(asMap(response.body)["knowledgeBase"] ?: {});
     string? id = stringField(kb, "knowledgeBaseId");
     if id is () {
         return error ai:Error("CreateKnowledgeBase response carried no 'knowledgeBaseId'");
     }
-    return id;
+    return {knowledgeBaseId: id, recovered: false};
 }
 
-// ~83s measured for a knowledge base to leave CREATING — far too long to block
-// silently, hence the caller-controlled `readyTimeout`.
+// A10 §2b: the reconcile-and-report check run once THIS call's own create is ACTIVE.
+// AWS's idempotency token cannot serialize two requests already in flight sharing it
+// — measured live 2026-09-08, two genuinely concurrent `init()` calls both succeeded
+// — so more than one knowledge base can still carry this name even though this
+// call's own create looked completely clean. Deterministic winner selection (the
+// lexicographically smallest id) means every racer that hits this check computes the
+// SAME winner from the SAME candidate set without coordinating, so the account
+// converges on one agreed survivor. NEVER deletes: this module has no HTTP DELETE
+// verb, and issuing one from a constructor that may lack `bedrock:DeleteKnowledgeBase`
+// would be worse than the duplicate — the caller runs the named cleanup command
+// manually. Reports unconditionally (regardless of whether THIS call's own creation
+// turned out to be the winner or an orphan): the alternative — staying silent
+// whenever this call happened to win — would leave that caller's account and quota
+// polluted with an orphan it is never told about.
+isolated function guardAgainstConcurrentDuplicate(BedrockTransport controlTransport, string name, string thisCallsKbId)
+        returns ai:Error? {
+    string[] matches = check listKnowledgeBaseIdsByName(controlTransport, name);
+    if matches.length() <= 1 {
+        return;
+    }
+    return error ai:Error(concurrentDuplicateMessage(name, matches, thisCallsKbId));
+}
+
+// Pure so the winner/orphan computation is table-testable without AWS.
+isolated function concurrentDuplicateMessage(string name, string[] matches, string thisCallsKbId) returns string {
+    string[] sorted = matches.sort();
+    string winner = sorted[0];
+    string[] cleanupCommands = [];
+    foreach string id in sorted {
+        if id == winner {
+            continue;
+        }
+        cleanupCommands.push(string `aws bedrock-agent delete-knowledge-base --knowledge-base-id ${id}`);
+    }
+    string mine = thisCallsKbId == winner
+        ? " this call's own create is the winner, but the account is still polluted by the other(s)."
+        : " this call's own create is among the orphans.";
+    return string `A concurrent 'init()' race produced ${matches.length()} knowledge bases named '${name}' ` +
+        string `(${string:'join(", ", ...sorted)}).${mine} AWS's create idempotency token collapses ` +
+        "retries of an identical request, but not two requests already in flight concurrently, so this " +
+        string `module can only detect the race after the fact, never prevent it. Treat '${winner}' ` +
+        "(the lexicographically smallest id) as the surviving knowledge base — every racer computes the " +
+        "same winner, so the account converges on it. The other(s) were NOT deleted (this module never " +
+        string `issues 'DeleteKnowledgeBase'); clean them up manually: ${string:'join("; ", ...cleanupCommands)}`;
+}
+
+// ~83s was measured for a VECTOR knowledge base to leave CREATING — a customer-owned
+// store has to be provisioned there. That figure does NOT hold for a MANAGED
+// knowledge base (Bedrock's own store): measured 2026-09-07, `CreateKnowledgeBase`
+// reached ACTIVE in under 5s (`readyTimeout: 5` did not fire at all; `readyTimeout:
+// 0.001` returned in 4.3s still CREATING). Either way this can take too long to block
+// silently, hence the caller-controlled `readyTimeout` rather than a fixed wait.
 isolated function pollKnowledgeBaseActive(BedrockTransport controlTransport, string kbId, decimal timeoutSeconds)
         returns ai:Error? {
     time:Utc deadline = time:utcAddSeconds(time:utcNow(), timeoutSeconds);
@@ -441,6 +624,11 @@ isolated function createDataSourceRequestBody(DataSourceDefinition def) returns 
 isolated function createCustomDataSource(BedrockTransport controlTransport, string kbId, DataSourceDefinition def)
         returns string|ai:Error {
     map<json> body = check createDataSourceRequestBody(def);
+    // Scoped by knowledge base id: the KB-level token collapses two racing creates
+    // onto ONE knowledge base, but both racers then go on to create its data source.
+    // Without a token here that leaves two CUSTOM data sources on one knowledge base,
+    // which makes `resolveCustomDataSource` permanently ambiguous.
+    body["clientToken"] = idempotencyToken({kbId, dataSource: body});
     string path = string `/knowledgebases/${kbId}/datasources/`;
     TransportResponse response = check controlTransport.executeRequest("PUT", path, body);
     map<json> dataSource = asMap(asMap(response.body)["dataSource"] ?: {});
@@ -448,11 +636,16 @@ isolated function createCustomDataSource(BedrockTransport controlTransport, stri
     if id is () {
         return error ai:Error("CreateDataSource response carried no 'dataSourceId'");
     }
-    // Measured SYNCHRONOUS on the managed-KB path (200 AVAILABLE in the very response
-    // above, across four probes) — but AWS documents it as ASYNCHRONOUS, "the data
-    // source status transitions from CREATING to AVAILABLE". The poll below is
-    // therefore not dead code: it is the documented behaviour, just not the observed
-    // one.
+    // Measured SYNCHRONOUS in the common case on the managed-KB path (200 AVAILABLE
+    // in the very response above, across four probes) — but AWS documents it as
+    // ASYNCHRONOUS, "the data source status transitions from CREATING to AVAILABLE",
+    // and that holds only for the CUSTOM connector this module creates. On a MANAGED
+    // knowledge base `CreateDataSource` is genuinely asynchronous: it can return this
+    // same 200 with a real `dataSourceId` for a payload the service goes on to
+    // reject, surfacing only as `status: FAILED` + `failureReasons` on a LATER
+    // `GetDataSource`. The poll below is THEREFORE LIVE CODE, not dead: it is what
+    // catches that failure at construction instead of at the first `ingest()`. Do
+    // not remove it because the create response usually already says AVAILABLE.
     string status = stringField(dataSource, "status") ?: "";
     if status != "AVAILABLE" {
         check pollDataSourceAvailable(controlTransport, kbId, id, DEFAULT_DATA_SOURCE_READY_TIMEOUT);
@@ -579,9 +772,12 @@ isolated function effectiveDataSourceType(map<json> dataSource) returns string {
 // Chunking-strategy detection.
 // ============================================================================
 
-// Reads the RESOLVED data source's actual `chunkingStrategy` back — never assumed —
-// so `ManagedKnowledgeBaseConfig.chunker`'s default can be picked safely: `ai:DISABLE`
-// when Bedrock chunks server-side, `ai:AUTO` when the strategy is `NONE`.
+// The single `GetDataSource` every construction path already had to make, now doing
+// three jobs at once: it fails construction on a data source that is FAILED or is not
+// a CUSTOM connector, and reads the RESOLVED data source's actual `chunkingStrategy`
+// back — never assumed — so `ManagedKnowledgeBaseConfig.chunker`'s default can be
+// picked safely: `ai:DISABLE` when Bedrock chunks server-side, `ai:AUTO` when the
+// strategy is `NONE`. All three fail before any ingest or retrieve I/O.
 //
 // UNRESOLVED (see the `ChunkingStrategy` doc comment for the full write-up): a
 // managed knowledge base may never report `chunkingConfiguration` at all. Measured
@@ -594,9 +790,34 @@ isolated function effectiveDataSourceType(map<json> dataSource) returns string {
 // back. If it never does, the `NONE` branch below is unreachable on data sources
 // this module did not create, and such callers must pass an `ai:Chunker`
 // explicitly. The fallback below is chosen to fail in the safe direction either way.
-isolated function detectChunkingStrategy(BedrockTransport controlTransport, string kbId, string dsId)
+isolated function validateResolvedDataSource(BedrockTransport controlTransport, string kbId, string dsId)
         returns ChunkingStrategy|ai:Error {
     map<json> dataSource = check getDataSource(controlTransport, kbId, dsId);
+
+    // Re-read the status even when a create response already said AVAILABLE.
+    // `CreateDataSource` can answer 200 with a real `dataSourceId` for a payload the
+    // service then rejects; the rejection surfaces only here, as FAILED plus
+    // `failureReasons`. Discovering it at construction beats discovering it as an
+    // unexplained ingest failure later.
+    string status = stringField(dataSource, "status") ?: "";
+    if status == "FAILED" || status == "DELETE_UNSUCCESSFUL" {
+        return error ai:Error(
+            string `Data source '${dsId}' on knowledge base '${kbId}' is not usable: status is ` +
+            string `'${status}'. ${failureReasonsOf(dataSource)}`);
+    }
+
+    // An EXPLICIT `dataSourceId` never went through `resolveCustomDataSource`, so
+    // this is the only place its type is checked. `ingest()` submits documents with
+    // `dataSourceType: "CUSTOM"`, so a data source that is anything else fails at the
+    // first `ingest()` with an error that points nowhere near the misconfiguration.
+    string effectiveType = effectiveDataSourceType(dataSource);
+    if effectiveType != "CUSTOM" {
+        return error ai:Error(
+            string `Data source '${dsId}' on knowledge base '${kbId}' is of type '${effectiveType}', but ` +
+            "'ingest()'/'deleteByFilter()' write through the CUSTOM (direct-ingestion) connector only. " +
+            "Pass the id of a CUSTOM data source, or omit 'dataSourceId' to have it resolved.");
+    }
+
     map<json> vectorIngestion = asMap(dataSource["vectorIngestionConfiguration"] ?: {});
     map<json> chunking = asMap(vectorIngestion["chunkingConfiguration"] ?: {});
     // Absent 'chunkingConfiguration' means Bedrock applies its own default, which is
@@ -649,6 +870,35 @@ isolated function deleteDocumentsBatch(BedrockTransport controlTransport, string
     return documentDetailsOf(response.body);
 }
 
+// `DeleteKnowledgeBaseDocuments` answers with a per-document status, and discarding
+// it makes a partial delete read as a clean success. Returns the documents the
+// service did NOT confirm as deleted, described for an error message; the caller
+// decides how to report them.
+isolated function deleteDocuments(BedrockTransport controlTransport, string kbId, string dsId,
+        json[] identifiers) returns string[]|ai:Error {
+    string[] notDeleted = [];
+    foreach json[] batch in partitionJson(identifiers, KB_DOCUMENT_BATCH_SIZE) {
+        map<json>[] details = check deleteDocumentsBatch(controlTransport, kbId, dsId, batch);
+        map<string> statusBySource = {};
+        foreach map<json> detail in details {
+            string? sourceValue = documentSourceValueOf(detail);
+            if sourceValue is string {
+                statusBySource[sourceValue] = stringField(detail, "status") ?: "";
+            }
+        }
+        foreach json identifier in batch {
+            string sourceValue = sourceValueOfIdentifier(identifier) ?: identifier.toJsonString();
+            string? status = statusBySource[sourceValue];
+            if status is () {
+                notDeleted.push(string `${sourceValue} (no status returned)`);
+            } else if KB_DOC_DELETE_ACCEPTED_STATUSES.indexOf(status) is () {
+                notDeleted.push(string `${sourceValue} (${status})`);
+            }
+        }
+    }
+    return notDeleted;
+}
+
 isolated function listKnowledgeBaseDocuments(BedrockTransport controlTransport, string kbId, string dsId)
         returns map<json>[]|ai:Error {
     map<json>[] details = [];
@@ -688,6 +938,18 @@ isolated function documentIdOf(map<json> detail) returns string? {
     return stringField(asMap(identifier["custom"] ?: {}), "id");
 }
 
+// The value a document is keyed by across both data source types this module can
+// delete from — `custom.id` or `s3.uri`, exactly as `listDeletableDocuments` builds
+// `DeletableDocument.sourceValue`.
+isolated function documentSourceValueOf(map<json> detail) returns string?
+    => sourceValueOfIdentifier(detail["identifier"] ?: {});
+
+isolated function sourceValueOfIdentifier(json identifier) returns string? {
+    map<json> m = asMap(identifier);
+    string? id = stringField(asMap(m["custom"] ?: {}), "id");
+    return id is string ? id : stringField(asMap(m["s3"] ?: {}), "uri");
+}
+
 # The final (terminal) outcome of one submitted document: its last-seen status and,
 # on failure, the reason Bedrock reported.
 #
@@ -698,10 +960,24 @@ type DocumentOutcome record {|
     string? statusReason;
 |};
 
-// Polls `GetKnowledgeBaseDocuments` until every id in `ids` leaves
-// `KB_DOC_IN_FLIGHT_STATUSES`, or `timeoutSeconds` elapses. ~14s was measured for a
-// single small document — ingestion is inherently slow, hence the caller-controlled
-// timeout rather than a fixed short one.
+// Polls `GetKnowledgeBaseDocuments` until every id in `ids` reaches a terminal
+// status, or `timeoutSeconds` elapses. Indexing latency VARIES BY AN ORDER OF
+// MAGNITUDE — measured 2026-09-07, a single small document reached a terminal status
+// in under 1s on one attempt and was still PENDING after 5.6s on another. Do not tune
+// against a fixed figure; hence the caller-controlled timeout rather than a fixed
+// short one.
+//
+// EVERY submitted id is accounted for, and the loop is driven off the SUBMITTED ids
+// rather than off whatever the response happened to contain. Two distinct ways a
+// document can go unconfirmed, both of which previously read as success:
+//
+//   - the response reports `NOT_FOUND` (accepted but not yet visible — see
+//     `KB_DOC_POLL_TRANSIENT_STATUSES`), and
+//   - the response OMITS the id entirely, in which case iterating the response's own
+//     entries silently drops it: it is never re-queued and no outcome is recorded, so
+//     the loop exits and `ingest()` reports success for a document it never saw.
+//
+// Both stay pending until they resolve or the deadline names them.
 isolated function pollDocumentsTerminal(BedrockTransport controlTransport, string kbId, string dsId,
         string[] ids, decimal timeoutSeconds) returns map<DocumentOutcome>|ai:Error {
     map<DocumentOutcome> outcomes = {};
@@ -711,17 +987,22 @@ isolated function pollDocumentsTerminal(BedrockTransport controlTransport, strin
         string[] stillPending = [];
         foreach string[] batch in partitionStrings(pending, KB_DOCUMENT_BATCH_SIZE) {
             map<json>[] details = check getDocumentsBatch(controlTransport, kbId, dsId, batch);
+            map<string> statusById = {};
+            map<string?> reasonById = {};
             foreach map<json> detail in details {
                 string? id = documentIdOf(detail);
-                if id is () {
+                if id is string {
+                    statusById[id] = stringField(detail, "status") ?: "";
+                    reasonById[id] = stringField(detail, "statusReason");
+                }
+            }
+            foreach string id in batch {
+                string? status = statusById[id];
+                if status is () || KB_DOC_POLL_TRANSIENT_STATUSES.indexOf(status) is int {
+                    stillPending.push(id);
                     continue;
                 }
-                string status = stringField(detail, "status") ?: "";
-                if KB_DOC_IN_FLIGHT_STATUSES.indexOf(status) is int {
-                    stillPending.push(id);
-                } else {
-                    outcomes[id] = {status, statusReason: stringField(detail, "statusReason")};
-                }
+                outcomes[id] = {status, statusReason: reasonById[id] ?: ()};
             }
         }
         pending = stillPending;
@@ -731,12 +1012,40 @@ isolated function pollDocumentsTerminal(BedrockTransport controlTransport, strin
         if time:utcDiffSeconds(deadline, time:utcNow()) <= 0d {
             return error ai:Error(
                 string `Timed out after ${timeoutSeconds}s waiting for ${pending.length()} document(s) to ` +
-                string `finish indexing (still in progress: ${string:'join(", ", ...pending)}). Increase ` +
-                "'ingestTimeout' — indexing took ~47s for a single 97KB document in testing.");
+                string `reach a terminal status. Still unconfirmed (indexing, or accepted but not yet ` +
+                string `visible to 'GetKnowledgeBaseDocuments'): ${string:'join(", ", ...pending)}. Increase ` +
+                "'ingestTimeout' — indexing latency varies by an order of magnitude; do not tune against " +
+                "a fixed figure.");
         }
         runtime:sleep(KB_POLL_INTERVAL_SECONDS);
     }
     return outcomes;
+}
+
+// Two documents in one `ingest()` call that resolve to the SAME
+// `customDocumentIdentifier.id` are not two documents to Bedrock: it upserts by that
+// id, so the second silently replaces the first and `ingest()` reports success for
+// content that is no longer there. Client-side chunking no longer produces this (see
+// `documentIdFor`), but two caller-supplied documents sharing an `ai:Metadata.id`
+// still can.
+isolated function assertDistinctDocumentIds(string[] documentIds) returns ai:Error? {
+    map<int> seen = {};
+    string[] duplicates = [];
+    foreach string id in documentIds {
+        int count = (seen[id] ?: 0) + 1;
+        seen[id] = count;
+        if count == 2 {
+            duplicates.push(id);
+        }
+    }
+    if duplicates.length() == 0 {
+        return;
+    }
+    return error ai:Error(
+        string `${duplicates.length()} document id(s) appear more than once in this ingest call ` +
+        string `(${string:'join(", ", ...duplicates)}). Bedrock upserts by 'customDocumentIdentifier.id', ` +
+        "so the later document would silently overwrite the earlier one. Give each document a distinct " +
+        "'ai:Metadata.id', or ingest them in separate calls if the overwrite is intended.");
 }
 
 # One enumerated, retrievable document that `deleteByFilter` can potentially delete.
@@ -791,7 +1100,10 @@ isolated function callRetrieve(BedrockTransport dataTransport, string kbId, stri
         int numberOfResults, RerankingModelType? reranking, string? nextToken)
         returns [json[], string?]|ai:Error {
     map<json> managedSearch = {numberOfResults};
-    if filter is json {
+    // `filter is json` would NOT reject nil — `()` is a member of `json` — and would
+    // put `"filter": null` into `managedSearchConfiguration` on every unfiltered
+    // retrieve. AWS tolerates it today, but it is not the documented request shape.
+    if filter !is () {
         managedSearch["filter"] = filter;
     }
     if reranking is RerankingModelType {
@@ -812,21 +1124,402 @@ isolated function callRetrieve(BedrockTransport dataTransport, string kbId, stri
     return [results, stringField(respBody, "nextToken")];
 }
 
-// The `deleteByFilter` probe: does at least one result come back for the pinned
-// document under `filter`? `numberOfResults: 1` is enough, and is enough even for a
-// document that split into dozens of chunks — every chunk of a document inherits
-// that document's `metadata` (it is attached per-DOCUMENT on
-// `IngestKnowledgeBaseDocuments`, and there is no per-chunk metadata input), so a
-// filter matches ALL of a document's chunks or NONE of them. One surviving chunk is
-// therefore complete evidence about the whole document, and nothing a second chunk
-// could add would change the answer.
+// The source-value identity of a retrieval result, or `()` when it carries none.
+// Checks the injected source-uri metadata attribute first — spelled differently per
+// knowledge base type, hence the `sourceUriKey` parameter — then the two DOCUMENTED,
+// contractual identity members: `location.customDocumentLocation.id` and
+// `location.s3Location.uri` are declared in the service model, unlike the metadata
+// key, so identity does not rest on the undocumented attribute alone. These mirror
+// exactly how `listDeletableDocuments` builds `DeletableDocument.sourceValue`, which
+// is what this is compared against everywhere it is used (A17,
+// `resolveDataSourceDeletes`).
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_KnowledgeBaseRetrievalResult.html
+isolated function retrievalResultSourceValue(json result, string sourceUriKey) returns string? {
+    map<json> resultMap = asMap(result);
+    string? viaMetadataKey = stringField(asMap(resultMap["metadata"] ?: {}), sourceUriKey);
+    if viaMetadataKey is string {
+        return viaMetadataKey;
+    }
+    map<json> location = asMap(resultMap["location"] ?: {});
+    string? viaCustomLocation = stringField(asMap(location["customDocumentLocation"] ?: {}), "id");
+    if viaCustomLocation is string {
+        return viaCustomLocation;
+    }
+    return stringField(asMap(location["s3Location"] ?: {}), "uri");
+    // `KnowledgeBaseRetrievalResult.documentId` is deliberately NOT accepted as proof
+    // of identity. AWS documents it as "the unique identifier of the document. Use
+    // with GetDocumentContent" — a service-side id with no documented equality to
+    // `customDocumentIdentifier.id` or to an S3 URI. Treating it as equal would admit
+    // an identity AWS never promised, and a false positive here DELETES a document
+    // that may not match the filter, which is the exact direction this check exists
+    // to prevent. The two `location` members above already cover both data source
+    // types that `DocumentIdentifier` can even express.
+}
+
+// Does this retrieval result belong to `documentId`? A thin wrapper over
+// `retrievalResultSourceValue` — kept as its own function (rather than inlined at
+// every call site) because it is exercised directly by tests pinned to this exact
+// signature.
+isolated function retrievalResultIdentifies(json result, string documentId, string sourceUriKey) returns boolean
+    => retrievalResultSourceValue(result, sourceUriKey) == documentId;
+
+// ============================================================================
+// A17 — deleteByFilter's two-enumeration algorithm, shared by both classes.
 //
-// Reranking is deliberately NOT applied: it imposes its own relevance cut on top of
-// the search, which could drop the single result this existence check depends on.
-isolated function retrieveHasMatch(BedrockTransport dataTransport, string kbId, json filter)
-        returns boolean|ai:Error {
-    [json[], string?] [results, _] = check callRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, 1, (), ());
+// Replaces the old per-document PINNED probe (`userFilter AND sourceUriKey == id`,
+// one to two `Retrieve` calls PER CANDIDATE DOCUMENT). On a self-managed knowledge
+// base whose data source is CUSTOM, Bedrock does not emit the source-uri metadata
+// attribute at all, so every pinned probe returned zero results and nothing was ever
+// deleted — the pin was the join key between "an id from `ListKnowledgeBaseDocuments`"
+// and "a document in the vector index", and CUSTOM sources on VECTOR knowledge bases
+// have no attribute that plays that role.
+//
+// The fix changes the SHAPE of the match rather than hunting for a substitute key:
+// two PAGED enumerations per data source (filtered and unfiltered), each a small,
+// bounded number of `Retrieve` round trips regardless of how many documents the
+// knowledge base holds, replacing 2*N round trips for N documents. See
+// `resolveDataSourceDeletes` for the classification this produces.
+// ============================================================================
+
+// The function shape both classes' retrieve call sites share once reduced to what
+// the enumeration needs: no reranking (it imposes its own relevance cut, which is
+// exactly the kind of cutoff the reachability pass exists to see past), and no
+// `overrideSearchType`/`rerankingModelType` shortcuts either — see
+// `managedDeleteRetrieve` (below) and `vectorDeleteRetrieve`
+// (knowledgebase_vector_common.bal), the two values ever passed for this parameter.
+type DeleteRetrieveCaller isolated function (BedrockTransport dataTransport, string kbId, json? filter,
+        int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error;
+
+// The MANAGED adapter for `DeleteRetrieveCaller` — the vector counterpart,
+// `vectorDeleteRetrieve`, lives in knowledgebase_vector_common.bal next to
+// `callVectorRetrieve`.
+isolated function managedDeleteRetrieve(BedrockTransport dataTransport, string kbId, json? filter,
+        int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error
+    => callRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, numberOfResults, (), nextToken);
+
+# One paged `Retrieve` enumeration's result: every document identity seen, and
+# whether `KB_DELETE_ENUMERATION_MAX_PAGES` was hit before pagination finished
+# naturally (`nextToken` came back `()`).
+#
+# + identities - Every `retrievalResultSourceValue` seen across every page, as a set
+# + truncated - `true` when the page cap was hit — the set above may be INCOMPLETE
+type DeleteEnumeration record {|
+    map<()> identities;
+    boolean truncated;
+|};
+
+// Pages a `Retrieve` call (filtered or unfiltered, per `filter`) to exhaustion or
+// `KB_DELETE_ENUMERATION_MAX_PAGES`, collecting every result's source-value identity.
+// `numberOfResults` is `KB_MAX_RESULTS_PER_CALL` (100) per page — Bedrock's own
+// maximum — to minimise the number of round trips.
+isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, string kbId, json? filter,
+        string sourceUriKey, DeleteRetrieveCaller retrieveCaller) returns DeleteEnumeration|ai:Error {
+    map<()> identities = {};
+    string? nextToken = ();
+    int page = 0;
+    while true {
+        page += 1;
+        if page > KB_DELETE_ENUMERATION_MAX_PAGES {
+            return {identities, truncated: true};
+        }
+        [json[], string?] [results, respNextToken] =
+            check retrieveCaller(dataTransport, kbId, filter, KB_MAX_RESULTS_PER_CALL, nextToken);
+        foreach json result in results {
+            string? sourceValue = retrievalResultSourceValue(result, sourceUriKey);
+            if sourceValue is string {
+                identities[sourceValue] = ();
+            }
+        }
+        nextToken = respNextToken;
+        if nextToken is () {
+            break;
+        }
+    }
+    return {identities, truncated: false};
+}
+
+// `true` when `a` and `b` hold exactly the same set of keys. Pure, so
+// "does the store appear to honour metadata filters" (A17) is table-testable.
+isolated function mapKeySetEquals(map<()> a, map<()> b) returns boolean {
+    if a.length() != b.length() {
+        return false;
+    }
+    foreach string k in a.keys() {
+        if !b.hasKey(k) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A17: the NEGATIVE CONTROL for the "does this store honour metadata filters" check.
+//
+// `matched == reachable` has TWO causes, and refusing on it alone would punish the
+// innocent one: (a) the store ignored the filter, so the filtered pass degenerated
+// into the unfiltered one, and (b) the filter is honoured and legitimately selects
+// EVERY reachable document — `deleteByFilter({tenant == "acme"})` on a knowledge base
+// where every document is in fact `acme`, which is an ordinary single-tenant cleanup,
+// not an anomaly. Telling them apart needs one more observation, and this sentinel
+// filter provides it: a value no document can carry, on the source-uri key.
+//
+//   store honours filters -> zero results  -> case (b), the caller's filter is real
+//   store ignores filters -> some results  -> case (a), refuse
+//
+// This holds for a CUSTOM data source too, where Bedrock emits no source-uri
+// attribute at all (A17's root cause): a filter on an absent key matches nothing when
+// filters are applied, and is discarded along with every other filter when they are
+// not. One extra `Retrieve` for one result, run ONLY on the ambiguous path.
+const string FILTER_CONTROL_SENTINEL = "ballerina-ai-aws-bedrock-no-such-document-cf1d7a2e";
+
+isolated function storeIgnoresMetadataFilters(BedrockTransport dataTransport, string kbId, string sourceUriKey,
+        DeleteRetrieveCaller retrieveCaller) returns boolean|ai:Error {
+    json controlFilter = {'equals: {key: sourceUriKey, value: FILTER_CONTROL_SENTINEL}};
+    [json[], string?] [results, _] = check retrieveCaller(dataTransport, kbId, controlFilter, 1, ());
     return results.length() > 0;
+}
+
+# The three-way classification of one delete candidate against the two enumerated
+# sets. See `classifyDeleteCandidate`.
+enum DeleteCandidateOutcome {
+    # In `matched` (the FILTERED enumeration saw it): safe to delete.
+    DELETE_MATCH,
+    # In `reachable` (the UNFILTERED enumeration saw it) but not `matched`: reachable
+    # and genuinely excluded by the filter — skip, sound.
+    DELETE_SKIP,
+    # In neither: never seen under either enumeration. Cannot tell "excluded by the
+    # filter" from "hidden from both passes" (a relevance floor, a store that mis-scores
+    # this particular document, ...) — reported rather than assumed.
+    DELETE_INDETERMINATE
+}
+
+// Pure, so the three-way decision is table-testable without AWS. `trustUnfilteredEnumeration`
+// is `KB_TRUST_UNFILTERED_ENUMERATION` in production; a parameter here only so tests
+// can exercise both settings without touching the module-level constant.
+isolated function classifyDeleteCandidate(string sourceValue, map<()> matched, map<()> reachable,
+        boolean trustUnfilteredEnumeration) returns DeleteCandidateOutcome {
+    if matched.hasKey(sourceValue) {
+        return DELETE_MATCH;
+    }
+    if trustUnfilteredEnumeration && reachable.hasKey(sourceValue) {
+        return DELETE_SKIP;
+    }
+    return DELETE_INDETERMINATE;
+}
+
+# What `resolveDataSourceDeletes` found for one data source.
+#
+# + toDelete - `DocumentIdentifier`s ready for `DeleteKnowledgeBaseDocuments`
+# + indeterminate - Candidates that could not be confirmed to match or not match the
+#                    filter, already formatted as `"sourceValue (data source dsId)"`
+# + refusalReason - Set instead of touching this data source at all — either
+#                    enumeration hit the page cap, or the store does not appear to
+#                    honour metadata filters. `toDelete`/`indeterminate` are both
+#                    empty when this is set: NOTHING is deleted from this data source.
+type DataSourceDeleteResult record {|
+    json[] toDelete;
+    string[] indeterminate;
+    string? refusalReason;
+|};
+
+// Runs the A17 algorithm against one data source's candidates: two paged
+// enumerations (filtered by `userFilter`, then unfiltered), then classifies every
+// candidate `listDeletableDocuments` returned. `sourceUriKey` and `retrieveCaller`
+// are what let `BedrockManagedKnowledgeBase` and `BedrockVectorKnowledgeBase` share
+// this one implementation — see `SOURCE_URI_METADATA_KEY`/`managedDeleteRetrieve` and
+// `VECTOR_SOURCE_URI_METADATA_KEY`/`vectorDeleteRetrieve`.
+isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, string kbId, string dsId,
+        json? userFilter, DeletableDocument[] candidates, string sourceUriKey,
+        DeleteRetrieveCaller retrieveCaller) returns DataSourceDeleteResult|ai:Error {
+    DeleteEnumeration matchedEnum =
+        check enumerateDeleteIdentities(dataTransport, kbId, userFilter, sourceUriKey, retrieveCaller);
+    DeleteEnumeration reachableEnum =
+        check enumerateDeleteIdentities(dataTransport, kbId, (), sourceUriKey, retrieveCaller);
+
+    if matchedEnum.truncated || reachableEnum.truncated {
+        return {
+            toDelete: [],
+            indeterminate: [],
+            refusalReason: string `data source '${dsId}': the delete enumeration exceeded ` +
+                string `${KB_DELETE_ENUMERATION_MAX_PAGES} pages, so the result set may be incomplete — ` +
+                "nothing was deleted from this data source. Narrow the filter, or delete in smaller batches."
+        };
+    }
+
+    // A store that silently ignores metadata filters would make the FILTERED pass
+    // return exactly what the UNFILTERED pass returns — every reachable document
+    // "matches". AWS documents exactly this failure mode for MongoDB Atlas:
+    // "Metadata filtering doesn't work by default and requires additional setup in
+    // your MongoDB Atlas vector index configuration."
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
+    // A per-document pinned probe could never see this (a false positive on ONE
+    // document looked identical to a genuine match); two enumerations make it
+    // visible as `matched == reachable`. `reachable.length() > 1` avoids a false
+    // trigger on a knowledge base that legitimately has (at most) one reachable
+    // document total.
+    if userFilter !is () && reachableEnum.identities.length() > 1 &&
+            mapKeySetEquals(matchedEnum.identities, reachableEnum.identities) {
+        // Ambiguous, NOT yet damning — a filter that legitimately selects every
+        // reachable document looks identical from here. `storeIgnoresMetadataFilters`
+        // is the negative control that separates the two.
+        boolean|ai:Error ignoresFilters =
+            storeIgnoresMetadataFilters(dataTransport, kbId, sourceUriKey, retrieveCaller);
+        if ignoresFilters is ai:Error {
+            // The control probe itself failed (a backend that rejects a filter on an
+            // absent key, a transient fault, ...). Undetermined is not permission to
+            // delete on a filter that may never have been applied: refuse, and say
+            // that the check could not be completed rather than asserting the store
+            // is broken.
+            return {
+                toDelete: [],
+                indeterminate: [],
+                refusalReason: string `data source '${dsId}': every reachable document matched the filter, ` +
+                    "and the follow-up check for whether the vector store honours metadata filters at all " +
+                    string `could not be completed (${ignoresFilters.message()}) — nothing was deleted from ` +
+                    "this data source."
+            };
+        }
+        if ignoresFilters {
+            return {
+                toDelete: [],
+                indeterminate: [],
+                refusalReason: string `data source '${dsId}': the vector store does not appear to be honouring ` +
+                    "metadata filters (a filter matching no possible document still returned results) — " +
+                    "nothing was deleted from this data source. Verify metadata filtering is configured on " +
+                    "the backend before retrying."
+            };
+        }
+        // Filters ARE honoured and this one genuinely selects every reachable
+        // document. Fall through and delete: refusing here would make an ordinary
+        // "delete everything tagged X" impossible on a knowledge base where
+        // everything is in fact tagged X.
+    }
+
+    json[] toDelete = [];
+    string[] indeterminate = [];
+    foreach DeletableDocument candidate in candidates {
+        DeleteCandidateOutcome outcome = classifyDeleteCandidate(candidate.sourceValue, matchedEnum.identities,
+            reachableEnum.identities, KB_TRUST_UNFILTERED_ENUMERATION);
+        if outcome == DELETE_MATCH {
+            toDelete.push(candidate.identifier);
+        } else if outcome == DELETE_INDETERMINATE {
+            indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
+        }
+        // DELETE_SKIP: reachable and genuinely excluded by the filter — no action.
+    }
+    return {toDelete, indeterminate, refusalReason: ()};
+}
+
+// ============================================================================
+// Idempotent creation.
+// ============================================================================
+
+// A deterministic `clientToken` for `CreateKnowledgeBase`/`CreateDataSource`.
+//
+// Find-or-create is a read-then-write: `resolveKnowledgeBase` lists by name, sees no
+// match, then creates. Two concurrent `init()` calls sharing a new name both see no
+// match and both create — observed live producing TWO knowledge bases, both reporting
+// success. Knowledge base NAMES ARE UNIQUE PER ACCOUNT (measured live 2026-09-08: a
+// SEQUENTIAL duplicate-name create is rejected with a 409 — see
+// `createKnowledgeBaseRecoveringFromConflict`, A10 §2a), but AWS's own enforcement has
+// a race window at the layer below this token, which is how two can exist anyway — see
+// `guardAgainstConcurrentDuplicate`, A10 §2b. Until either resolves it, each duplicate
+// makes every subsequent attach-by-name ambiguous and burns its own quota slot.
+//
+// AWS's answer to the RETRY case is the idempotency token: "If this token matches a
+// previous request, Amazon Bedrock ignores the request, but does not return an error."
+// Deriving it from the request body makes two identical creates collapse to one, while
+// a genuinely DIFFERENT definition still gets its own token and its own resource. It
+// does NOT collapse two requests already in flight concurrently — that is what §2a/§2b
+// exist to catch afterwards.
+//
+// `ClientToken` is min 33 / max 256 characters, pattern `[a-zA-Z0-9](-*[a-zA-Z0-9]){0,256}`;
+// a 64-character lowercase hex digest satisfies all three.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CreateKnowledgeBase.html
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CreateDataSource.html
+isolated function idempotencyToken(json canonical) returns string
+    => crypto:hashSha256(canonical.toJsonString().toBytes()).toBase16();
+
+// ============================================================================
+// Attach-by-definition verification.
+// ============================================================================
+
+// A name match attaches to a knowledge base the caller DESCRIBED but did not create.
+// Only the name was ever used to find it, so every other field of the definition —
+// `roleArn`, the embedding model, the KMS key, a self-managed store's
+// `storageConfiguration` — was previously discarded: constructing with the correct
+// name but a `roleArn` from an entirely different account succeeded silently, leaving
+// the real role in effect and giving the caller no way to learn that the definition it
+// passed is not the definition in force.
+//
+// The comparison is driven by the CREATE BODY this module would have sent, so it is
+// exactly the set of fields the module claims to control, and any field the module
+// learns to send is compared automatically. Semantics are "expected is a subset of
+// actual": only the leaves the definition actually specifies are checked, so an extra
+// field AWS returns is never a false mismatch.
+//
+// `name` (matched by definition), `description` (a mutable, non-behavioural label) and
+// the data-source definition (a separate resource, validated separately by
+// `validateResolvedDataSource`) are deliberately NOT compared.
+isolated function assertDefinitionMatches(string kbId, map<json> expectedCreateBody, map<json> actual)
+        returns ai:Error? {
+    string[] differences = [];
+    foreach string comparable in ["roleArn", "knowledgeBaseConfiguration", "storageConfiguration"] {
+        json expected = expectedCreateBody[comparable] ?: ();
+        if expected is () {
+            continue;
+        }
+        differences.push(...jsonDiffPaths(expected, actual[comparable] ?: (), comparable));
+    }
+    if differences.length() == 0 {
+        return;
+    }
+    return error ai:Error(
+        string `Knowledge base '${kbId}' matches the definition's name, but ${differences.length()} field(s) ` +
+        string `of the existing knowledge base differ from the definition: ` +
+        string:'join("; ", ...differences) +
+        ". These are fixed at creation time, so the definition passed is not the one in effect. Pass the " +
+        "knowledge base id directly to attach to it as it is, or correct the definition.");
+}
+
+// Paths where `expected`'s leaves disagree with `actual`. Numeric-aware, so an `int`
+// the module sent and a `decimal` AWS echoes back are not reported as a difference.
+isolated function jsonDiffPaths(json expected, json actual, string path) returns string[] {
+    if expected is map<json> {
+        if actual !is map<json> {
+            return [string `${path} (definition sets it, knowledge base has ${actual.toJsonString()})`];
+        }
+        string[] differences = [];
+        foreach [string, json] [key, value] in expected.entries() {
+            differences.push(...jsonDiffPaths(value, actual[key] ?: (), string `${path}.${key}`));
+        }
+        return differences;
+    }
+    if expected is json[] {
+        if actual !is json[] || actual.length() != expected.length() {
+            return [string `${path} (definition has ${expected.toJsonString()}, knowledge base has ` +
+                string `${actual.toJsonString()})`];
+        }
+        string[] differences = [];
+        foreach int i in 0 ..< expected.length() {
+            differences.push(...jsonDiffPaths(expected[i], actual[i], string `${path}[${i}]`));
+        }
+        return differences;
+    }
+    if jsonScalarEquals(expected, actual) {
+        return [];
+    }
+    return [string `${path} (definition says ${expected.toJsonString()}, knowledge base has ` +
+        string `${actual.toJsonString()})`];
+}
+
+// JSON has one number type; Ballerina has three. `1024` sent as an `int` and echoed
+// back as a `decimal` is the same value, and reporting it as a mismatch would make
+// `assertDefinitionMatches` fail on every knowledge base carrying `dimensions`.
+isolated function jsonScalarEquals(json expected, json actual) returns boolean {
+    if expected is int|float|decimal && actual is int|float|decimal {
+        return <decimal>expected == <decimal>actual;
+    }
+    return expected == actual;
 }
 
 // ============================================================================

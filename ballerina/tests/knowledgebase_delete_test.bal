@@ -16,22 +16,26 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/test;
 
-// End-to-end test of `deleteByFilter`'s probe algorithm against a stubbed
-// bedrock-agent/bedrock-agent-runtime pair on a local listener. Both agent planes
-// resolve to the SAME `serviceUrl` here (a concrete `http://localhost:...` carries
-// no `{endpoint}` placeholder to vary), so one mock serves both.
+// End-to-end test of `deleteByFilter`'s A17 two-enumeration algorithm against a
+// stubbed bedrock-agent/bedrock-agent-runtime pair on a local listener. Both agent
+// planes resolve to the SAME `serviceUrl` here (a concrete `http://localhost:...`
+// carries no `{endpoint}` placeholder to vary), so one mock serves both.
 //
 // Scenario: one CUSTOM data source with three INDEXED documents —
-//   - 'doc-match': the probe (userFilter AND _source_uri==id) finds it -> deleted.
-//   - 'doc-skip-a'/'doc-skip-b': the probe finds nothing -> genuinely excluded by
-//     the filter -> left alone, and NOT reported as a problem.
+//   - 'doc-match': present in BOTH the filtered and the unfiltered enumeration ->
+//     a confirmed match -> deleted.
+//   - 'doc-skip-a'/'doc-skip-b': present in the UNFILTERED enumeration but NOT the
+//     filtered one -> reachable and genuinely excluded by the filter -> left alone,
+//     and NOT reported as a problem.
 // Plus one SHAREPOINT data source, which `DocumentIdentifier` cannot address at all
 // -> reported as undeletable, never silently ignored.
 //
-// A zero-hit probe is unambiguous BECAUSE the filter is pinned to one document:
-// with the candidate set narrowed to that document's chunks, nothing can crowd it
-// out and no relevance floor can hide it (measured against the live API).
-// So there is exactly ONE probe per candidate document, asserted below.
+// Exactly TWO `Retrieve` calls happen per (deletable) data source — one filtered
+// enumeration, one unfiltered — regardless of how many candidate documents that data
+// source holds, asserted below. This replaced the old per-document PINNED probe
+// (`userFilter AND _source_uri==id`, one to two `Retrieve` calls PER CANDIDATE),
+// which returned nothing at all on a self-managed knowledge base with a CUSTOM data
+// source, since Bedrock does not emit `_source_uri` there (A17).
 
 const string DEL_KB_ID = "KBDELTEST1";
 const string DEL_DS_CUSTOM = "DSCUSTOM01";
@@ -158,7 +162,17 @@ isolated service class DeleteTestMock {
             map<json> bodyMap = <map<json>>body;
             json[] identifiers = <json[]>bodyMap["documentIdentifiers"];
             recordDeletedIdentifiers(identifiers);
-            return {documentDetails: []};
+            // A real `DeleteKnowledgeBaseDocuments` answers with a per-document
+            // status. Returning the empty array the mock used to return now trips the
+            // "not confirmed deleted" check, which is the point of that check.
+            return {
+                documentDetails: identifiers.'map(identifier => <json>{
+                    knowledgeBaseId: DEL_KB_ID,
+                    dataSourceId: DEL_DS_CUSTOM,
+                    identifier,
+                    status: "DELETING"
+                })
+            };
         }
         if p == string `/knowledgebases/${DEL_KB_ID}/retrieve` {
             return deleteTestMockRetrieve(body);
@@ -167,23 +181,28 @@ isolated service class DeleteTestMock {
     }
 }
 
-// The probe dispatcher: decides the canned `retrievalResults[]` from which document
-// id the filter mentions. Every probe must be the COMBINED form (user filter AND the
-// id leaf — an 'andAll') and must ask for exactly one result; both are asserted here
-// rather than in the test body, so a regression fails at the request that made it.
+// The enumeration dispatcher: a FILTERED call (the request body carries a `filter`
+// under `managedSearchConfiguration`) sees only 'doc-match'; an UNFILTERED call sees
+// all three. Both are asserted to ask for a 100-result page — `KB_MAX_RESULTS_PER_CALL`
+// — and neither carries a `nextToken` here, since three results fit on one page.
 isolated function deleteTestMockRetrieve(json body) returns json|error {
-    string bodyStr = body.toJsonString();
     recordRetrieveProbe();
-    if !bodyStr.includes("andAll") || !bodyStr.includes("\"numberOfResults\":1") {
-        return error(string `probe was not a pinned single-result query: ${bodyStr}`);
+    map<json> bodyMap = <map<json>>body;
+    map<json> managedSearch =
+        <map<json>>(<map<json>>bodyMap["retrievalConfiguration"])["managedSearchConfiguration"];
+    if managedSearch["numberOfResults"] != 100 {
+        return error(string `expected a 100-result enumeration page: ${body.toJsonString()}`);
     }
-    if bodyStr.includes("doc-match") {
+    if managedSearch.hasKey("filter") {
         return {retrievalResults: [deleteTestRetrievalResult("doc-match")]};
     }
-    // 'doc-skip-a'/'doc-skip-b': zero hits under the pinned filter. Because the pin
-    // rules out the relevance floor, that means "genuinely excluded" — not
-    // "undeterminable" — so they are simply left alone and never reported.
-    return {retrievalResults: []};
+    return {
+        retrievalResults: [
+            deleteTestRetrievalResult("doc-match"),
+            deleteTestRetrievalResult("doc-skip-a"),
+            deleteTestRetrievalResult("doc-skip-b")
+        ]
+    };
 }
 
 @test:Config {}
@@ -209,14 +228,13 @@ function testDeleteByFilterDeletesMatchesSkipsExclusionsAndReportsUndeletableSou
     map<json> deletedIdentifier = <map<json>>deleted[0];
     test:assertEquals((<map<json>>deletedIdentifier["custom"])["id"], "doc-match");
 
-    // ONE probe per candidate document, never two. The second (id-alone
-    // reachability) probe existed only to tell "hidden by the relevance floor" from
-    // "excluded by the filter"; pinning makes that distinction impossible to need,
-    // so a reappearance of 2N probing is a regression.
-    test:assertEquals(readRetrieveProbeCount(), 3, "expected exactly one probe per candidate document");
+    // Exactly ONE filtered enumeration and ONE unfiltered enumeration for the CUSTOM
+    // data source — cost no longer scales with the number of candidate documents.
+    test:assertEquals(readRetrieveProbeCount(), 2, "expected exactly one filtered and one unfiltered enumeration");
 
     // The undeletable data source is reported; the two excluded documents are not —
-    // exclusion is now a sound conclusion, not an unresolved one.
+    // both are reachable under the unfiltered pass, so exclusion is a sound
+    // conclusion.
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         string msg = result.message();

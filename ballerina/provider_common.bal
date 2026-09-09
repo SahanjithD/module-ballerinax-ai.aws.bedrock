@@ -126,7 +126,7 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
         string[]? stopSequences, AdditionalRequestFields? additionalModelRequestFields,
         ServiceTier? serviceTier,
         boolean? latencyOptimized, GuardrailConfig? guardrail,
-        ThinkingConfig? thinking = (), Effort? effort = ())
+        ThinkingConfig? thinking = (), Effort? effort = (), string? reasoningEffort = ())
         returns readonly & InferenceParams {
     InferenceParams params = {maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT};
     // No default: an unset temperature stays unset all the way to the wire, so the
@@ -158,21 +158,142 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
     if effort is Effort {
         params.effort = effort;
     }
+    // OpenAI-only today. First-class rather than folded into the passthrough because
+    // its wire shape is dialect-dependent — see `InferenceParams.reasoningEffort`.
+    if reasoningEffort is string {
+        params.reasoningEffort = reasoningEffort;
+    }
     return params.cloneReadOnly();
 }
 
 // Route-specific headers common to all vendors: Invoke guardrail
 // headers. Vendor facades merge their own Mantle headers on top.
-isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail, BedrockCredentials creds)
-        returns map<string> {
+isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail, BedrockCredentials creds,
+        InferenceParams? params = ()) returns map<string> {
     map<string> headers = {};
-    if route.family == INVOKE && guardrail is GuardrailConfig {
-        headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
-        headers["X-Amzn-Bedrock-GuardrailVersion"] = guardrail.guardrailVersion;
+    if route.family == INVOKE {
+        if guardrail is GuardrailConfig {
+            headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
+            headers["X-Amzn-Bedrock-GuardrailVersion"] = guardrail.guardrailVersion;
+        }
+        addInvokeRequestOptionHeaders(headers, params);
     }
     addMantleApiKeyHeader(headers, route, creds);
     return headers;
 }
+
+// `serviceTier` and `latencyOptimized` on the Invoke route.
+//
+// These are NOT Converse-only knobs, which is what "read by the Converse converter
+// and nothing else" made them look like. `InvokeModel` carries both as REQUEST
+// HEADERS — the same two settings, a different transport slot — so on Invoke the
+// right answer is to send them, not to refuse them and not to drop them:
+//
+//   X-Amzn-Bedrock-Service-Tier:              priority | default | flex | reserved
+//   X-Amzn-Bedrock-PerformanceConfig-Latency: standard | optimized
+//
+// Both header names and both value sets are the API reference's own.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+//
+// `standard` is the latency default, so an unset or `false` flag sends nothing —
+// matching what the Converse converter emits for the same input.
+isolated function addInvokeRequestOptionHeaders(map<string> headers, InferenceParams? params) {
+    if params is () {
+        return;
+    }
+    ServiceTier? tier = params?.serviceTier;
+    if tier is ServiceTier {
+        headers["X-Amzn-Bedrock-Service-Tier"] = tier;
+    }
+    if params?.latencyOptimized == true {
+        headers["X-Amzn-Bedrock-PerformanceConfig-Latency"] = "optimized";
+    }
+}
+
+// Refuses, at construction, any inference parameter the resolved route cannot put on
+// the wire.
+//
+// THE POINT IS THAT IT IS ONE FUNCTION. Every knob here is route-specific, every
+// provider exposes all of them on one flat config, and the failure mode when a knob
+// meets a route that cannot carry it is silence: the constructor accepts it, the
+// encoder does not read it, AWS returns a perfectly ordinary 200, and the caller has
+// no way to tell a dropped field from an honoured one. A caller who sets
+// `latencyOptimized` is asking to pay differently; answering 200 without doing it is
+// the module lying about what it sent.
+//
+// Checked against the CHAT spine. `generate()` may resolve to a different family (see
+// `resolveGenerateSpine`), but chat is the path these knobs describe and the one a
+// silent drop would go unnoticed on.
+isolated function validateParamsForRoute(string providerName, ApiFamily family,
+        readonly & ModelConverter converter, InferenceParams params) returns ai:Error? {
+    DialectSupport supports = converter.supports;
+    string dialect = converter.dialect;
+
+    if params?.stopSequences is string[] && !supports.stopSequences {
+        return error ai:Error(
+            string `${providerName}: 'stopSequences' is not supported on the ${dialect} route — that ` +
+            "dialect has no stop-sequence parameter in its request schema, so the model would run past " +
+            "the text you asked it to stop at and bill you for the tokens. Remove 'stopSequences', or " +
+            "select a Converse/Invoke model with 'apiFamily'.");
+    }
+    if params?.thinking is ThinkingConfig && !supports.thinking {
+        return error ai:Error(
+            string `${providerName}: 'thinking' is not supported on the ${dialect} route. Remove it, or ` +
+            "select a route that carries it with 'apiFamily'.");
+    }
+    if params?.effort is Effort && !supports.effort {
+        return error ai:Error(
+            string `${providerName}: 'effort' is not supported on the ${dialect} route. Remove it, or ` +
+            "select a route that carries it with 'apiFamily'.");
+    }
+    if params?.reasoningEffort is string && !supports.reasoningEffort {
+        return error ai:Error(
+            string `${providerName}: 'reasoningEffort' is not supported on the ${dialect} route. Remove ` +
+            "it, or select a route that carries it with 'apiFamily'.");
+    }
+
+    // `serviceTier`/`latencyOptimized` are a ROUTE-FAMILY capability, not a dialect
+    // one — a Converse body field, an InvokeModel request header, and nothing at all
+    // on Mantle.
+    if familyCarriesRequestOptions(family) {
+        return;
+    }
+    string[] unsupported = [];
+    if params?.serviceTier is ServiceTier {
+        unsupported.push("serviceTier");
+    }
+    // `true` only. `latencyOptimized = false` asks for `standard`, which IS what an
+    // unset flag already produces on every route — refusing it would reject a call
+    // that is asking for exactly what it is going to get. A tier, by contrast, is
+    // always an explicit choice away from the baseline, so any value is refused.
+    if params?.latencyOptimized == true {
+        unsupported.push("latencyOptimized");
+    }
+    if unsupported.length() == 0 {
+        return;
+    }
+    // DELIBERATELY NOT GUESSED. The OpenAI- and Anthropic-compatible surfaces on
+    // bedrock-mantle do have a `service_tier` BODY field, but its value vocabulary is
+    // the vendor's (`auto|default|flex|fast|priority|ultrafast` in OpenAI's schema),
+    // not Bedrock's `ServiceTier` (`default|priority|flex|reserved`) — two first-party
+    // sources, one field name, different value sets, and no statement anywhere about
+    // which one bedrock-mantle honours. Emitting `ServiceTier` there would be a guess
+    // that fails silently if wrong (a tier you are not billed for). Refuse, and point
+    // at the passthrough for a caller who knows their model's vocabulary.
+    // There is no latency-optimization concept on bedrock-mantle at all.
+    return error ai:Error(
+        string `${providerName}: ${string:'join(", ", ...unsupported)} ` +
+        string `${unsupported.length() == 1 ? "is" : "are"} not supported on the bedrock-mantle route — ` +
+        "Mantle has no Bedrock request-option headers, and its vendor-compatible surfaces spell service " +
+        "tiers with the VENDOR's value set rather than Bedrock's, so this module will not guess a " +
+        "mapping. Use 'apiFamily = CONVERSE' or 'INVOKE' to set them as Bedrock defines them, or send " +
+        "the vendor's own spelling verbatim through 'additionalModelRequestFields'.");
+}
+
+// Which route families carry `serviceTier`/`latencyOptimized`: Converse as body
+// fields, Invoke as request headers. Mantle carries neither.
+isolated function familyCarriesRequestOptions(ApiFamily family) returns boolean
+    => family == CONVERSE || family == INVOKE;
 
 // `x-api-key` for a Mantle path that authenticates with it (the Anthropic Messages
 // surface). Derived from the path via `usesApiKeyHeader`, not stored per model.
@@ -288,7 +409,7 @@ isolated function resolveGenerateSpine(string providerName, auth:CredentialProvi
         aws:EndpointConfig? endpointConfig, RouteConfig routeConfig,
         http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail,
         Route chatRoute, readonly & ModelConverter chatConverter, BedrockTransport chatTransport,
-        map<string> chatHeaders)
+        map<string> chatHeaders, InferenceParams? params = ())
         returns [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]|ai:Error {
     MantleEntry? entry = chatRoute.mantleEntry;
     boolean fallbackApplies = chatRoute.family == MANTLE
@@ -302,7 +423,7 @@ isolated function resolveGenerateSpine(string providerName, auth:CredentialProvi
         check resolveSpine(providerName, credentials, model, region, endpointConfig, converseConfig,
             httpConfig, retryConfig, guardrail);
     return [route.family, route.effectiveModelId, converter, transport,
-        commonExtraHeaders(route, guardrail, rawCredentials)];
+        commonExtraHeaders(route, guardrail, rawCredentials, params)];
 }
 
 // Folds a vendor's extra request fields into `additionalModelRequestFields`.

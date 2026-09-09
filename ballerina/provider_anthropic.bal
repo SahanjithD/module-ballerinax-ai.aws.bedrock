@@ -131,20 +131,25 @@ public isolated distinct client class AnthropicModelProvider {
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
-        map<string> chatHeaders = buildExtraHeaders(route, config, credentials);
+        // Params BEFORE headers: `serviceTier`/`latencyOptimized` ride Invoke REQUEST
+        // HEADERS, so the header builder has to see them, and the route has to be
+        // able to refuse the ones it cannot carry before any of it is stored.
+        readonly & InferenceParams resolvedParams = check resolveParams(maxTokens, temperature, config);
+        check validateParamsForRoute("AnthropicModelProvider", route.family, converter, resolvedParams);
+        self.params = resolvedParams;
+        map<string> chatHeaders = buildExtraHeaders(route, config, credentials, resolvedParams);
         self.extraHeaders = chatHeaders.cloneReadOnly();
         [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
             [genFamily, genModelId, genConverter, genTransport, genHeaders] =
             check resolveGenerateSpine("AnthropicModelProvider", resolvedCredentials, credentials, model, region, endpointConfig,
                 routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
-                route, converter, transport, chatHeaders);
+                route, converter, transport, chatHeaders, resolvedParams);
         self.genFamily = genFamily;
         self.genModelId = genModelId;
         self.genConverter = genConverter;
         self.genTransport = genTransport;
         self.genHeaders = genHeaders.cloneReadOnly();
         self.supportsStructuredOutput = genFamily != MANTLE;
-        self.params = check resolveParams(maxTokens, temperature, config);
     }
 
     # Sends a chat request. Opens an observe span and closes it on every path.
@@ -217,11 +222,11 @@ isolated function validateThinking(ThinkingConfig thinking, int maxTokens) retur
 // Route-specific headers computed once: the common Invoke
 // guardrail and Mantle api-key headers, plus Anthropic's own Mantle Messages
 // version header.
-isolated function buildExtraHeaders(Route route, AnthropicConfig config, BedrockCredentials creds)
+isolated function buildExtraHeaders(Route route, AnthropicConfig config, BedrockCredentials creds, InferenceParams? params = ())
         returns map<string> {
     // `x-api-key` is emitted by `commonExtraHeaders` for every Mantle Messages path —
     // it follows the path, not the vendor.
-    map<string> headers = commonExtraHeaders(route, config?.guardrail, creds);
+    map<string> headers = commonExtraHeaders(route, config?.guardrail, creds, params);
     MantleEntry? entry = route.mantleEntry;
     if route.family == MANTLE && entry is MantleEntry && usesApiKeyHeader(entry.path) {
         // Different value AND mechanism from the Invoke body field.

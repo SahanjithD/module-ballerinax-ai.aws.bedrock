@@ -78,7 +78,12 @@ isolated function metadataFiltersToRetrievalFilter(ai:MetadataFilters filters) r
         json? childJson = child is ai:MetadataFilter
             ? check metadataFilterToRetrievalFilter(child)
             : check metadataFiltersToRetrievalFilter(child);
-        if childJson is json {
+        // `childJson is json` would NOT reject nil — `()` is a member of `json` — so
+        // an empty nested group's `()` would be pushed into `children` verbatim and
+        // reach the wire as `{"andAll": [null, null]}`, which Bedrock rejects with a
+        // bare `ValidationException`. Two nested empty groups constrain nothing, so
+        // the whole thing must collapse to `()` and behave like an omitted filter.
+        if childJson !is () {
             children.push(childJson);
         }
     }
@@ -94,15 +99,23 @@ isolated function metadataFiltersToRetrievalFilter(ai:MetadataFilters filters) r
     return {[groupKey]: children};
 }
 
-// Combines an already-built `RetrievalFilter` (or none) with a leaf
-// `_source_uri == id` filter — the probe `deleteByFilter` runs per candidate
-// document. Always produces either a bare leaf (no user filter) or a 2-element
-// `andAll` (user filter + the id leaf), so the `min: 2` rule is satisfied by
-// construction; no flattening is needed here because the count is fixed at 1 or 2.
-isolated function withSourceUriFilter(json? userFilter, string documentId) returns json {
-    json idLeaf = {'equals: {key: SOURCE_URI_METADATA_KEY, value: documentId}};
-    if userFilter is () {
-        return idLeaf;
+// The number of real leaf predicates in a (possibly nested) `ai:MetadataFilters`.
+//
+// Guards `deleteByFilter` (both classes) against a filter set that LOOKS populated
+// but constrains nothing: `{filters: [{filters: []}, {filters: []}]}` has two
+// children and no predicates, and a filter that constrains nothing makes every
+// per-document probe "does this document exist" — every one hits, and the whole
+// knowledge base is deleted.
+//
+// `metadataFiltersToRetrievalFilter` above now collapses that case to `()` as well,
+// so a nil check alone would catch it today. This is kept as the SECOND, independent
+// condition because it answers the caller's real question — did you actually
+// constrain anything? — without depending on how the wire encoder happens to fold
+// empty groups. Total deletion is not a case to protect against with one check.
+isolated function filterLeafCount(ai:MetadataFilters filters) returns int {
+    int count = 0;
+    foreach ai:MetadataFilters|ai:MetadataFilter child in filters.filters {
+        count += child is ai:MetadataFilter ? 1 : filterLeafCount(child);
     }
-    return {andAll: [userFilter, idLeaf]};
+    return count;
 }

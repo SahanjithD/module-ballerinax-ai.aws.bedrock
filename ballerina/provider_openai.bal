@@ -44,10 +44,20 @@ public enum OpenAIModel {
 public type OpenAIConfig record {|
     *CommonModelConfig;
 
-    # `reasoning_effort` — trades latency and token cost against reasoning depth.
-    # Accepted values differ between GPT-OSS (`low`|`medium`|`high`) and GPT-5.x
-    # (the Responses API set, model-dependent); an unsupported value is rejected by
-    # the endpoint. Leave unset to use the model's default.
+    # Reasoning depth — trades latency and token cost against how much the model
+    # thinks. Sent in the spelling the resolved route uses: a top-level
+    # `reasoning_effort` on Chat Completions, `reasoning: {effort: ...}` on the
+    # Responses API. You pass the value; the module picks the shape.
+    #
+    # The ACCEPTED VALUES are the model's, not this module's, and are deliberately not
+    # enumerated here: they differ per model and AWS documents no closed list for
+    # either family. `low`/`medium`/`high` work broadly; `max` is accepted on GPT-OSS
+    # too (verified live, against an earlier doc comment that said otherwise). An
+    # unsupported value is rejected by the endpoint, and the refusal enumerates the
+    # set that model does accept — which is the authority worth reading, and the
+    # reason a hard-coded list here would only ever go stale.
+    #
+    # Leave unset to use the model's default.
     string reasoningEffort?;
 |};
 
@@ -115,20 +125,26 @@ public isolated distinct client class OpenAIModelProvider {
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
-        map<string> chatHeaders = commonExtraHeaders(route, config?.guardrail, credentials);
+        // Params BEFORE headers: `serviceTier`/`latencyOptimized` ride Invoke REQUEST
+        // HEADERS, so the header builder has to see them, and the route has to be
+        // able to refuse the ones it cannot carry before any of it is stored.
+        readonly & InferenceParams resolvedParams = openAIParams(maxTokens, temperature, config);
+        check validateParamsForRoute("OpenAIModelProvider", route.family, converter, resolvedParams);
+        self.params = resolvedParams;
+        map<string> chatHeaders =
+            commonExtraHeaders(route, config?.guardrail, credentials, resolvedParams);
         self.extraHeaders = chatHeaders.cloneReadOnly();
         [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
             [genFamily, genModelId, genConverter, genTransport, genHeaders] =
             check resolveGenerateSpine("OpenAIModelProvider", resolvedCredentials, credentials, model, region, endpointConfig,
                 routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
-                route, converter, transport, chatHeaders);
+                route, converter, transport, chatHeaders, resolvedParams);
         self.genFamily = genFamily;
         self.genModelId = genModelId;
         self.genConverter = genConverter;
         self.genTransport = genTransport;
         self.genHeaders = genHeaders.cloneReadOnly();
         self.supportsStructuredOutput = genFamily != MANTLE;
-        self.params = openAIParams(maxTokens, temperature, config);
     }
 
     # + messages - Chat messages or a single user message
@@ -155,15 +171,18 @@ public isolated distinct client class OpenAIModelProvider {
     } external;
 }
 
-// Folds the OpenAI `reasoningEffort` knob into the passthrough.
+// Resolves the OpenAI knobs.
+//
+// `reasoningEffort` is passed as a FIRST-CLASS param, not folded into
+// `additionalModelRequestFields`. Folding it there erased the one thing that matters
+// about it — the wire spelling differs per dialect (`reasoning_effort` at top level
+// on Chat Completions, `reasoning: {effort}` on Responses) — because the passthrough
+// is spliced verbatim and this function has no idea which route the request is bound
+// for. Only the converter knows, so only the converter can spell it. Keeping it out
+// of the passthrough also keeps that escape hatch what it says it is: the CALLER's,
+// forwarded untouched.
 isolated function openAIParams(int? maxTokens, decimal? temperature, OpenAIConfig config)
-        returns readonly & InferenceParams {
-    map<json> extras = {};
-    string? reasoningEffort = config?.reasoningEffort;
-    if reasoningEffort is string {
-        extras["reasoning_effort"] = reasoningEffort;
-    }
-    AdditionalRequestFields? additional = foldRequestFields(config?.additionalModelRequestFields, extras);
-    return buildInferenceParams(maxTokens, temperature, config?.stopSequences,
-        additional, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
-}
+        returns readonly & InferenceParams
+    => buildInferenceParams(maxTokens, temperature, config?.stopSequences,
+        config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
+        config?.guardrail, (), (), config?.reasoningEffort);

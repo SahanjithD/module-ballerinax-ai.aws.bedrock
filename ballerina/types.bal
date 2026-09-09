@@ -99,9 +99,13 @@ public enum Effort {
     EFFORT_MEDIUM = "medium",
     # The default. Claude always thinks.
     EFFORT_HIGH = "high",
-    # Extended depth. Claude Opus 5 and Opus 4.6 ONLY.
+    # Extended depth. Claude Opus 5 and Opus 4.6 ONLY — Sonnet 4.6 rejects it with
+    # `output_config.effort: Input should be 'low', 'medium', 'high' or 'max'`.
     EFFORT_XHIGH = "xhigh",
-    # No constraint on depth. Claude Opus 5 and Opus 4.6 ONLY.
+    # No constraint on depth. NOT Opus-only: accepted on Sonnet 4.6 as well
+    # (verified live), and named as valid by the very refusal that rejects `xhigh`
+    # there. Support is still per model — the endpoint enumerates the set it accepts
+    # when it refuses one, which is the authority for any model not listed here.
     EFFORT_MAX = "max"
 }
 

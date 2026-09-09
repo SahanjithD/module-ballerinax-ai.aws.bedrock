@@ -325,6 +325,44 @@ function testS3VectorsAcceptsEitherValidCombination() {
     test:assertTrue(validateStorageConfiguration(byBucketAndName) is ());
 }
 
+// B4: `indexArn` alongside `vectorBucketArn`/`indexName` naming a DIFFERENT index is
+// individually valid per member (each is `Required: No`) but ambiguous as a whole —
+// Bedrock, not this module, would silently pick one.
+@test:Config {}
+function testB4AmbiguousS3VectorsComboShouldBeRejected() {
+    S3VectorsStorage indexArnPlusBucket = {
+        indexArn: "arn:aws:s3vectors:us-east-1:123456789012:bucket/b/index/i",
+        vectorBucketArn: "arn:aws:s3vectors:us-east-1:123456789012:bucket/other"
+    };
+    ai:Error? resultWithBucket = validateStorageConfiguration(indexArnPlusBucket);
+    test:assertTrue(resultWithBucket is ai:Error);
+    if resultWithBucket is ai:Error {
+        string msg = resultWithBucket.message();
+        test:assertTrue(msg.includes("indexArn"), msg);
+        test:assertTrue(msg.includes("vectorBucketArn"), msg);
+    }
+
+    S3VectorsStorage indexArnPlusName = {
+        indexArn: "arn:aws:s3vectors:us-east-1:123456789012:bucket/b/index/i",
+        indexName: "other-index"
+    };
+    ai:Error? resultWithName = validateStorageConfiguration(indexArnPlusName);
+    test:assertTrue(resultWithName is ai:Error);
+    if resultWithName is ai:Error {
+        string msg = resultWithName.message();
+        test:assertTrue(msg.includes("indexArn"), msg);
+        test:assertTrue(msg.includes("indexName"), msg);
+    }
+
+    // Every valid, unambiguous combination must still be accepted.
+    test:assertTrue(validateStorageConfiguration(
+        <S3VectorsStorage>{indexArn: "arn:aws:s3vectors:us-east-1:123456789012:bucket/b/index/i"}) is ());
+    test:assertTrue(validateStorageConfiguration(<S3VectorsStorage>{
+        vectorBucketArn: "arn:aws:s3vectors:us-east-1:123456789012:bucket/b",
+        indexName: "i"
+    }) is ());
+}
+
 // ---- createVectorKnowledgeBaseRequestBody ----
 
 final OpenSearchServerlessStorage TEST_STORAGE = {
@@ -478,6 +516,35 @@ function testRetrievalConfigRangesAreValidated() {
     test:assertTrue(validateVectorRetrievalConfig({}) is ());
 }
 
+// B5a: reranking more results than the search itself returns is nonsensical, but
+// each bound was previously checked only independently (1-100), so this combination
+// slipped through construction and reached the wire.
+@test:Config {}
+function testB5RerankedResultsExceedingNumberOfResultsShouldBeRejected() {
+    ai:Error? result = validateVectorRetrievalConfig({
+        numberOfResults: 5,
+        rerankingConfiguration: {modelArn: "arn:model", numberOfRerankedResults: 10}
+    });
+    test:assertTrue(result is ai:Error);
+    if result is ai:Error {
+        string msg = result.message();
+        test:assertTrue(msg.includes("5"), msg);
+        test:assertTrue(msg.includes("10"), msg);
+    }
+
+    // Reranked <= results is fine, whichever order they are set in.
+    test:assertTrue(validateVectorRetrievalConfig({
+        numberOfResults: 10,
+        rerankingConfiguration: {modelArn: "arn:model", numberOfRerankedResults: 5}
+    }) is ());
+    // Either alone (the other left to Bedrock's defaults) must not be rejected by
+    // this new check — there is nothing to compare against.
+    test:assertTrue(validateVectorRetrievalConfig({numberOfResults: 5}) is ());
+    test:assertTrue(validateVectorRetrievalConfig({
+        rerankingConfiguration: {modelArn: "arn:model", numberOfRerankedResults: 10}
+    }) is ());
+}
+
 // ---- vectorSearchConfigJson / rerankingConfigJson ----
 
 @test:Config {}
@@ -523,41 +590,37 @@ function testVectorSearchConfigNeverEmitsRerankingModelType() {
 
 @test:Config {}
 function testRerankingConfigEmitsNumberOfRerankedResultsWhenSet() {
-    json config = rerankingConfigJson({modelArn: "arn:model", numberOfRerankedResults: 7});
+    json config = rerankingConfigJson({modelArn: "arn:model", numberOfRerankedResults: 7}, 10);
     map<json> bedrockReranking =
         <map<json>>(<map<json>>config)["bedrockRerankingConfiguration"];
     test:assertEquals(bedrockReranking["numberOfRerankedResults"], 7);
     test:assertEquals((<map<json>>config)["type"], "BEDROCK_RERANKING_MODEL");
 }
 
-// ---- withVectorSourceUriFilter ----
-
-// THE REGRESSION GUARD for the reserved-prefix split: self-managed knowledge bases
-// use `x-amz-bedrock-kb-source-uri`, managed ones use `_source_uri`. Reusing the
-// managed key here would produce a deleteByFilter that matches nothing and so
-// deletes nothing, silently.
-// Prefix rule: https://docs.aws.amazon.com/bedrock/latest/userguide/kb-test-config.html
-// The exact key, under "Auto-created fields":
-// https://docs.aws.amazon.com/bedrock/latest/userguide/kb-multimodal-test-and-query.html
+// B5b: a config that is legal at construction (`numberOfRerankedResults` <=
+// `numberOfResults`) can still be asked to rerank more than the search returns once
+// the EFFECTIVE `numberOfResults` narrows — e.g. a small per-call `maxLimit`. Clamped,
+// not errored: erroring here would fail a construction-time-valid config on a small
+// `maxLimit`.
 @test:Config {}
-function testVectorSourceUriFilterUsesTheXAmzBedrockKey() {
-    json bare = withVectorSourceUriFilter((), "doc-1");
-    test:assertEquals(bare, {'equals: {key: "x-amz-bedrock-kb-source-uri", value: "doc-1"}});
-    test:assertFalse(bare.toJsonString().includes("_source_uri"), bare.toJsonString());
+function testRerankingConfigClampsNumberOfRerankedResultsToEffectiveNumberOfResults() {
+    json clamped = rerankingConfigJson({modelArn: "arn:model", numberOfRerankedResults: 10}, 5);
+    map<json> clampedReranking = <map<json>>(<map<json>>clamped)["bedrockRerankingConfiguration"];
+    test:assertEquals(clampedReranking["numberOfRerankedResults"], 5);
+
+    // Untouched when the configured value does not exceed the effective one.
+    json untouched = rerankingConfigJson({modelArn: "arn:model", numberOfRerankedResults: 3}, 5);
+    map<json> untouchedReranking = <map<json>>(<map<json>>untouched)["bedrockRerankingConfiguration"];
+    test:assertEquals(untouchedReranking["numberOfRerankedResults"], 3);
 }
 
-@test:Config {}
-function testVectorSourceUriFilterAndsWithTheUserFilter() {
-    json userFilter = {'equals: {key: "tenant", value: "acme"}};
-    json combined = withVectorSourceUriFilter(userFilter, "doc-1");
-    json expected = {
-        andAll: [
-            {'equals: {key: "tenant", value: "acme"}},
-            {'equals: {key: "x-amz-bedrock-kb-source-uri", value: "doc-1"}}
-        ]
-    };
-    test:assertEquals(combined, expected);
-}
+// ---- the reserved source-uri key constants ----
+//
+// `withVectorSourceUriFilter` (the per-document pinned-probe filter builder) was
+// removed with A17 — `deleteByFilter` no longer pins per document, so those tests
+// are gone with it. The KEY CONSTANTS below still matter — `resolveDataSourceDeletes`
+// (knowledgebase_common.bal) is parameterised by them — so the regression guard for
+// the reserved-prefix split stays.
 
 // The managed spelling must stay on the managed side — asserting both here means a
 // future refactor that unifies them cannot silently flip either.

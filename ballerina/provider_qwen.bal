@@ -101,20 +101,26 @@ public isolated distinct client class QwenModelProvider {
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
-        map<string> chatHeaders = commonExtraHeaders(route, config?.guardrail, credentials);
+        // Params BEFORE headers: `serviceTier`/`latencyOptimized` ride Invoke REQUEST
+        // HEADERS, so the header builder has to see them, and the route has to be
+        // able to refuse the ones it cannot carry before any of it is stored.
+        readonly & InferenceParams resolvedParams = qwenParams(maxTokens, temperature, config);
+        check validateParamsForRoute("QwenModelProvider", route.family, converter, resolvedParams);
+        self.params = resolvedParams;
+        map<string> chatHeaders =
+            commonExtraHeaders(route, config?.guardrail, credentials, resolvedParams);
         self.extraHeaders = chatHeaders.cloneReadOnly();
         [ApiFamily, string, readonly & ModelConverter, BedrockTransport, map<string>]
             [genFamily, genModelId, genConverter, genTransport, genHeaders] =
             check resolveGenerateSpine("QwenModelProvider", resolvedCredentials, credentials, model, region, endpointConfig,
                 routeConfig, config?.httpConfig, config?.retryConfig, config?.guardrail,
-                route, converter, transport, chatHeaders);
+                route, converter, transport, chatHeaders, resolvedParams);
         self.genFamily = genFamily;
         self.genModelId = genModelId;
         self.genConverter = genConverter;
         self.genTransport = genTransport;
         self.genHeaders = genHeaders.cloneReadOnly();
         self.supportsStructuredOutput = genFamily != MANTLE;
-        self.params = qwenParams(maxTokens, temperature, config);
     }
 
     # + messages - Chat messages or a single user message

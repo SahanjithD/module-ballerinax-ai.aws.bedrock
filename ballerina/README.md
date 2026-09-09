@@ -299,6 +299,15 @@ metadata. That is correct in every partition and for every route without you doi
 Note the suffix flips between routes — `amazonaws.com` for runtime, `api.aws` for Mantle — and again
 per partition. Hand-writing these is the main way to get an unexplained DNS failure, so don't.
 
+> **`dualstack: true` is refused on every route but Mantle.** `bedrock-mantle` is the only name in this
+> service family that publishes a dualstack (`.api.aws`) host — the module already forces it there, which
+> is why every Mantle call works. `bedrock-runtime` (Converse, Invoke, and **both embedding providers**),
+> `bedrock-agent` and `bedrock-agent-runtime` (**both knowledge-base planes**) have no `.api.aws` record
+> in any region, verified by DNS. Setting the flag on those used to build the unservable host happily and
+> die at call time as a bare connection error after a full retry cycle. It is now a construction error
+> naming the flag and the host family. If AWS later publishes one this guard does not know about, pass
+> the origin through `customEndpoint`, which outranks the guard.
+
 The `endpoint` field on every config record is [`aws:EndpointConfig`](https://central.ballerina.io/ballerinax/aws/latest),
 the same record the other `ballerinax/aws.*` connectors take:
 
@@ -360,14 +369,47 @@ This bites hardest in GovCloud, so read this before deploying there:
 
 ### Inference parameters
 
-`additionalModelRequestFields` forwards anything Converse does not model (Claude `top_k`/`thinking`, Nova
-`reasoningConfig`, sampling knobs beyond `temperature`, …) verbatim.
+`additionalModelRequestFields` forwards anything the module does not model (Claude `top_k`/`anthropic_beta`,
+prompt-caching `cache_control`, Nova `reasoningConfig`, sampling knobs beyond `temperature`, …) verbatim.
 
 The module deliberately exposes only `maxTokens` and `temperature` as first-class inference knobs — the
 two an integration developer actually reaches for. Anything finer-grained (`top_p`, `top_k`, …) goes
-through `additionalModelRequestFields` rather than cluttering the config record. Note that passthrough is
-honoured on Converse, Nova, OpenAI-chat, Responses, Mistral, and Invoke-DeepSeek, but **not** on the
-Invoke-Anthropic converter.
+through `additionalModelRequestFields` rather than cluttering the config record. It is honoured on
+**every** dialect — Converse's `additionalModelRequestFields`, and the top level of each Invoke/Mantle
+vendor body — and it is spliced **untouched**: the module never renames, reshapes or adds to what you put
+there.
+
+#### Route-scoped knobs are refused, never dropped
+
+Several config fields only exist on some routes. When a field cannot reach the wire on the route your
+model resolved to, **construction fails and names it** — it is never accepted and quietly ignored:
+
+| Field | Converse | Invoke | Mantle |
+|---|---|---|---|
+| `serviceTier` | `serviceTier` body field | `X-Amzn-Bedrock-Service-Tier` header | **refused** |
+| `latencyOptimized` | `performanceConfig` body field | `X-Amzn-Bedrock-PerformanceConfig-Latency` header | **refused** |
+| `stopSequences` | ✅ | ✅ | ✅ except OpenAI Responses, which has no such parameter — **refused** |
+| `thinking`, `effort` | ✅ | Anthropic dialects only | Anthropic Messages only |
+| `reasoningEffort` | via passthrough | `reasoning_effort` | `reasoning: {effort}` on Responses |
+
+Two consequences worth knowing before you upgrade:
+
+> **`reasoningEffort` is one field with three wire shapes, and you no longer have to care which.** The
+> Responses API nests it (`reasoning: {effort: "low"}`) while Chat Completions keeps it flat
+> (`reasoning_effort: "low"`). Pass the value; the resolved route picks the spelling. Sending the flat
+> form to a GPT-5.x model on `/openai/v1/responses` is a hard `400 Unknown parameter:
+> 'reasoning_effort'`, which is what this used to do.
+
+> **`serviceTier` / `latencyOptimized` on a Mantle-resolved model is now a construction error.** Under
+> `AUTO`, Mantle-capable models resolve to `bedrock-mantle` — so `anthropic.claude-opus-4-8`,
+> `openai.gpt-oss-120b-1:0`, `openai.gpt-5.x` and the Qwen tiers all take this path. Previously the field
+> was accepted and silently dropped: you got an ordinary 200 for a request that never carried it, and no
+> way to tell that from one that did. Set `apiFamily = CONVERSE` (or `INVOKE`) to send it as Bedrock
+> defines it. Mantle's vendor-compatible surfaces do have a `service_tier` body field, but with the
+> **vendor's** value set (`auto|default|flex|fast|priority|ultrafast`) rather than Bedrock's
+> (`default|priority|flex|reserved`) — two first-party sources, one field name, different vocabularies —
+> so this module will not guess a mapping. If you know your model's, send it through
+> `additionalModelRequestFields`.
 
 > **`temperature` has no default, and that is deliberate.** Leave it unset and the field is omitted from
 > the request entirely, so the model applies its own default. This is not a style choice: Anthropic
@@ -457,10 +499,47 @@ ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase(
 check kb->ingest([{content: "Refunds are processed within 5 business days."}]);
 ```
 
-**Find-or-create is by NAME.** `CreateKnowledgeBase` has no upsert and names are not unique per
-account, so `init` searches for an exact name match first: exactly one match attaches (no writes);
-no match creates one (~83s to become `ACTIVE`, bounded by `readyTimeout`); more than one match is a
-construction error naming the candidate ids — pick the id and pass it as a `string` instead.
+**Find-or-create is by NAME.** `CreateKnowledgeBase` has no upsert, so `init` searches for an exact
+name match first: exactly one match attaches (no writes); no match creates one (a MANAGED knowledge
+base typically reaches `ACTIVE` in well under 5s — Bedrock owns the store; a VECTOR one can take on
+the order of a minute, since a customer-owned store has to be provisioned; both are bounded by
+`readyTimeout`); more than one match is a construction error naming the candidate ids — pick the id
+and pass it as a `string` instead.
+
+> **A name match is VERIFIED against the rest of the definition.** The name is only the lookup key.
+> On a match, `init` compares the definition's `roleArn`, embedding-model configuration, KMS key and
+> (for a self-managed knowledge base) `storageConfiguration` against what the knowledge base actually
+> has, and fails construction naming each field that differs. Otherwise a definition carrying, say, a
+> `roleArn` from an entirely different account would attach silently and leave the real role in
+> effect, with no way for the caller to learn the definition it passed is not the one in force. Pass
+> the knowledge base id directly to attach to it as it is. `description` is deliberately not compared
+> — it is a mutable, non-behavioural label.
+
+> **Find-or-create is a read-then-write, and that has a limitation you should know about.**
+> Knowledge base names **are** unique per account — AWS itself rejects a *sequential* duplicate-name
+> `CreateKnowledgeBase` with a 409 — but there is still a race window, because `init` lists by name,
+> sees no match, then creates. This module closes as much of that window as it can, and reports
+> honestly on what it cannot:
+>
+> - **A sequential duplicate (a 409) is recovered automatically.** If another `init()` call already
+>   created a knowledge base under this name by the time this one's create lands, this call re-resolves
+>   the name and attaches to the existing one — the same definition check described above runs on the
+>   recovered attach, so it is never bypassed.
+> - **A deterministic `clientToken`** (derived from the request body) collapses a *retried* identical
+>   create into the original.
+> - **A genuinely concurrent race — two `init()` calls already in flight at the same instant, sharing
+>   the same token — can still both be accepted by AWS.** Measured live: the token collapses retries,
+>   not requests that are already in flight together. This module detects that case *after* its own
+>   create finishes and reports it rather than silently duplicating: the error names the surviving
+>   knowledge base (deterministically the same for every racer, so the account converges on one), the
+>   orphan(s), and the cleanup command (`aws bedrock-agent delete-knowledge-base --knowledge-base-id
+>   <orphan>`). **This module never issues `DeleteKnowledgeBase` itself** — no HTTP `DELETE` verb
+>   exists in it, and a destructive call from a constructor that might lack
+>   `bedrock:DeleteKnowledgeBase` would be worse than the duplicate it is trying to clean up.
+>
+> Callers who cannot tolerate this residual race at all should resolve the knowledge base once (by
+> name or however you like) and pass its **id** on every subsequent `init()`, rather than passing a
+> `KnowledgeBaseDefinition` from multiple places that might run concurrently.
 
 ### Chunking
 
@@ -479,6 +558,17 @@ ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase(
     chunker = new ai:MarkdownChunker());
 ```
 
+> **Client-side chunking rewrites document ids, on purpose.** Bedrock upserts by
+> `customDocumentIdentifier.id`, and this module derives that id from `ai:Metadata.id` when you set
+> one. Ballerina's chunkers copy the parent document's metadata — `id` included — onto every chunk,
+> so a document that split into 20 pieces would submit 20 documents under one id and keep exactly
+> one, silently. A document this module chunks into **more than one** piece therefore submits its
+> chunks as `<id>#0`, `<id>#1`, …; a document that does not fan out keeps `<id>` unchanged, so
+> existing single-chunk corpora re-ingest onto themselves as before. Re-ingesting a document whose
+> chunk count changed leaves the surplus old chunks behind — that is inherent to upsert-by-id, and
+> `deleteByFilter` is how you clear them. Two documents in one `ingest()` call that resolve to the
+> same id are rejected rather than silently overwriting each other.
+
 `ManagedKnowledgeBaseConfig.chunker` is **detected**, not assumed, when left unset: `init` reads the
 resolved data source's actual strategy and defaults to `ai:DISABLE` when Bedrock chunks server-side,
 `ai:AUTO` when it is `NONE`. Passing an explicit `ai:Chunker` against a server-chunking data source
@@ -491,12 +581,20 @@ chunker's own boundaries.
 > missing action on its own. This module's 403 error does name it.
 
 > **`ingest()` is slow, by design.** `IngestKnowledgeBaseDocuments` returns 202 as soon as Bedrock has
-> accepted the documents, not once they are indexed — ~14s measured for a single small document, ~47s
-> for a 97KB one. `ingest()` therefore blocks until every document reaches a terminal status or
-> `ingestTimeout` elapses, so a `retrieve()` immediately afterward sees them. There is deliberately no
-> fire-and-forget mode: `ai:KnowledgeBase.ingest` returns a bare `Error?` with no job handle and no
-> status method, so returning at the 202 would report success for a document that later lands `FAILED`
-> and leave you no way to ever find out.
+> accepted the documents, not once they are indexed, and indexing latency **varies by an order of
+> magnitude** — do not tune against a fixed figure. `ingest()` therefore blocks until every document
+> reaches a terminal status or `ingestTimeout` elapses, so a `retrieve()` immediately afterward sees
+> them. There is deliberately no fire-and-forget mode: `ai:KnowledgeBase.ingest` returns a bare
+> `Error?` with no job handle and no status method, so returning at the 202 would report success for a
+> document that later lands `FAILED` and leave you no way to ever find out.
+>
+> **A freshly accepted document can also stay invisible to the *read* path for a while** —
+> `GetKnowledgeBaseDocuments` can answer `NOT_FOUND` for a document that was genuinely just accepted,
+> not one that failed. `ingest()`'s poll treats that as "not yet visible" and keeps waiting rather than
+> failing fast on it (this is the correct, honest behaviour: a fast-fail here would misreport a
+> read-after-write timing gap as an ingest failure). If you see `ingest()` time out with documents
+> named as "accepted but not yet visible", that is this gap, not a defect — raise `ingestTimeout` if
+> it happens often in your account/region.
 
 > **`retrieve()` cannot return more than 100 results.** `Retrieve` caps `numberOfResults` at 100 and
 > returns **no `nextToken`** when results are truncated, so there is nothing to page with. `maxLimit`
@@ -506,21 +604,72 @@ chunker's own boundaries.
 
 **Bedrock has no metadata-based delete API and no way to read a document's metadata back**
 (`ListKnowledgeBaseDocuments` carries status and identifier only; `GetDocumentContent` returns a
-presigned content URL). `deleteByFilter` reconstructs one: it enumerates every document on every data
-source, then asks `Retrieve` a single yes/no question per document — the caller's filter ANDed onto
-Bedrock's own `_source_uri` system attribute **pinned to that one document**.
+presigned content URL). `deleteByFilter` reconstructs one, per data source, from two **paged
+enumerations**: `Retrieve` with the caller's filter applied, then `Retrieve` again with no filter at
+all, each paged to exhaustion (or a page cap — see below). A candidate document (from
+`ListKnowledgeBaseDocuments`) is then classified by which enumeration(s) saw it:
 
-**The pin is what makes this sound.** Sending the caller's filter alone and collecting matches in bulk
-under-deletes silently: measured, a filter matching 5 documents with `numberOfResults: 10` returned
-only 3, with no `nextToken` to signal the loss. Narrowing to one document removes that failure — the
-candidate set is that document's chunks, so nothing can crowd it out, and pinned probes come back at
-0.88–1.0 against a relevance floor near 0.15 whatever the probe query says. A non-empty result means
-"matches", an empty one means "does not match", and there is no third case.
+| candidate identity was seen in | meaning | action |
+| --- | --- | --- |
+| the FILTERED enumeration | a confirmed match | delete |
+| only the UNFILTERED enumeration | reachable, but genuinely excluded by the filter | skip — sound, not reported |
+| neither | never seen; cannot tell excluded from hidden | indeterminate — named in the error |
 
-The cost is **one `Retrieve` per document in the knowledge base**, so this is a maintenance operation,
-not something to put on a request path. Documents on a non-`CUSTOM`/`S3` data source (a native
-connector) cannot be deleted through this API at all, and are named in the returned error; deletes
-that CAN be made still happen.
+This replaced an earlier per-document PINNED-probe design (the caller's filter ANDed onto a
+`sourceUri == id` leaf, one to two `Retrieve` calls **per candidate document**). That design silently
+deleted nothing at all on a self-managed knowledge base whose data source is `CUSTOM`: Bedrock does
+not emit the pin key (`x-amz-bedrock-kb-source-uri`) for that source type, so every pinned probe came
+back empty. The two-enumeration design does not depend on that key being emitted at all — identity is
+read from whatever the response actually carries (the reserved metadata key when present, or the
+documented `location.customDocumentLocation.id`/`location.s3Location.uri` members).
+
+**Identity is still verified, not just result count.** A non-empty response only says *something* came
+back; it does not say the filter was honoured. If a filter were ever silently ignored, the filtered
+and unfiltered enumerations would return the exact same set, and every document would look like a
+match. `deleteByFilter` checks for exactly that: if a non-nil filter is set and the filtered
+enumeration returns the same set as the unfiltered one (with more than one document in it), the
+result is treated as *ambiguous* — because it has two possible causes, and only one of them is a
+fault:
+
+- the store ignored the filter, so the filtered pass degenerated into the unfiltered one; or
+- the filter is honoured and legitimately selects **every** document — `deleteByFilter({tenant ==
+  "acme"})` on a knowledge base where every document really is `acme`, an ordinary single-tenant
+  cleanup.
+
+To separate them, `deleteByFilter` re-probes once with a filter that no document can possibly match.
+A store that honours filters returns nothing for it, and the delete proceeds; a store that still
+returns results is not applying filters at all, and **`deleteByFilter` refuses to delete anything
+from that data source**, returning an error naming it. If that follow-up probe cannot be completed,
+the refusal stands — an unverifiable filter is not permission to delete. AWS documents this failure
+mode for MongoDB Atlas ("Metadata filtering doesn't work by default").
+
+> **`filters` must contain at least one leaf predicate.** `ai:KnowledgeBase.deleteByFilter` takes
+> filters as a required argument, so a caller assembling them from a collection that happened to be
+> empty would otherwise get silent total deletion — an unfiltered `deleteByFilter` would match every
+> document. An `ai:MetadataFilters` with no leaf predicates is refused. "Delete everything" has to be
+> explicit.
+
+**Cost: two paged `Retrieve` enumerations PER DATA SOURCE** (a small, bounded number of round trips —
+at most 100 pages of 100 results each per enumeration — regardless of how many documents that data
+source holds), not one to two round trips per document. This is a real improvement over the earlier
+design, not just a bug fix: cost no longer scales with the size of the knowledge base. Each
+enumeration pass is capped; if either one hits the cap, the result set may be incomplete, so **nothing
+is deleted from that data source**, reported by name rather than risking an unsound skip. Documents on
+a non-`CUSTOM`/`S3` data source (a native connector) cannot be deleted through this API at all, and are
+named in the returned error; deletes that CAN be made still happen. The per-document delete statuses
+AWS returns are checked, so a document the service did not confirm deleted is reported rather than
+counted as a success.
+
+> **The "reachable but unmatched → excluded by the filter" conclusion rests on an assumption that has
+> not been verified against live AWS: that a paged, unfiltered `Retrieve` is EXHAUSTIVE** — that
+> paging it to its last page visits every document, the way `ListKnowledgeBaseDocuments` is documented
+> to. `Retrieve`'s own API reference documents it as relevance-bounded, not as an
+> exhaustive-enumeration primitive, and this specific question (does paging to the end change that)
+> is not addressed either way. If you can verify this on a knowledge base with more documents than fit
+> on one page, please do — the fallback if it does not hold is a one-line flip in source
+> (`KB_TRUST_UNFILTERED_ENUMERATION`) that trades soundness for caution: an unmatched-but-reachable
+> candidate is then reported indeterminate rather than skipped, and `deleteByFilter` degrades to
+> deleting only what the filtered pass matched.
 
 ### `RetrieveAndGenerate` is unusable on managed knowledge bases
 
@@ -630,33 +779,25 @@ is on you:
 - **MongoDB Atlas metadata filtering does not work by default**; filters must be configured in the
   Atlas vector index first.
 
-### `deleteByFilter` keeps a second probe the managed class dropped
+### `deleteByFilter` — same algorithm as the managed class, a different reserved key
 
-The reconstruction is the same as [the managed one](#deletebyfilter-is-a-reconstruction), with one
-difference. The managed class was able to drop its follow-up probe after measuring that a pinned probe
-scores 0.88–1.0 against a relevance floor near 0.15, which makes a zero-hit result unambiguous.
-
-**That measurement was taken against Bedrock's own vector store and does not transfer here** — on a
-self-managed knowledge base the ranking engine is yours. So a zero-hit probe is re-run with the
-document pin alone; if that also returns nothing, the document is reported as **indeterminate** rather
-than silently skipped, which would under-delete. Cost is one to two `Retrieve` calls per document.
-Once the equivalent measurement exists for a backend, the second probe can be dropped exactly as the
-managed class dropped its own.
-
-A probe counts as a match only when a returned result **is** the document it pinned — checked against
-`x-amz-bedrock-kb-source-uri`, `location.customDocumentLocation.id`, or `location.s3Location.uri`.
-Counting results instead would mean trusting your store to honour the pin, and AWS documents at least
-one backend (MongoDB Atlas) where filtering silently does nothing by default; on such a store every
-probe would "match" and the whole knowledge base would be deleted. The trade is that a backend
-returning none of those identity fields makes every document indeterminate, so `deleteByFilter` becomes
-a no-op that reports rather than a silent mass delete. `deleteByFilter` also **rejects a filter set
-with no leaf predicates** — an empty or all-empty-groups `ai:MetadataFilters` would otherwise select
+The reconstruction is [the same two-enumeration algorithm as the managed one](#deletebyfilter-is-a-reconstruction)
+— literally the same implementation, called with this class's own reserved metadata key and its own
+`vectorSearchConfiguration` search branch instead of the managed class's `_source_uri` and
+`managedSearchConfiguration`. **Self-managed and managed knowledge bases use DIFFERENT reserved
+metadata prefixes** — `_` for managed, `x-amz-bedrock-kb-` for self-managed
+(`x-amz-bedrock-kb-source-uri` specifically) — and reusing the wrong one here would extract no identity
+from any retrieval result, silently deleting nothing. `deleteByFilter` also **rejects a filter set with
+no leaf predicates** — an empty or all-empty-groups `ai:MetadataFilters` would otherwise select
 everything.
 
-> **Nothing on this class has been verified against live AWS.** The reserved attribute name
+> **This algorithm's soundness on a CUSTOMER-OWNED store has not been verified against live AWS the
+> way it has against Bedrock's own vector store.** The reserved attribute name
 > (`x-amz-bedrock-kb-source-uri`) is documented by AWS, but whether Bedrock populates it for a CUSTOM
-> data source on a self-managed knowledge base, and how your store's relevance floor behaves, are
-> unmeasured. Both are flagged in code comments.
+> data source on a self-managed knowledge base is unmeasured here, and the "unfiltered `Retrieve` is
+> exhaustive" premise the algorithm depends on (see the callout under the managed section) was
+> measured, if at all, only against Bedrock's own store. Both are flagged in code comments
+> (`KB_TRUST_UNFILTERED_ENUMERATION`).
 
 
 ## Guardrails
@@ -681,6 +822,11 @@ Construction errors are reserved for what AWS *cannot* diagnose for you:
 - `fips` on a Mantle-resolved model (there is no `bedrock-mantle-fips` host)
 - a guardrail on a Mantle route (the error names the standalone `ApplyGuardrail` API)
 - a `custom-model/` ARN (an artifact, not a deployment)
+- `dualstack` on any route but Mantle (no `.api.aws` host exists for the other four service names)
+- any inference knob the resolved route cannot carry — `serviceTier`/`latencyOptimized` on Mantle,
+  `stopSequences` on OpenAI Responses, `thinking`/`effort`/`reasoningEffort` on a dialect with no such
+  concept. **A field the module cannot honour is refused, never dropped:** a silent drop is
+  indistinguishable, from the `ai:ModelProvider` contract, from a request that honoured it
 
 Everything AWS *can* tell you — a model unavailable in a region, a bad id — is left to Bedrock's own
 `ValidationException`, so this module never becomes a release dependency for AWS's catalogue.

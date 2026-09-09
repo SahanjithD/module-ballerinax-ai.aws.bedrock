@@ -181,7 +181,10 @@ function testRetrieveEmitsOverrideSearchTypeAndRerankingWhenConfigured() returns
     BedrockVectorKnowledgeBase kb = check newVectorRetrieveKb(port, SEARCH_HYBRID,
         {modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.rerank-v1:0",
             numberOfRerankedResults: 3});
-    ai:QueryMatch[] _ = check kb.retrieve("hello", 1);
+    // maxLimit must be >= numberOfRerankedResults here so the B5 clamp (see
+    // testRetrieveClampsNumberOfRerankedResultsToThePerCallMaxLimit) does not
+    // interfere with this test's own assertion, which is about shape, not clamping.
+    ai:QueryMatch[] _ = check kb.retrieve("hello", 5);
     check mockListener.gracefulStop();
 
     map<json> vectorSearch = <map<json>>(<map<json>>(<map<json>>readVectorRetrieveBodies()[0])
@@ -255,6 +258,36 @@ function testRetrieveCapsPerCallByMaxLimitAndNumberOfResults() returns error? {
     map<json> vectorSearch = <map<json>>(<map<json>>(<map<json>>readVectorRetrieveBodies()[0])
         ["retrievalConfiguration"])["vectorSearchConfiguration"];
     test:assertEquals(vectorSearch["numberOfResults"], 2);
+}
+
+// B5 (4b): `numberOfRerankedResults` set at construction with NO `numberOfResults`
+// (so 4a's construction-time check has nothing to compare against — the effective
+// cap is Bedrock's own default until a per-call `maxLimit` narrows it) must still be
+// clamped to what THIS call actually asks for. `retrieve(maxLimit=5)` narrows the
+// per-call `numberOfResults` to 5, so asking to rerank 10 must be clamped to 5 on
+// the wire — never sent as 10, which would ask to rerank more than the search itself
+// can return.
+@test:Config {}
+function testRetrieveClampsNumberOfRerankedResultsToThePerCallMaxLimit() returns error? {
+    final int port = 18698;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new VectorRetrieveMock(), "/");
+    check mockListener.'start();
+    resetVectorRetrieveBodies();
+
+    BedrockVectorKnowledgeBase kb = check newVectorRetrieveKb(port, (),
+        {modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.rerank-v1:0",
+            numberOfRerankedResults: 10});
+    ai:QueryMatch[] _ = check kb.retrieve("hello", 5);
+    check mockListener.gracefulStop();
+
+    map<json> vectorSearch = <map<json>>(<map<json>>(<map<json>>readVectorRetrieveBodies()[0])
+        ["retrievalConfiguration"])["vectorSearchConfiguration"];
+    test:assertEquals(vectorSearch["numberOfResults"], 5);
+    map<json> reranking = <map<json>>(<map<json>>vectorSearch["rerankingConfiguration"])
+        ["bedrockRerankingConfiguration"];
+    test:assertEquals(reranking["numberOfRerankedResults"], 5,
+        "numberOfRerankedResults must be clamped to the per-call numberOfResults, never sent uncapped");
 }
 
 @test:Config {}
