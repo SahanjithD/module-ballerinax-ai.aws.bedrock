@@ -254,6 +254,7 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
             }
             DataSourceDeleteResult result = check resolveDataSourceDeletes(self.dataTransport, self.knowledgeBaseId,
                 dsId, userFilter, candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+            refused.push(...result.notes);
             string? refusalReason = result.refusalReason;
             if refusalReason is string {
                 refused.push(refusalReason);

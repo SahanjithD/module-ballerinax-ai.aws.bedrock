@@ -264,6 +264,7 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
             }
             DataSourceDeleteResult result = check resolveDataSourceDeletes(self.dataTransport, self.knowledgeBaseId,
                 dsId, userFilter, candidates, VECTOR_SOURCE_URI_METADATA_KEY, vectorDeleteRetrieve);
+            refused.push(...result.notes);
             string? refusalReason = result.refusalReason;
             if refusalReason is string {
                 refused.push(refusalReason);

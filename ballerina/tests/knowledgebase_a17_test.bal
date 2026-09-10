@@ -351,3 +351,112 @@ function testABareIdDocumentIsNotDeletedOnItsFanOutNamesakesEvidence() returns e
         }
     }
 }
+
+// ============================================================================
+// A20 — a pin group larger than one `Retrieve` page must not be reported as done.
+//
+// `Retrieve` answers ONE relevance-bounded call of at most `numberOfResults` and
+// offers no `nextToken`, so a group above the cap cannot be enumerated. A 180-sibling
+// family lost exactly 100 members while the enumeration reported `truncated: false`,
+// and the 80 survivors were never named — a partial delete reported as a complete one.
+// ============================================================================
+
+// A 180-member family under one `ai:Metadata.id`, behind a store that caps every
+// answer at the requested `numberOfResults` — which is what the real API does.
+isolated service class OversizedPinGroupMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
+        map<json> search = <map<json>>(<map<json>>(<map<json>>payload)["retrievalConfiguration"])
+            ["managedSearchConfiguration"];
+        int requested = <int>search["numberOfResults"];
+
+        // The two probes see DIFFERENT windows of the family, because each is its own
+        // relevance-ranked call and the filter changes the ranking. This is what the
+        // live failure looked like: survivors scattered across the whole index range
+        // (`#0`,`#1`,`#3` deleted, `#2`,`#4`,`#5` kept) rather than a clean tail.
+        //
+        // Filtered probe -> the first 100 siblings. Unfiltered pin probe -> a window
+        // shifted by 80, so it reaches every sibling the filtered probe missed. Under
+        // the old rule those 80 were "reachable but unmatched" and were skipped
+        // SILENTLY; the caller was told nothing.
+        boolean filtered = payload.toJsonString().includes("tenant");
+        int firstIndex = filtered ? 0 : 80;
+
+        json[] results = [];
+        foreach int i in firstIndex ..< 180 {
+            if results.length() >= requested {
+                break;
+            }
+            results.push(a19Result(string `7#${i}`, "globex"));
+        }
+        // No `nextToken`: the real API offers none, which is precisely why a full page
+        // cannot be read as "the result set ended".
+        return {retrievalResults: results};
+    }
+}
+
+@test:Config {}
+function testAPinGroupBeyondTheRetrieveCapIsReportedNotSilentlyHalfDeleted() returns error? {
+    final int port = 18786;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new OversizedPinGroupMock(), "/");
+    check mockListener.'start();
+
+    DeletableDocument[] candidates = [];
+    foreach int i in 0 ..< 180 {
+        string id = string `7#${i}`;
+        candidates.push({sourceValue: id, identifier: {dataSourceType: "CUSTOM", custom: {id}}});
+    }
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        // The confirmed 100 are still deleted: each was exactly identified under the
+        // caller's filter, which is sound however much of the group the probe saw.
+        // Deleting them is also what lets a repeat call finish the job.
+        test:assertEquals(result.toDelete.length(), KB_MAX_RESULTS_PER_CALL, "confirmed matches must still be deleted");
+
+        // THE regression: the 80 that were cut off must be NAMED, not silently kept.
+        test:assertEquals(result.indeterminate.length(), 80,
+            string `every unchecked sibling must be reported: ${result.indeterminate.length()}`);
+
+        // And the caller must be told why, and that repeating the call continues.
+        test:assertTrue(result.notes.length() > 0, "the cap must be explained");
+        string note = result.notes[0];
+        test:assertTrue(note.includes("cap"), note);
+        test:assertTrue(note.includes("repeat"), note);
+    }
+}
+
+// The cap note must NOT appear when a group fits: a full page is only suspicious when
+// it is the cap, and a group of exactly one page's worth that is fully matched is done.
+@test:Config {}
+function testAGroupThatFitsInOnePageIsNotFlaggedAsTruncated() returns error? {
+    final int port = 18787;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FanOutFamilyMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        a19Candidates(), SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        test:assertEquals(result.notes.length(), 0, result.notes.toJsonString());
+        test:assertEquals(result.toDelete.length(), 30);
+        test:assertEquals(result.indeterminate.length(), 0);
+    }
+}

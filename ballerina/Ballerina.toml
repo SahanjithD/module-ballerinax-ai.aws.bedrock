@@ -1,7 +1,7 @@
 [package]
 org = "dasunorg"
 name = "ai.aws.bedrock"
-version = "1.2.0"
+version = "1.2.1"
 distribution = "2201.13.5"
 authors = ["Ballerina"]
 keywords = ["ai", "aws", "bedrock", "llm", "embeddings", "converse", "mantle", "Area/AI & Machine Learning", "Type/Model Provider", "Type/Embedding Provider", "Type/Connector", "Vendor/AWS"]
