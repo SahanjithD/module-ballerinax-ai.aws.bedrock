@@ -392,7 +392,7 @@ model resolved to, **construction fails and names it** — it is never accepted 
 | `thinking`, `effort` | ✅ | Anthropic dialects only | Anthropic Messages only |
 | `reasoningEffort` | via passthrough | `reasoning_effort` | `reasoning: {effort}` on Responses |
 
-Two consequences worth knowing before you upgrade:
+Worth knowing before you upgrade:
 
 > **`reasoningEffort` is one field with three wire shapes, and you no longer have to care which.** The
 > Responses API nests it (`reasoning: {effort: "low"}`) while Chat Completions keeps it flat
@@ -419,6 +419,16 @@ Two consequences worth knowing before you upgrade:
 > `400 temperature is deprecated for this model`, so a module-level default would make them unusable out
 > of the box. Set `temperature` only for models you know accept it — Nova, Mistral, Qwen, Gemma,
 > DeepSeek, GPT-OSS, and Claude 4.6 and earlier.
+
+> **`reasoningEffort` is a `ReasoningEffort` enum, and `minimal` is gpt-oss-only.** The members —
+> `REASONING_NONE`, `REASONING_MINIMAL`, `REASONING_LOW`, `REASONING_MEDIUM`, `REASONING_HIGH`,
+> `REASONING_XHIGH`, `REASONING_MAX` — are the union of what the OpenAI models on Bedrock accepted on
+> 2026-09-09, read out of the endpoint's own 400s in `us-east-1`. Membership is not a promise every
+> model takes it: the two families differ in exactly one value, `openai.gpt-oss-*` accepting `minimal`
+> where every `openai.gpt-5.x` refuses it with `Invalid value: 'minimal'`. The module does **not**
+> enforce that split — which values a model accepts is the model's contract, AWS's model cards document
+> no list for either family, and a per-model table here would only go stale. The endpoint stays the
+> authority: its refusal enumerates the set that model does accept, which is the list worth reading.
 
 `maxTokens` **does** default (to 4096). It is capped per model — Nova Pro/Lite/Micro top out at 5K output
 tokens — and on adaptive-thinking models the thinking pass is billed against the same ceiling, so raise
@@ -612,8 +622,9 @@ all, each paged to exhaustion (or a page cap — see below). A candidate documen
 | candidate identity was seen in | meaning | action |
 | --- | --- | --- |
 | the FILTERED enumeration | a confirmed match | delete |
-| only the UNFILTERED enumeration | reachable, but genuinely excluded by the filter | skip — sound, not reported |
-| neither | never seen; cannot tell excluded from hidden | indeterminate — named in the error |
+| a pinned probe reaches it WITH the filter | the filter matched it | delete |
+| a pinned probe reaches it only WITHOUT the filter | the filter excluded it | skip — sound, not reported |
+| no pinned probe reaches it at all | nothing can be concluded | indeterminate — named in the error |
 
 This replaced an earlier per-document PINNED-probe design (the caller's filter ANDed onto a
 `sourceUri == id` leaf, one to two `Retrieve` calls **per candidate document**). That design silently
@@ -660,16 +671,25 @@ named in the returned error; deletes that CAN be made still happen. The per-docu
 AWS returns are checked, so a document the service did not confirm deleted is reported rather than
 counted as a success.
 
-> **The "reachable but unmatched → excluded by the filter" conclusion rests on an assumption that has
-> not been verified against live AWS: that a paged, unfiltered `Retrieve` is EXHAUSTIVE** — that
-> paging it to its last page visits every document, the way `ListKnowledgeBaseDocuments` is documented
-> to. `Retrieve`'s own API reference documents it as relevance-bounded, not as an
-> exhaustive-enumeration primitive, and this specific question (does paging to the end change that)
-> is not addressed either way. If you can verify this on a knowledge base with more documents than fit
-> on one page, please do — the fallback if it does not hold is a one-line flip in source
-> (`KB_TRUST_UNFILTERED_ENUMERATION`) that trades soundness for caution: an unmatched-but-reachable
-> candidate is then reported indeterminate rather than skipped, and `deleteByFilter` degrades to
-> deleting only what the filtered pass matched.
+> **Why candidates are resolved one at a time.** An earlier design classified a
+> candidate by whether a paged UNFILTERED `Retrieve` had seen it: seen there but not in
+> the filtered pass was read as "the filter excluded it". That was measured false
+> against live AWS on 2026-09-09 — on a knowledge base with 9 usable documents, a fully
+> paged unfiltered `Retrieve` reached 6 and missed 3 — so a document it happened to
+> miss was silently skipped by a delete that should have removed it. `Retrieve` is
+> documented as returning "the most relevant results", and paging to the last page does
+> not make it an enumeration primitive.
+>
+> Pinning fixes this at the root: a probe filtered to one document narrows the
+> candidate set to one, so what `Retrieve` chose to rank never enters the answer. The
+> second, unfiltered pinned probe is what makes a skip sound — it proves the pin
+> reaches that exact document, so the first probe's silence is attributable to the
+> filter and nothing else. Both probes verify identity rather than counting results.
+>
+> **`deleteByFilter` still under-deletes rather than over-deletes**, and you should read
+> its error: a document no probe can reach is named as indeterminate instead of being
+> assumed to match or not match. Treat a returned `ai:Error` as a partial result — the
+> confirmed deletes did happen.
 
 ### `RetrieveAndGenerate` is unusable on managed knowledge bases
 
@@ -791,13 +811,15 @@ from any retrieval result, silently deleting nothing. `deleteByFilter` also **re
 no leaf predicates** — an empty or all-empty-groups `ai:MetadataFilters` would otherwise select
 everything.
 
-> **This algorithm's soundness on a CUSTOMER-OWNED store has not been verified against live AWS the
-> way it has against Bedrock's own vector store.** The reserved attribute name
-> (`x-amz-bedrock-kb-source-uri`) is documented by AWS, but whether Bedrock populates it for a CUSTOM
-> data source on a self-managed knowledge base is unmeasured here, and the "unfiltered `Retrieve` is
-> exhaustive" premise the algorithm depends on (see the callout under the managed section) was
-> measured, if at all, only against Bedrock's own store. Both are flagged in code comments
-> (`KB_TRUST_UNFILTERED_ENUMERATION`).
+> **Measured, and worse on a customer-owned store.** Bedrock does **not** populate
+> `x-amz-bedrock-kb-source-uri` for a CUSTOM data source on a self-managed knowledge base — confirmed
+> live — which is why identity falls back to `location.customDocumentLocation.id`. Separately, the
+> "unfiltered `Retrieve` is exhaustive" premise was measured false on the managed side (see the
+> callout under the managed section) and is **unmeasured on a customer-owned store**, where there is
+> no reason to expect it to hold better. `deleteByFilter` here therefore confirms deletes only through
+> the filtered enumeration and reports everything else; on S3 Vectors specifically, a filtered
+> `Retrieve` has been observed to miss a just-ingested document that trivially satisfies the filter,
+> so expect `deleteByFilter` to under-delete and report rather than to complete silently.
 
 
 ## Guardrails

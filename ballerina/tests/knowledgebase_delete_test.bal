@@ -16,26 +16,26 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/test;
 
-// End-to-end test of `deleteByFilter`'s A17 two-enumeration algorithm against a
-// stubbed bedrock-agent/bedrock-agent-runtime pair on a local listener. Both agent
-// planes resolve to the SAME `serviceUrl` here (a concrete `http://localhost:...`
-// carries no `{endpoint}` placeholder to vary), so one mock serves both.
+// End-to-end test of `deleteByFilter` against a stubbed bedrock-agent /
+// bedrock-agent-runtime pair on a local listener. Both agent planes resolve to the
+// SAME `serviceUrl` here (a concrete `http://localhost:...` carries no `{endpoint}`
+// placeholder to vary), so one mock serves both.
 //
-// Scenario: one CUSTOM data source with three INDEXED documents —
-//   - 'doc-match': present in BOTH the filtered and the unfiltered enumeration ->
-//     a confirmed match -> deleted.
-//   - 'doc-skip-a'/'doc-skip-b': present in the UNFILTERED enumeration but NOT the
-//     filtered one -> reachable and genuinely excluded by the filter -> left alone,
-//     and NOT reported as a problem.
+// Scenario: one CUSTOM data source with three INDEXED documents, of which only
+// 'doc-match' carries tenant=acme —
+//   - 'doc-match': confirmed by the filtered enumeration -> deleted.
+//   - 'doc-skip-a'/'doc-skip-b': not confirmed by the enumeration, then resolved
+//     INDIVIDUALLY by pinned probes — the pin reaches each one without the filter and
+//     not with it, so the filter is what excluded them -> left alone, not reported.
 // Plus one SHAREPOINT data source, which `DocumentIdentifier` cannot address at all
 // -> reported as undeletable, never silently ignored.
 //
-// Exactly TWO `Retrieve` calls happen per (deletable) data source — one filtered
-// enumeration, one unfiltered — regardless of how many candidate documents that data
-// source holds, asserted below. This replaced the old per-document PINNED probe
-// (`userFilter AND _source_uri==id`, one to two `Retrieve` calls PER CANDIDATE),
-// which returned nothing at all on a self-managed knowledge base with a CUSTOM data
-// source, since Bedrock does not emit `_source_uri` there (A17).
+// The per-document probes are the A18 repair. Resolving a candidate by MEMBERSHIP in
+// a paged unfiltered enumeration was measured unsound — a fully paged unfiltered
+// `Retrieve` reached 6 of a live knowledge base's 9 usable documents — so a document
+// it missed was silently skipped by a delete that should have removed it. A pinned
+// probe narrows the candidate set to one document, so what `Retrieve` chose to rank
+// never enters the answer.
 
 const string DEL_KB_ID = "KBDELTEST1";
 const string DEL_DS_CUSTOM = "DSCUSTOM01";
@@ -181,32 +181,57 @@ isolated service class DeleteTestMock {
     }
 }
 
-// The enumeration dispatcher: a FILTERED call (the request body carries a `filter`
-// under `managedSearchConfiguration`) sees only 'doc-match'; an UNFILTERED call sees
-// all three. Both are asserted to ask for a 100-result page — `KB_MAX_RESULTS_PER_CALL`
-// — and neither carries a `nextToken` here, since three results fit on one page.
+// A stand-in vector store that actually EVALUATES the filter it is sent, rather than
+// answering "filtered" vs "unfiltered". The A17/A18 rework resolves each unconfirmed
+// candidate with a pinned probe (`pin == doc`, optionally ANDed with the caller's
+// filter), and it sends a sentinel control filter that must match nothing — so a mock
+// that keys off the mere PRESENCE of a filter cannot exercise any of it.
+//
+// Three documents, of which only 'doc-match' carries tenant=acme.
+isolated function deleteTestDocs() returns map<map<json>> => {
+    "doc-match": {"tenant": "acme", "_source_uri": "doc-match"},
+    "doc-skip-a": {"tenant": "globex", "_source_uri": "doc-skip-a"},
+    "doc-skip-b": {"tenant": "globex", "_source_uri": "doc-skip-b"}
+};
+
+// Evaluates the `RetrievalFilter` subset this module ever emits: an `equals` leaf, and
+// an `andAll` of them. Anything else is an error rather than a silent pass, so a
+// change in emitted filter shape fails loudly here.
+isolated function deleteTestFilterMatches(json filter, map<json> metadata) returns boolean|error {
+    map<json> f = <map<json>>filter;
+    if f.hasKey("equals") {
+        map<json> leaf = <map<json>>f["equals"];
+        return metadata[<string>leaf["key"]] == leaf["value"];
+    }
+    if f.hasKey("andAll") {
+        foreach json child in <json[]>f["andAll"] {
+            if !check deleteTestFilterMatches(child, metadata) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return error(string `mock cannot evaluate filter ${filter.toJsonString()}`);
+}
+
 isolated function deleteTestMockRetrieve(json body) returns json|error {
     recordRetrieveProbe();
     map<json> bodyMap = <map<json>>body;
     map<json> managedSearch =
         <map<json>>(<map<json>>bodyMap["retrievalConfiguration"])["managedSearchConfiguration"];
-    if managedSearch["numberOfResults"] != 100 {
-        return error(string `expected a 100-result enumeration page: ${body.toJsonString()}`);
+    json? filter = managedSearch.hasKey("filter") ? managedSearch["filter"] : ();
+
+    json[] results = [];
+    foreach [string, map<json>] [id, metadata] in deleteTestDocs().entries() {
+        if filter is () || check deleteTestFilterMatches(filter, metadata) {
+            results.push(deleteTestRetrievalResult(id));
+        }
     }
-    if managedSearch.hasKey("filter") {
-        return {retrievalResults: [deleteTestRetrievalResult("doc-match")]};
-    }
-    return {
-        retrievalResults: [
-            deleteTestRetrievalResult("doc-match"),
-            deleteTestRetrievalResult("doc-skip-a"),
-            deleteTestRetrievalResult("doc-skip-b")
-        ]
-    };
+    return {retrievalResults: results};
 }
 
 @test:Config {}
-function testDeleteByFilterDeletesMatchesSkipsExclusionsAndReportsUndeletableSources() returns error? {
+function testDeleteByFilterDeletesMatchesAndReportsEveryUnconfirmedCandidate() returns error? {
     final int port = 18651;
     http:Listener mockListener = check new (port);
     check mockListener.attach(new DeleteTestMock(), "/");
@@ -228,17 +253,22 @@ function testDeleteByFilterDeletesMatchesSkipsExclusionsAndReportsUndeletableSou
     map<json> deletedIdentifier = <map<json>>deleted[0];
     test:assertEquals((<map<json>>deletedIdentifier["custom"])["id"], "doc-match");
 
-    // Exactly ONE filtered enumeration and ONE unfiltered enumeration for the CUSTOM
-    // data source — cost no longer scales with the number of candidate documents.
-    test:assertEquals(readRetrieveProbeCount(), 2, "expected exactly one filtered and one unfiltered enumeration");
+    // The call budget for the CUSTOM data source: one sentinel control probe, one
+    // filtered enumeration, one pin-key observation, then two pinned probes for each
+    // of the two candidates the enumeration did not confirm = 7. Only the last term
+    // scales with candidates, and only with UNCONFIRMED ones — a filter that matches
+    // everything costs the three fixed calls and nothing more.
+    test:assertEquals(readRetrieveProbeCount(), 7, "unexpected Retrieve call budget");
 
-    // The undeletable data source is reported; the two excluded documents are not —
-    // both are reachable under the unfiltered pass, so exclusion is a sound
-    // conclusion.
+    // The undeletable data source is reported. The two excluded documents are NOT:
+    // each was resolved by its own pinned probe, which reached it without the filter
+    // and not with it, so "the filter excluded it" is an observation about that
+    // document rather than an inference from one enumeration's coverage.
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         string msg = result.message();
         test:assertTrue(msg.includes(DEL_DS_SHAREPOINT) || msg.includes("SHAREPOINT"), msg);
-        test:assertFalse(msg.includes("doc-skip"), msg);
+        test:assertFalse(msg.includes("doc-skip"),
+            string `a document the pin proved excluded by the filter must not be reported: ${msg}`);
     }
 }

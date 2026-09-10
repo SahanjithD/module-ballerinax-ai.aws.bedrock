@@ -126,16 +126,44 @@ isolated service class VectorDeleteMock {
             json? filter = vectorSearch["filter"] ?: ();
             recordVectorProbe(filter);
 
-            // FILTERED enumeration (filter present): only the genuine match.
-            if filter !is () {
-                return {retrievalResults: [vecDelResult(VDEL_MATCH_ID)]};
+            // A store that genuinely evaluates the filter it is sent. `VDEL_HIDDEN_ID`
+            // is absent from this table entirely: it models a document `Retrieve` will
+            // not return under ANY filter, which is what makes it indeterminate rather
+            // than merely excluded.
+            map<map<json>> docs = {
+                [VDEL_MATCH_ID]: {"tenant": "acme", "x-amz-bedrock-kb-source-uri": VDEL_MATCH_ID},
+                [VDEL_MISS_ID]: {"tenant": "globex", "x-amz-bedrock-kb-source-uri": VDEL_MISS_ID}
+            };
+            json[] results = [];
+            foreach [string, map<json>] [id, metadata] in docs.entries() {
+                if filter is () || check vecDelFilterMatches(filter, metadata) {
+                    results.push(vecDelResult(id));
+                }
             }
-            // UNFILTERED (reachability) enumeration: match AND miss are both
-            // reachable; hidden is reachable under neither.
-            return {retrievalResults: [vecDelResult(VDEL_MATCH_ID), vecDelResult(VDEL_MISS_ID)]};
+            return {retrievalResults: results};
         }
         return error(string `unexpected POST ${p}`);
     }
+}
+
+// Evaluates the `RetrievalFilter` subset this module emits — an `equals` leaf and an
+// `andAll` of them. An unknown shape is an error, not a silent pass, so a change in
+// the emitted filter fails loudly here instead of quietly matching everything.
+isolated function vecDelFilterMatches(json filter, map<json> metadata) returns boolean|error {
+    map<json> f = <map<json>>filter;
+    if f.hasKey("equals") {
+        map<json> leaf = <map<json>>f["equals"];
+        return metadata[<string>leaf["key"]] == leaf["value"];
+    }
+    if f.hasKey("andAll") {
+        foreach json child in <json[]>f["andAll"] {
+            if !check vecDelFilterMatches(child, metadata) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return error(string `mock cannot evaluate filter ${filter.toJsonString()}`);
 }
 
 isolated function vecDelResult(string id) returns json => {
@@ -198,7 +226,7 @@ function testRetrievalResultWithNoIdentityFieldsIdentifiesNothing() {
 // `probe-match`'s identity would never be extracted from either enumeration's
 // results, and it would be reported indeterminate instead of deleted.
 @test:Config {}
-function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndDeletesOnlyTheMatch() returns error? {
+function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndReportsUnconfirmed() returns error? {
     final int port = 18701;
     http:Listener mockListener = check new (port);
     check mockListener.attach(new VectorDeleteMock(), "/");
@@ -216,14 +244,24 @@ function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndDeletesOn
     ai:Error? result = kb.deleteByFilter(filters);
     check mockListener.gracefulStop();
 
-    // Exactly TWO `Retrieve` calls for the one CUSTOM data source — one filtered
-    // enumeration, one unfiltered — regardless of the THREE candidate documents.
-    // Replaced the old per-document pinned probe (one to two `Retrieve` calls PER
-    // CANDIDATE), which returned nothing at all on a CUSTOM data source (A17).
+    // The probe sequence, in order: the sentinel control (which must match nothing on
+    // a store that honours filters), the filtered enumeration carrying the RAW user
+    // filter, then the pin-key observation.
     json[] probes = readVectorProbes();
-    test:assertEquals(probes.length(), 2, probes.toJsonString());
-    test:assertEquals(probes[0], {'equals: {key: "tenant", value: "acme"}}, "the filtered pass sends the RAW user filter, unwrapped — no per-document pin");
-    test:assertEquals(probes[1], (), "the unfiltered (reachability) pass sends no filter at all");
+    test:assertEquals(probes[0],
+        {'equals: {key: VECTOR_SOURCE_URI_METADATA_KEY, value: FILTER_CONTROL_SENTINEL}},
+        "the control probe must pin a value no document can carry");
+    test:assertEquals(probes[1], {'equals: {key: "tenant", value: "acme"}},
+        "the filtered enumeration sends the RAW user filter, unwrapped");
+    test:assertEquals(probes[2], (), "the pin-key observation sends no filter at all");
+
+    // Every later probe is PINNED to one document — the A18 repair. None of them is
+    // the bare user filter, because no candidate is resolved by set membership.
+    test:assertTrue(probes.length() > 3, probes.toJsonString());
+    foreach int i in 3 ..< probes.length() {
+        test:assertTrue(probes[i].toJsonString().includes(VECTOR_SOURCE_URI_METADATA_KEY),
+            string `probe ${i} is not pinned to a document: ${probes[i].toJsonString()}`);
+    }
 
     // Only the genuine match is deleted.
     json[] deletes = readVectorDeletes();
@@ -232,15 +270,17 @@ function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndDeletesOn
     test:assertEquals(identifiers.length(), 1);
     test:assertEquals(identifiers[0], {dataSourceType: "CUSTOM", custom: {id: VDEL_MATCH_ID}});
 
-    // `probe-hidden` was reachable under neither enumeration, so it is reported
-    // rather than silently skipped; `probe-miss` was reachable but excluded by the
-    // filter, so it must NOT be reported.
+    // The pin tells the two non-matches apart, which is the whole point of resolving
+    // candidates individually. `probe-miss` is reachable by its pin but not under the
+    // filter, so the FILTER excluded it — sound, and silent. `probe-hidden` answers
+    // neither probe, so nothing can be concluded about it — reported.
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         string msg = result.message();
-        test:assertTrue(msg.includes(VDEL_HIDDEN_ID), msg);
+        test:assertTrue(msg.includes(VDEL_HIDDEN_ID),
+            string `a document the pin could not reach must be reported: ${msg}`);
         test:assertFalse(msg.includes(VDEL_MISS_ID),
-            string `a document genuinely excluded by the filter must not be reported: ${msg}`);
+            string `a document the pin proved excluded by the filter must not be reported: ${msg}`);
     }
 }
 
@@ -327,13 +367,16 @@ function testDeleteByFilterDoesNotMassDeleteWhenTheStoreIgnoresTheFilter() retur
     test:assertEquals(readVectorDeletes().length(), 0,
         "a store that ignores the filter must not cause any deletion");
 
-    // And the caller must be told, not left thinking it succeeded.
+    // And the caller must be told, not left thinking it succeeded. The sentinel
+    // control catches this store before the filtered enumeration is trusted at all,
+    // so the whole DATA SOURCE is refused by name rather than each document being
+    // reported individually — a store that never applies filters says nothing about
+    // any particular document.
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         string msg = result.message();
-        foreach string id in [VDEL_MATCH_ID, VDEL_MISS_ID, VDEL_HIDDEN_ID] {
-            test:assertTrue(msg.includes(id), string `${id} was not reported as indeterminate: ${msg}`);
-        }
+        test:assertTrue(msg.includes(VDEL_DS_ID), msg);
+        test:assertTrue(msg.includes("honouring metadata filters"), msg);
     }
 }
 
