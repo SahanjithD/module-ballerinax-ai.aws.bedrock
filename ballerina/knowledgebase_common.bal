@@ -1227,10 +1227,18 @@ isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, stri
         }
         nextToken = respNextToken;
         if nextToken is () {
-            break;
+            // A20: `nextToken is ()` does NOT mean "you have seen everything" — on
+            // this API it means "no more pages are offered", and `Retrieve` does not
+            // offer any. It answers one relevance-bounded call of at most
+            // `numberOfResults`, so a FULL page is the cap binding the result set,
+            // not the result set ending. Treating that as exhaustion is what let a
+            // 180-sibling family lose exactly 100 members while this reported
+            // `truncated: false` — the survivors were scattered across the whole
+            // index range (`#0`,`#1`,`#3` deleted, `#2`,`#4`,`#5` kept), which is the
+            // signature of one ranked call rather than a missed page.
+            return {identities, truncated: results.length() >= KB_MAX_RESULTS_PER_CALL};
         }
     }
-    return {identities, truncated: false};
 }
 
 // A17: the NEGATIVE CONTROL for the "does this store honour metadata filters" check.
@@ -1285,6 +1293,10 @@ type DataSourceDeleteResult record {|
     json[] toDelete;
     string[] indeterminate;
     string? refusalReason;
+    # Explanations that are not per-document and not a refusal — currently the A20
+    # cap note, which tells the caller WHY a large pin group could not be finished
+    # and that calling again continues it.
+    string[] notes = [];
 |};
 
 // Resolves one data source's candidates to a delete set (A17/A18).
@@ -1336,11 +1348,11 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
 
     DeleteEnumeration matchedEnum =
         check enumerateDeleteIdentities(dataTransport, kbId, userFilter, sourceUriKey, retrieveCaller);
-    if matchedEnum.truncated {
-        return dataSourceRefusal(dsId,
-            string `the filtered enumeration exceeded ${KB_DELETE_ENUMERATION_MAX_PAGES} pages, so the ` +
-            "confirmed-match set may be incomplete");
-    }
+    // The fast path truncating is NOT an error and must not refuse the data source:
+    // any data source with more than `KB_MAX_RESULTS_PER_CALL` matches truncates here
+    // by definition. An identity it confirmed is still a sound delete, and a candidate
+    // it missed simply falls through to a pin group, which resolves it individually.
+    // Truncation here costs round trips, not correctness.
 
     json[] toDelete = [];
     DeletableDocument[] unresolved = [];
@@ -1381,14 +1393,33 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
         group.push(candidate);
         groups[key] = group;
     }
+    int truncatedGroups = 0;
     foreach [string, DeletableDocument[]] [pinValue, group] in groups.entries() {
-        [json[], string[]] [groupDeletes, groupIndeterminate] =
+        [json[], string[], boolean] [groupDeletes, groupIndeterminate, groupTruncated] =
             check resolvePinGroup(dataTransport, kbId, dsId, userFilter, group, pinValue, pinKey, sourceUriKey,
                 retrieveCaller);
         toDelete.push(...groupDeletes);
         indeterminate.push(...groupIndeterminate);
+        if groupTruncated {
+            truncatedGroups += 1;
+        }
     }
-    return {toDelete, indeterminate, refusalReason: ()};
+
+    // A20: say WHY those candidates are unresolved, and that the call makes progress.
+    // `Retrieve` cannot enumerate a set larger than its own cap and offers no
+    // `nextToken`, so a pin group above the cap is not resolvable in one call. The
+    // confirmed matches ARE deleted, which shrinks the group, so the documents that
+    // were cut off surface within the cap next time: repeating the same
+    // `deleteByFilter` converges instead of stalling.
+    string[] notes = [];
+    if truncatedGroups > 0 {
+        notes.push(string `data source '${dsId}': ${truncatedGroups} group(s) of documents sharing one ` +
+            string `metadata id exceeded the ${KB_MAX_RESULTS_PER_CALL}-result 'Retrieve' cap, so the ` +
+            "documents beyond it could not be checked against the filter and are listed above as " +
+            "unconfirmed. The confirmed matches WERE deleted — repeat the same 'deleteByFilter' call to " +
+            "continue with the rest.");
+    }
+    return {toDelete, indeterminate, refusalReason: (), notes};
 }
 
 // A data source touched not at all: nothing deleted, nothing blamed on a document.
@@ -1396,6 +1427,7 @@ isolated function dataSourceRefusal(string dsId, string reason) returns DataSour
     => {
         toDelete: [],
         indeterminate: [],
+        notes: [],
         refusalReason: string `data source '${dsId}': ${reason} — nothing was deleted from this data source.`
     };
 
@@ -1461,7 +1493,7 @@ isolated function observePinKey(BedrockTransport dataTransport, string kbId, str
 // paging terminates on the group's own size and every member is seen exactly.
 isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, string dsId, json? userFilter,
         DeletableDocument[] group, string pinValue, string pinKey, string sourceUriKey,
-        DeleteRetrieveCaller retrieveCaller) returns [json[], string[]]|ai:Error {
+        DeleteRetrieveCaller retrieveCaller) returns [json[], string[], boolean]|ai:Error {
     json pin = pinnedFilter(pinKey, pinValue);
     json filtered = userFilter is () ? pin : {andAll: [userFilter, pin]};
 
@@ -1480,19 +1512,26 @@ isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, s
         ? {identities: {}, truncated: false}
         : check enumerateDeleteIdentities(dataTransport, kbId, pin, sourceUriKey, retrieveCaller);
 
+    // A20: a probe that came back FULL was cut to the cap by relevance, so absence
+    // from its results is not evidence of anything. "Reached without the filter and
+    // not with it" only means "the filter excluded it" when both probes actually saw
+    // the whole group — otherwise the candidate is unresolved, not excluded.
+    boolean truncated = matchedProbe.truncated || reachableProbe.truncated;
+
     json[] toDelete = [];
     string[] indeterminate = [];
     foreach DeletableDocument candidate in group {
         if matchedProbe.identities.hasKey(candidate.sourceValue) {
+            // Exactly identified under the caller's filter — sound regardless of
+            // whether the probe saw the rest of the group.
             toDelete.push(candidate.identifier);
-        } else if !reachableProbe.identities.hasKey(candidate.sourceValue) {
-            // Never reached, or reached only by a truncated probe: nothing can be
-            // concluded about the filter, so say so rather than assume either way.
+        } else if truncated || !reachableProbe.identities.hasKey(candidate.sourceValue) {
             indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
         }
-        // else: reached without the filter and not with it — the filter excluded it.
+        // else: both probes saw the whole group, reached this document without the
+        // filter and not with it — the filter excluded it.
     }
-    return [toDelete, indeterminate];
+    return [toDelete, indeterminate, truncated];
 }
 
 // The pin group a candidate belongs to: every document one pinned filter selects.

@@ -697,6 +697,17 @@ counted as a success.
 > its error: a document no probe can reach is named as indeterminate instead of being
 > assumed to match or not match. Treat a returned `ai:Error` as a partial result — the
 > confirmed deletes did happen.
+>
+> **A document chunked into more than 100 pieces needs more than one call.** `Retrieve`
+> answers one relevance-bounded call of at most 100 results and offers no `nextToken`,
+> so a set of documents sharing one `ai:Metadata.id` cannot be enumerated past that cap
+> — there is no filter that can partition siblings, because they share one metadata
+> record by construction. When a group exceeds the cap, the documents beyond it are
+> reported as unconfirmed rather than assumed excluded, and the error says so. The
+> confirmed matches are still deleted, which shrinks the group, so **repeating the same
+> `deleteByFilter` call converges** — a 180-chunk document takes two calls. An earlier
+> version read a full page as "the result set ended" and reported a half-finished
+> delete as a complete one.
 
 ### `RetrieveAndGenerate` is unusable on managed knowledge bases
 
