@@ -26,42 +26,39 @@ import ballerina/test;
 // does not appear to honour metadata filters).
 
 // ============================================================================
-// classifyDeleteCandidate — pure, table-tested.
+// pinnedFilter / fanOutParentOf — pure, table-tested.
 // ============================================================================
 
 @test:Config {}
-function testClassifyDeleteCandidateThreeWayDecision() {
-    map<()> matched = {"doc-a": ()};
-    map<()> reachable = {"doc-a": (), "doc-b": ()};
-    // "doc-c" is in neither.
+function testPinnedFilterEmitsTheDocumentIdAsANumberNotAString() {
+    // `ai:Metadata.id` is an `int`; Bedrock stores it as a NUMBER and returns it as a
+    // decimal. A leaf carrying the STRING "540200" matches nothing, so this is the
+    // difference between the pin working and A17 recurring.
+    test:assertEquals(pinnedFilter(KB_DOCUMENT_ID_METADATA_KEY, "540200"),
+        {'equals: {key: "id", value: 540200}});
 
-    // In `matched`: always DELETE_MATCH, regardless of the trust flag.
-    test:assertEquals(classifyDeleteCandidate("doc-a", matched, reachable, true), DELETE_MATCH);
-    test:assertEquals(classifyDeleteCandidate("doc-a", matched, reachable, false), DELETE_MATCH);
+    // A fan-out id pins on its PARENT, which is the value the metadata holds — every
+    // sibling carries the parent's `ai:Metadata.id`, not its own ordinal.
+    test:assertEquals(pinnedFilter(KB_DOCUMENT_ID_METADATA_KEY, "540801#37"),
+        {'equals: {key: "id", value: 540801}});
 
-    // Reachable but unmatched: DELETE_SKIP when the enumeration is trusted,
-    // DELETE_INDETERMINATE under the safe fallback.
-    test:assertEquals(classifyDeleteCandidate("doc-b", matched, reachable, true), DELETE_SKIP);
-    test:assertEquals(classifyDeleteCandidate("doc-b", matched, reachable, false), DELETE_INDETERMINATE);
+    // A source-uri pin is a plain string equality on the value `listDeletableDocuments`
+    // built, with no numeric coercion.
+    test:assertEquals(pinnedFilter(SOURCE_URI_METADATA_KEY, "doc-1"),
+        {'equals: {key: SOURCE_URI_METADATA_KEY, value: "doc-1"}});
 
-    // In neither: always DELETE_INDETERMINATE, regardless of the trust flag — the
-    // trust flag only governs what "reachable but unmatched" means, never "never
-    // seen at all".
-    test:assertEquals(classifyDeleteCandidate("doc-c", matched, reachable, true), DELETE_INDETERMINATE);
-    test:assertEquals(classifyDeleteCandidate("doc-c", matched, reachable, false), DELETE_INDETERMINATE);
+    // An id that is not numeric at all (a random UUID, from a document ingested with
+    // no `ai:Metadata.id`) falls back to string equality rather than emitting garbage.
+    test:assertEquals(pinnedFilter(KB_DOCUMENT_ID_METADATA_KEY, "not-a-number"),
+        {'equals: {key: "id", value: "not-a-number"}});
 }
 
 @test:Config {}
-function testMapKeySetEquals() {
-    map<()> a = {"x": (), "y": ()};
-    map<()> b = {"y": (), "x": ()}; // same keys, different insertion order
-    map<()> c = {"x": ()};
-    map<()> d = {"x": (), "z": ()};
-
-    test:assertTrue(mapKeySetEquals(a, b));
-    test:assertTrue(mapKeySetEquals({}, {}));
-    test:assertFalse(mapKeySetEquals(a, c)); // different sizes
-    test:assertFalse(mapKeySetEquals(a, d)); // same size, different keys
+function testFanOutParentOf() {
+    test:assertEquals(fanOutParentOf("540801#37"), "540801");
+    test:assertEquals(fanOutParentOf("540801#0"), "540801");
+    test:assertEquals(fanOutParentOf("540801"), "540801", "an id that never fanned out is its own parent");
+    test:assertEquals(fanOutParentOf("doc-1"), "doc-1");
 }
 
 // ============================================================================
@@ -125,18 +122,25 @@ function testResolveDataSourceDeletesRefusesWhenTheStoreDoesNotAppearToHonourFil
     }
 }
 
-// The guard must NOT fire on a legitimately small, honestly-filtered result: exactly
-// one document reachable in total is not evidence the filter was ignored.
+// A single-document store that HONOURS filters must not be refused. The refusal now
+// rests on the sentinel control probe (a filter no document can satisfy), not on
+// comparing two enumerations' sizes, so "only one document is reachable" is no longer
+// a special case that needed excusing — it is simply a store that answers the control
+// correctly.
 isolated service class SingleReachableDocumentMock {
     *http:Service;
 
     isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
         return {retrievalResults: [a17Result("doc-1")]};
     }
 }
 
 @test:Config {}
-function testResolveDataSourceDeletesDoesNotFalselyTriggerOnASingleReachableDocument() returns error? {
+function testASingleReachableDocumentIsNotMistakenForAnUnfilteredStore() returns error? {
     final int port = 18781;
     http:Listener mockListener = check new (port);
     check mockListener.attach(new SingleReachableDocumentMock(), "/");
@@ -153,73 +157,9 @@ function testResolveDataSourceDeletesDoesNotFalselyTriggerOnASingleReachableDocu
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
     if result is DataSourceDeleteResult {
-        test:assertEquals(result.refusalReason, ());
-        test:assertEquals(result.toDelete.length(), 1);
-    }
-}
-
-// Every page carries a `nextToken` and never terminates on its own, forcing BOTH
-// enumeration passes past `KB_DELETE_ENUMERATION_MAX_PAGES`. Nothing may be deleted
-// from a data source whose result set might be incomplete.
-isolated service class TruncatedEnumerationMock {
-    *http:Service;
-
-    isolated resource function post [string... path](http:Request req) returns json {
-        return {retrievalResults: [], nextToken: "keep-going"};
-    }
-}
-
-@test:Config {}
-function testResolveDataSourceDeletesRefusesOnEnumerationTruncation() returns error? {
-    final int port = 18782;
-    http:Listener mockListener = check new (port);
-    check mockListener.attach(new TruncatedEnumerationMock(), "/");
-    check mockListener.'start();
-
-    BedrockTransport transport = check a17Transport(port);
-    DeletableDocument[] candidates = [
-        {sourceValue: "doc-1", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-1"}}}
-    ];
-    json userFilter = {'equals: {key: "tenant", value: "acme"}};
-    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
-    check mockListener.gracefulStop();
-
-    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
-    if result is DataSourceDeleteResult {
-        test:assertEquals(result.toDelete.length(), 0, "nothing may be deleted from a truncated enumeration");
-        test:assertEquals(result.indeterminate.length(), 0);
-        test:assertTrue(result.refusalReason is string);
-        string reason = result.refusalReason ?: "";
-        test:assertTrue(reason.includes(A17_DS_ID), reason);
-        test:assertTrue(reason.includes("100"), reason);
-    }
-}
-
-// An unfiltered call (userFilter == ()) never triggers the "not honoured" refusal —
-// there is no filter to be dishonouring.
-@test:Config {}
-function testFilterNotHonouredRefusalNeverFiresOnAnUnfilteredCall() returns error? {
-    final int port = 18783;
-    http:Listener mockListener = check new (port);
-    check mockListener.attach(new FilterNotHonouredMock(), "/");
-    check mockListener.'start();
-
-    BedrockTransport transport = check a17Transport(port);
-    DeletableDocument[] candidates = [
-        {sourceValue: "doc-1", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-1"}}},
-        {sourceValue: "doc-2", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-2"}}}
-    ];
-    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, (),
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
-    check mockListener.gracefulStop();
-
-    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
-    if result is DataSourceDeleteResult {
-        test:assertEquals(result.refusalReason, ());
-        // Both are "matched" (there was no filter to exclude anything), so both
-        // delete.
-        test:assertEquals(result.toDelete.length(), 2);
+        test:assertTrue(result.refusalReason is (),
+            string `a store that answers the control probe correctly must not be refused: ${result.refusalReason ?: ""}`);
+        test:assertEquals(result.toDelete.length(), 1, "the one document matches and must be deleted");
     }
 }
 

@@ -55,35 +55,31 @@ const string VECTOR_KB_PROVIDER = "BedrockVectorKnowledgeBase";
 // relevance score matters to correctness the way a single pinned probe's did.
 const string FILTER_PROBE_QUERY = "PLACE HOLDER";
 
-// A17: page cap for each of the two enumeration passes `resolveDataSourceDeletes`
-// runs per data source (100 pages x 100 results/page = 10 000 results). If EITHER
-// pass hits this cap, the result set may be INCOMPLETE — which breaks the "reachable
-// but unmatched -> excluded by the filter" conclusion (see
-// `KB_TRUST_UNFILTERED_ENUMERATION` below) — so a data source that hits the cap has
-// NOTHING deleted from it, reported rather than silently under- or over-deleting.
+// A17: page cap for the filtered enumeration `resolveDataSourceDeletes` runs per data
+// source (100 pages x 100 results/page = 10 000 results). If the
+// filtered pass hits this cap the CONFIRMED-MATCH set may be incomplete, so a data
+// source that hits it has NOTHING deleted from it, reported rather than silently
+// under-deleting.
 const int KB_DELETE_ENUMERATION_MAX_PAGES = 100;
 
-// A17 — UNVERIFIED PREMISE, flip this in one line if it turns out false. The
-// "reachable under the unfiltered enumeration but not matched by the filtered one ->
-// genuinely excluded by the filter, skip" branch in `resolveDataSourceDeletes` rests
-// on the paged UNFILTERED `Retrieve` enumeration being EXHAUSTIVE — that it visits
-// every document `listDeletableDocuments` can see, the same way `List*` calls are
-// documented to be. This could NOT be established from the AWS docs: `Retrieve`'s
-// own API reference documents it as returning "the most relevant results", i.e. as a
-// relevance-bounded search, never as an exhaustive-enumeration primitive the way
-// `ListKnowledgeBaseDocuments` is documented — nothing states whether paging an
-// UNFILTERED `Retrieve` to its last `nextToken` visits every document or stops at
-// some internal relevance/result-count ceiling first. Needs a LIVE measurement: on a
-// fixture with more documents than fit in one page (>100 chunks), assert the
-// unfiltered-pass `reachable` set equals the `listDeletableDocuments` set.
-// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Retrieve.html
+// A18 — the caller metadata key that pins a document on a CUSTOM data source.
 //
-// `true`: trust it — an unmatched-but-reachable candidate is skipped (sound, IF the
-// premise holds).
-// `false`: the safe fallback — every unmatched candidate (reachable or not) is
-// reported as indeterminate instead, and `deleteByFilter` degrades to deleting only
-// what the filtered pass matched.
-const boolean KB_TRUST_UNFILTERED_ENUMERATION = true;
+// Bedrock injects NO per-document metadata key there (A17's root cause): the observed
+// attributes are `x-amz-bedrock-kb-chunk-id`, which is per CHUNK, and
+// `x-amz-bedrock-kb-data-source-id`, which is per DATA SOURCE. Neither identifies a
+// document. What does is the caller's own `id`: `documentIdFor` DERIVES
+// `customDocumentIdentifier.id` from `ai:Metadata.id`, so for anything this module
+// ingested the two agree by construction, and the value is filterable because
+// `metadataToDocumentMetadata` sends it as an `IN_LINE_ATTRIBUTE`.
+const string KB_DOCUMENT_ID_METADATA_KEY = "id";
+
+// Results per pinned probe. Not 1: a parent that fanned out into N chunks submits N
+// documents sharing one `ai:Metadata.id`, so a pin on that id selects the family and
+// the sibling being resolved need not rank first. 10 covers ordinary fan-outs without
+// making a per-candidate probe expensive; a family larger than this still resolves,
+// because every sibling shares one metadata record and so one verdict (see
+// `pinnedProbeIdentifies`).
+const int KB_PINNED_PROBE_RESULTS = 10;
 
 // `ListKnowledgeBases`/`ListDataSources`/`ListKnowledgeBaseDocuments` share one
 // `MaxResults` shape declaring `max: 1000` — but the LIVE `ListKnowledgeBaseDocuments`
@@ -1238,20 +1234,6 @@ isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, stri
     return {identities, truncated: false};
 }
 
-// `true` when `a` and `b` hold exactly the same set of keys. Pure, so
-// "does the store appear to honour metadata filters" (A17) is table-testable.
-isolated function mapKeySetEquals(map<()> a, map<()> b) returns boolean {
-    if a.length() != b.length() {
-        return false;
-    }
-    foreach string k in a.keys() {
-        if !b.hasKey(k) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // A17: the NEGATIVE CONTROL for the "does this store honour metadata filters" check.
 //
 // `matched == reachable` has TWO causes, and refusing on it alone would punish the
@@ -1278,32 +1260,17 @@ isolated function storeIgnoresMetadataFilters(BedrockTransport dataTransport, st
     return results.length() > 0;
 }
 
-# The three-way classification of one delete candidate against the two enumerated
-# sets. See `classifyDeleteCandidate`.
+# The three-way outcome of resolving one delete candidate.
+# See `probeCandidate`, which produces it.
 enum DeleteCandidateOutcome {
-    # In `matched` (the FILTERED enumeration saw it): safe to delete.
+    # Confirmed to match: safe to delete.
     DELETE_MATCH,
-    # In `reachable` (the UNFILTERED enumeration saw it) but not `matched`: reachable
-    # and genuinely excluded by the filter — skip, sound.
+    # The pin reached this exact document without the filter and not with it, so the
+    # FILTER excluded it — leave it alone, soundly and silently.
     DELETE_SKIP,
-    # In neither: never seen under either enumeration. Cannot tell "excluded by the
-    # filter" from "hidden from both passes" (a relevance floor, a store that mis-scores
-    # this particular document, ...) — reported rather than assumed.
+    # The pin did not reach it at all, so nothing can be concluded about the filter —
+    # reported to the caller rather than assumed either way.
     DELETE_INDETERMINATE
-}
-
-// Pure, so the three-way decision is table-testable without AWS. `trustUnfilteredEnumeration`
-// is `KB_TRUST_UNFILTERED_ENUMERATION` in production; a parameter here only so tests
-// can exercise both settings without touching the module-level constant.
-isolated function classifyDeleteCandidate(string sourceValue, map<()> matched, map<()> reachable,
-        boolean trustUnfilteredEnumeration) returns DeleteCandidateOutcome {
-    if matched.hasKey(sourceValue) {
-        return DELETE_MATCH;
-    }
-    if trustUnfilteredEnumeration && reachable.hasKey(sourceValue) {
-        return DELETE_SKIP;
-    }
-    return DELETE_INDETERMINATE;
 }
 
 # What `resolveDataSourceDeletes` found for one data source.
@@ -1321,92 +1288,216 @@ type DataSourceDeleteResult record {|
     string? refusalReason;
 |};
 
-// Runs the A17 algorithm against one data source's candidates: two paged
-// enumerations (filtered by `userFilter`, then unfiltered), then classifies every
-// candidate `listDeletableDocuments` returned. `sourceUriKey` and `retrieveCaller`
-// are what let `BedrockManagedKnowledgeBase` and `BedrockVectorKnowledgeBase` share
+// Resolves one data source's candidates to a delete set (A17/A18).
+//
+// TWO STAGES, and the split is the whole design:
+//
+//  1. ONE paged FILTERED enumeration confirms matches cheaply. A candidate whose
+//     identity appears there matched the caller's filter on a call that carried it,
+//     so deleting it is sound.
+//  2. Every candidate the enumeration did NOT confirm is resolved INDIVIDUALLY, by
+//     a probe pinned to that one document.
+//
+// Stage 2 exists because `Retrieve` is not an enumeration primitive. AWS documents it
+// as returning "the most relevant results", and A18 measured the consequence: a fully
+// paged UNFILTERED `Retrieve` reached 6 of a managed knowledge base's 9 usable
+// documents. So "the unfiltered pass saw it and the filtered pass did not, therefore
+// the filter excluded it" is not a valid inference — it was the silent under-delete
+// this class exists to prevent. A pinned probe makes no such inference: pinning to one
+// document narrows the candidate set to one, so what `Retrieve` chose to rank never
+// enters the answer.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Retrieve.html
+//
+// `sourceUriKey` and `retrieveCaller` are what let both knowledge base classes share
 // this one implementation — see `SOURCE_URI_METADATA_KEY`/`managedDeleteRetrieve` and
 // `VECTOR_SOURCE_URI_METADATA_KEY`/`vectorDeleteRetrieve`.
 isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, string kbId, string dsId,
         json? userFilter, DeletableDocument[] candidates, string sourceUriKey,
         DeleteRetrieveCaller retrieveCaller) returns DataSourceDeleteResult|ai:Error {
-    DeleteEnumeration matchedEnum =
-        check enumerateDeleteIdentities(dataTransport, kbId, userFilter, sourceUriKey, retrieveCaller);
-    DeleteEnumeration reachableEnum =
-        check enumerateDeleteIdentities(dataTransport, kbId, (), sourceUriKey, retrieveCaller);
-
-    if matchedEnum.truncated || reachableEnum.truncated {
-        return {
-            toDelete: [],
-            indeterminate: [],
-            refusalReason: string `data source '${dsId}': the delete enumeration exceeded ` +
-                string `${KB_DELETE_ENUMERATION_MAX_PAGES} pages, so the result set may be incomplete — ` +
-                "nothing was deleted from this data source. Narrow the filter, or delete in smaller batches."
-        };
-    }
-
-    // A store that silently ignores metadata filters would make the FILTERED pass
-    // return exactly what the UNFILTERED pass returns — every reachable document
-    // "matches". AWS documents exactly this failure mode for MongoDB Atlas:
-    // "Metadata filtering doesn't work by default and requires additional setup in
-    // your MongoDB Atlas vector index configuration."
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
-    // A per-document pinned probe could never see this (a false positive on ONE
-    // document looked identical to a genuine match); two enumerations make it
-    // visible as `matched == reachable`. `reachable.length() > 1` avoids a false
-    // trigger on a knowledge base that legitimately has (at most) one reachable
-    // document total.
-    if userFilter !is () && reachableEnum.identities.length() > 1 &&
-            mapKeySetEquals(matchedEnum.identities, reachableEnum.identities) {
-        // Ambiguous, NOT yet damning — a filter that legitimately selects every
-        // reachable document looks identical from here. `storeIgnoresMetadataFilters`
-        // is the negative control that separates the two.
+    // The FAST PATH trusts the store to have applied the filter, because a filtered
+    // enumeration that was silently unfiltered would return every document with a
+    // correct identity on each — and every candidate would land in `matched`, turning
+    // `deleteByFilter` into "delete everything". The pinned probes in stage 2 are
+    // immune to that (their identity check rejects a result that is not the pinned
+    // document), but this stage is not, so the control probe gates it.
+    if userFilter !is () {
         boolean|ai:Error ignoresFilters =
             storeIgnoresMetadataFilters(dataTransport, kbId, sourceUriKey, retrieveCaller);
         if ignoresFilters is ai:Error {
-            // The control probe itself failed (a backend that rejects a filter on an
-            // absent key, a transient fault, ...). Undetermined is not permission to
-            // delete on a filter that may never have been applied: refuse, and say
-            // that the check could not be completed rather than asserting the store
-            // is broken.
-            return {
-                toDelete: [],
-                indeterminate: [],
-                refusalReason: string `data source '${dsId}': every reachable document matched the filter, ` +
-                    "and the follow-up check for whether the vector store honours metadata filters at all " +
-                    string `could not be completed (${ignoresFilters.message()}) — nothing was deleted from ` +
-                    "this data source."
-            };
+            return dataSourceRefusal(dsId,
+                string `the check for whether the vector store honours metadata filters could not be ` +
+                string `completed (${ignoresFilters.message()})`);
         }
         if ignoresFilters {
-            return {
-                toDelete: [],
-                indeterminate: [],
-                refusalReason: string `data source '${dsId}': the vector store does not appear to be honouring ` +
-                    "metadata filters (a filter matching no possible document still returned results) — " +
-                    "nothing was deleted from this data source. Verify metadata filtering is configured on " +
-                    "the backend before retrying."
-            };
+            return dataSourceRefusal(dsId,
+                "the vector store does not appear to be honouring metadata filters (a filter matching no " +
+                "possible document still returned results)");
         }
-        // Filters ARE honoured and this one genuinely selects every reachable
-        // document. Fall through and delete: refusing here would make an ordinary
-        // "delete everything tagged X" impossible on a knowledge base where
-        // everything is in fact tagged X.
+    }
+
+    DeleteEnumeration matchedEnum =
+        check enumerateDeleteIdentities(dataTransport, kbId, userFilter, sourceUriKey, retrieveCaller);
+    if matchedEnum.truncated {
+        return dataSourceRefusal(dsId,
+            string `the filtered enumeration exceeded ${KB_DELETE_ENUMERATION_MAX_PAGES} pages, so the ` +
+            "confirmed-match set may be incomplete");
     }
 
     json[] toDelete = [];
-    string[] indeterminate = [];
+    DeletableDocument[] unresolved = [];
     foreach DeletableDocument candidate in candidates {
-        DeleteCandidateOutcome outcome = classifyDeleteCandidate(candidate.sourceValue, matchedEnum.identities,
-            reachableEnum.identities, KB_TRUST_UNFILTERED_ENUMERATION);
+        if matchedEnum.identities.hasKey(candidate.sourceValue) {
+            toDelete.push(candidate.identifier);
+        } else {
+            unresolved.push(candidate);
+        }
+    }
+    if unresolved.length() == 0 {
+        return {toDelete, indeterminate: [], refusalReason: ()};
+    }
+
+    // Which metadata key can pin a document HERE is OBSERVED, never assumed — A17 was
+    // exactly the cost of assuming. `x-amz-bedrock-kb-source-uri` is absent on a
+    // CUSTOM data source (confirmed live), where the caller's own `id` attribute is
+    // the pin instead, because `documentIdFor` DERIVES the document id from
+    // `ai:Metadata.id` and so guarantees the two agree for anything this module
+    // ingested.
+    string? pinKey = check observePinKey(dataTransport, kbId, sourceUriKey, retrieveCaller);
+    string[] indeterminate = [];
+    if pinKey is () {
+        foreach DeletableDocument candidate in unresolved {
+            indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
+        }
+        return {toDelete, indeterminate, refusalReason: ()};
+    }
+
+    foreach DeletableDocument candidate in unresolved {
+        DeleteCandidateOutcome outcome =
+            check probeCandidate(dataTransport, kbId, userFilter, candidate.sourceValue, pinKey, sourceUriKey,
+                retrieveCaller);
         if outcome == DELETE_MATCH {
             toDelete.push(candidate.identifier);
         } else if outcome == DELETE_INDETERMINATE {
             indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
         }
-        // DELETE_SKIP: reachable and genuinely excluded by the filter — no action.
+        // DELETE_SKIP: the pinned probe reached this exact document without the
+        // filter and not with it, so the FILTER is what excluded it — a per-document
+        // observation, not an inference from one enumeration's coverage.
     }
     return {toDelete, indeterminate, refusalReason: ()};
+}
+
+// A data source touched not at all: nothing deleted, nothing blamed on a document.
+isolated function dataSourceRefusal(string dsId, string reason) returns DataSourceDeleteResult
+    => {
+        toDelete: [],
+        indeterminate: [],
+        refusalReason: string `data source '${dsId}': ${reason} — nothing was deleted from this data source.`
+    };
+
+// Picks the metadata key that can pin one document on THIS data source, by looking at
+// what a result actually carries rather than assuming a key is emitted.
+//
+// `sourceUriKey` first: Bedrock injects it on a managed knowledge base and for an S3
+// data source, and it holds exactly the `sourceValue` `listDeletableDocuments` builds.
+// `KB_DOCUMENT_ID_METADATA_KEY` second: on a CUSTOM data source Bedrock injects NO
+// per-document key at all (A17's root cause — the observed attributes are a per-CHUNK
+// id and a per-DATA-SOURCE id, neither of which identifies a document), but
+// `documentIdFor` derives the document id from `ai:Metadata.id`, so the caller's own
+// `id` attribute pins it.
+//
+// `()` means neither is present — a document ingested without an `ai:Metadata.id` by
+// something other than this module. Unpinnable is reported, never guessed at.
+isolated function observePinKey(BedrockTransport dataTransport, string kbId, string sourceUriKey,
+        DeleteRetrieveCaller retrieveCaller) returns string?|ai:Error {
+    [json[], string?] [results, _] = check retrieveCaller(dataTransport, kbId, (), 1, ());
+    foreach json result in results {
+        map<json> metadata = asMap(asMap(result)["metadata"] ?: {});
+        if metadata.hasKey(sourceUriKey) {
+            return sourceUriKey;
+        }
+        if metadata.hasKey(KB_DOCUMENT_ID_METADATA_KEY) {
+            return KB_DOCUMENT_ID_METADATA_KEY;
+        }
+    }
+    return ();
+}
+
+// Resolves ONE candidate with up to two pinned probes.
+//
+//   `userFilter AND pin == doc` returns it  -> it matches            -> DELETE_MATCH
+//   only `pin == doc` returns it            -> the filter excluded it -> DELETE_SKIP
+//   neither returns it                      -> unreachable/unpinnable -> INDETERMINATE
+//
+// The second probe is what makes the skip sound: it proves the pin reaches this exact
+// document, so the first probe's silence is attributable to the filter and nothing
+// else. Both probes verify IDENTITY rather than counting results — a store that
+// ignores the pin returns some other document, which is not evidence about this one.
+isolated function probeCandidate(BedrockTransport dataTransport, string kbId, json? userFilter,
+        string sourceValue, string pinKey, string sourceUriKey, DeleteRetrieveCaller retrieveCaller)
+        returns DeleteCandidateOutcome|ai:Error {
+    json pin = pinnedFilter(pinKey, sourceValue);
+    json filtered = userFilter is () ? pin : {andAll: [userFilter, pin]};
+    if check pinnedProbeIdentifies(dataTransport, kbId, filtered, sourceValue, pinKey, sourceUriKey,
+            retrieveCaller) {
+        return DELETE_MATCH;
+    }
+    if check pinnedProbeIdentifies(dataTransport, kbId, pin, sourceValue, pinKey, sourceUriKey, retrieveCaller) {
+        return DELETE_SKIP;
+    }
+    return DELETE_INDETERMINATE;
+}
+
+// One pinned probe: did a result come back that really is `sourceValue`?
+//
+// `KB_PINNED_PROBE_RESULTS` rather than 1 because a pin on
+// `KB_DOCUMENT_ID_METADATA_KEY` is not always unique: a parent that fanned out into N
+// chunks submits `<id>#0`...`<id>#N-1` as N documents that all carry the SAME
+// `ai:Metadata.id`, so the pin selects the whole family and the wanted sibling need
+// not be the top-ranked one.
+isolated function pinnedProbeIdentifies(BedrockTransport dataTransport, string kbId, json filter,
+        string sourceValue, string pinKey, string sourceUriKey, DeleteRetrieveCaller retrieveCaller)
+        returns boolean|ai:Error {
+    [json[], string?] [results, _] =
+        check retrieveCaller(dataTransport, kbId, filter, KB_PINNED_PROBE_RESULTS, ());
+    foreach json result in results {
+        string? identity = retrievalResultSourceValue(result, sourceUriKey);
+        if identity == sourceValue {
+            return true;
+        }
+        // A fan-out family shares one `ai:Metadata.id` and therefore one metadata
+        // record, so the filter's verdict is identical for every sibling: any sibling
+        // answering the pin answers for this one. Only ever applied when the pin IS
+        // the shared id — a source-uri pin is per-document and needs no such widening.
+        if pinKey == KB_DOCUMENT_ID_METADATA_KEY && identity is string &&
+                fanOutParentOf(identity) == fanOutParentOf(sourceValue) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// `"540801#37"` -> `"540801"`; an id that never fanned out is its own parent.
+// Mirrors `documentIdFor`'s `<parent>#<ordinal>` construction.
+isolated function fanOutParentOf(string sourceValue) returns string {
+    int? hash = sourceValue.indexOf("#");
+    return hash is int ? sourceValue.substring(0, hash) : sourceValue;
+}
+
+// The `pinKey == sourceValue` leaf.
+//
+// `KB_DOCUMENT_ID_METADATA_KEY` holds `ai:Metadata.id`, an `int`, which Bedrock stores
+// as a NUMBER and returns as a decimal — so the leaf must carry a NUMBER, not the
+// string form of one, or it matches nothing. A fan-out id (`<parent>#<ordinal>`) pins
+// on its parent, which is the value the metadata actually holds.
+isolated function pinnedFilter(string pinKey, string sourceValue) returns json {
+    if pinKey != KB_DOCUMENT_ID_METADATA_KEY {
+        return {'equals: {key: pinKey, value: sourceValue}};
+    }
+    int|error parentId = int:fromString(fanOutParentOf(sourceValue));
+    return parentId is int
+        ? {'equals: {key: pinKey, value: parentId}}
+        : {'equals: {key: pinKey, value: sourceValue}};
 }
 
 // ============================================================================
