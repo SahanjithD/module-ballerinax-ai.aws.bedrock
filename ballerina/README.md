@@ -680,11 +680,18 @@ counted as a success.
 > documented as returning "the most relevant results", and paging to the last page does
 > not make it an enumeration primitive.
 >
-> Pinning fixes this at the root: a probe filtered to one document narrows the
-> candidate set to one, so what `Retrieve` chose to rank never enters the answer. The
+> Pinning fixes this at the root: a pinned probe narrows the candidate set to the
+> pinned document, so what `Retrieve` chose to rank never enters the answer. The
 > second, unfiltered pinned probe is what makes a skip sound — it proves the pin
 > reaches that exact document, so the first probe's silence is attributable to the
-> filter and nothing else. Both probes verify identity rather than counting results.
+> filter and nothing else.
+>
+> **A document is only ever deleted on its OWN evidence.** A pin on `ai:Metadata.id`
+> selects everything carrying that id, which is a whole fan-out family (`7#0`…`7#29`)
+> plus any document ingested under the bare id `7`. Those are probed together for
+> efficiency, but the verdict is per document and by exact identity — one family
+> member matching says nothing about a namesake, and treating it as evidence deleted
+> documents no filter had selected.
 >
 > **`deleteByFilter` still under-deletes rather than over-deletes**, and you should read
 > its error: a document no probe can reach is named as indeterminate instead of being

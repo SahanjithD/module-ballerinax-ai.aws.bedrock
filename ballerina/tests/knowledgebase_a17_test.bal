@@ -259,3 +259,95 @@ function testAFailedFilterControlProbeRefusesRatherThanDeleting() returns error?
             result.refusalReason ?: "");
     }
 }
+
+// ============================================================================
+// A19 — a document must never be deleted on another document's evidence.
+//
+// A fan-out family and a BARE-id document can share one `ai:Metadata.id`:
+//
+//   ingest({id: 7, tenant: "acme"})                    -> document "7"
+//   ingest({id: 7, tenant: "globex"}, chunked into 30) -> documents "7#0".."7#29"
+//
+// A pin on `id == 7` selects all 31. An earlier version accepted any of them as
+// evidence for any other, so `deleteByFilter(tenant == "globex")` destroyed the acme
+// document too — and said nothing about it. Identity is now exact.
+// ============================================================================
+
+isolated function a19Result(string id, string tenant) returns json => {
+    content: {text: string `text for ${id}`, 'type: "TEXT"},
+    location: {'type: "CUSTOM", customDocumentLocation: {id}},
+    // No source-uri key: this is a CUSTOM data source, so `observePinKey` must fall
+    // back to the caller's own `id` attribute — the shape that makes A19 reachable.
+    metadata: {"id": 7, "tenant": tenant},
+    score: 0.9
+};
+
+// One bare-id document (acme) plus a 30-member fan-out family (globex), all under
+// `ai:Metadata.id` 7, in a store that genuinely evaluates the filter it is sent.
+isolated service class FanOutFamilyMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
+        map<json> search = <map<json>>(<map<json>>(<map<json>>payload)["retrievalConfiguration"])
+            ["managedSearchConfiguration"];
+        json? filter = search.hasKey("filter") ? search["filter"] : ();
+
+        json[] results = [];
+        if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "acme"}) {
+            results.push(a19Result("7", "acme"));
+        }
+        foreach int i in 0 ..< 30 {
+            if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "globex"}) {
+                results.push(a19Result(string `7#${i}`, "globex"));
+            }
+        }
+        return {retrievalResults: results};
+    }
+}
+
+isolated function a19Candidates() returns DeletableDocument[] {
+    DeletableDocument[] candidates =
+        [{sourceValue: "7", identifier: {dataSourceType: "CUSTOM", custom: {id: "7"}}}];
+    foreach int i in 0 ..< 30 {
+        string id = string `7#${i}`;
+        candidates.push({sourceValue: id, identifier: {dataSourceType: "CUSTOM", custom: {id}}});
+    }
+    return candidates;
+}
+
+@test:Config {}
+function testABareIdDocumentIsNotDeletedOnItsFanOutNamesakesEvidence() returns error? {
+    final int port = 18785;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FanOutFamilyMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        a19Candidates(), SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        string deleted = result.toDelete.toJsonString();
+
+        // THE regression: the acme document shares the family's parent id and nothing
+        // else. It must survive, and it must not be reported either — the unfiltered
+        // pinned probe reaches it, so "the filter excluded it" is an observation.
+        test:assertFalse(deleted.includes("\"id\":\"7\"}"),
+            string `the bare-id document was deleted on a namesake's evidence: ${deleted}`);
+        test:assertEquals(result.indeterminate.length(), 0, result.indeterminate.toJsonString());
+
+        // And the family that genuinely matches is still deleted IN FULL — the fix
+        // must not buy safety by giving up on fan-outs.
+        test:assertEquals(result.toDelete.length(), 30, deleted);
+        foreach int i in 0 ..< 30 {
+            test:assertTrue(deleted.includes(string `7#${i}`), string `sibling 7#${i} was not deleted: ${deleted}`);
+        }
+    }
+}
