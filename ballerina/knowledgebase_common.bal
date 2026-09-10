@@ -62,6 +62,11 @@ const string FILTER_PROBE_QUERY = "PLACE HOLDER";
 // under-deleting.
 const int KB_DELETE_ENUMERATION_MAX_PAGES = 100;
 
+// How many documents `observePinKey` samples before deciding a data source has no
+// usable pin key. More than one because a data source can hold both pinnable and
+// unpinnable documents; small because it only has to find ONE carrying a key.
+const int KB_PIN_KEY_SAMPLE_SIZE = 10;
+
 // A18 — the caller metadata key that pins a document on a CUSTOM data source.
 //
 // Bedrock injects NO per-document metadata key there (A17's root cause): the observed
@@ -73,13 +78,7 @@ const int KB_DELETE_ENUMERATION_MAX_PAGES = 100;
 // `metadataToDocumentMetadata` sends it as an `IN_LINE_ATTRIBUTE`.
 const string KB_DOCUMENT_ID_METADATA_KEY = "id";
 
-// Results per pinned probe. Not 1: a parent that fanned out into N chunks submits N
-// documents sharing one `ai:Metadata.id`, so a pin on that id selects the family and
-// the sibling being resolved need not rank first. 10 covers ordinary fan-outs without
-// making a per-candidate probe expensive; a family larger than this still resolves,
-// because every sibling shares one metadata record and so one verdict (see
-// `pinnedProbeIdentifies`).
-const int KB_PINNED_PROBE_RESULTS = 10;
+
 
 // `ListKnowledgeBases`/`ListDataSources`/`ListKnowledgeBaseDocuments` share one
 // `MaxResults` shape declaring `max: 1000` — but the LIVE `ListKnowledgeBaseDocuments`
@@ -1371,18 +1370,23 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
         return {toDelete, indeterminate, refusalReason: ()};
     }
 
+    // Candidates one pinned filter would select share one pair of probes. With an
+    // `ai:Metadata.id` pin that is a whole fan-out family at once, which is what keeps
+    // a 30-chunk document from costing 60 round trips; with a source-uri pin every
+    // group is a single document. Either way the VERDICT is per document and exact.
+    map<DeletableDocument[]> groups = {};
     foreach DeletableDocument candidate in unresolved {
-        DeleteCandidateOutcome outcome =
-            check probeCandidate(dataTransport, kbId, userFilter, candidate.sourceValue, pinKey, sourceUriKey,
+        string key = pinGroupKeyFor(candidate.sourceValue, pinKey);
+        DeletableDocument[] group = groups[key] ?: [];
+        group.push(candidate);
+        groups[key] = group;
+    }
+    foreach [string, DeletableDocument[]] [pinValue, group] in groups.entries() {
+        [json[], string[]] [groupDeletes, groupIndeterminate] =
+            check resolvePinGroup(dataTransport, kbId, dsId, userFilter, group, pinValue, pinKey, sourceUriKey,
                 retrieveCaller);
-        if outcome == DELETE_MATCH {
-            toDelete.push(candidate.identifier);
-        } else if outcome == DELETE_INDETERMINATE {
-            indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
-        }
-        // DELETE_SKIP: the pinned probe reached this exact document without the
-        // filter and not with it, so the FILTER is what excluded it — a per-document
-        // observation, not an inference from one enumeration's coverage.
+        toDelete.push(...groupDeletes);
+        indeterminate.push(...groupIndeterminate);
     }
     return {toDelete, indeterminate, refusalReason: ()};
 }
@@ -1410,7 +1414,13 @@ isolated function dataSourceRefusal(string dsId, string reason) returns DataSour
 // something other than this module. Unpinnable is reported, never guessed at.
 isolated function observePinKey(BedrockTransport dataTransport, string kbId, string sourceUriKey,
         DeleteRetrieveCaller retrieveCaller) returns string?|ai:Error {
-    [json[], string?] [results, _] = check retrieveCaller(dataTransport, kbId, (), 1, ());
+    // A SAMPLE, not one result: a data source can hold a mix, and documents ingested
+    // without an `ai:Metadata.id` carry neither key (one live knowledge base held ~95
+    // of them alongside pinnable ones). Sampling a single document would let one of
+    // those decide "unpinnable" for the whole data source, making every candidate
+    // indeterminate. Any sampled document carrying a key proves the key is in use.
+    [json[], string?] [results, _] =
+        check retrieveCaller(dataTransport, kbId, (), KB_PIN_KEY_SAMPLE_SIZE, ());
     foreach json result in results {
         map<json> metadata = asMap(asMap(result)["metadata"] ?: {});
         if metadata.hasKey(sourceUriKey) {
@@ -1423,59 +1433,78 @@ isolated function observePinKey(BedrockTransport dataTransport, string kbId, str
     return ();
 }
 
-// Resolves ONE candidate with up to two pinned probes.
+// Resolves one PIN GROUP: every candidate that a single pinned filter selects.
 //
-//   `userFilter AND pin == doc` returns it  -> it matches            -> DELETE_MATCH
-//   only `pin == doc` returns it            -> the filter excluded it -> DELETE_SKIP
-//   neither returns it                      -> unreachable/unpinnable -> INDETERMINATE
+//   the group's filtered probe returned this exact identity  -> DELETE_MATCH
+//   only the group's unfiltered probe returned it            -> DELETE_SKIP
+//   neither returned it                                      -> DELETE_INDETERMINATE
 //
-// The second probe is what makes the skip sound: it proves the pin reaches this exact
-// document, so the first probe's silence is attributable to the filter and nothing
-// else. Both probes verify IDENTITY rather than counting results — a store that
-// ignores the pin returns some other document, which is not evidence about this one.
-isolated function probeCandidate(BedrockTransport dataTransport, string kbId, json? userFilter,
-        string sourceValue, string pinKey, string sourceUriKey, DeleteRetrieveCaller retrieveCaller)
-        returns DeleteCandidateOutcome|ai:Error {
-    json pin = pinnedFilter(pinKey, sourceValue);
+// The unfiltered probe is what makes a skip sound: it proves the pin reaches that
+// exact document, so the filtered probe's silence is attributable to the filter and
+// nothing else.
+//
+// IDENTITY IS EXACT. An earlier version accepted any document whose id shared a
+// `<parent>#<ordinal>` prefix with the candidate, reasoning that a fan-out family
+// shares one metadata record and therefore one filter verdict. That destroyed data
+// (A19): `fanOutParentOf` strips everything from `#`, so a document ingested under
+// the BARE id `7` looked like a member of the `7#0`...`7#29` family, and a probe that
+// returned a genuine family member deleted the unrelated bare-id document with it —
+// silently, since the returned error named other documents entirely. Nor would
+// restricting the widening to candidates that themselves carry a `#` be safe:
+// re-ingesting `id: 7` as 10 chunks upserts `7#0`...`7#9` and STRANDS `7#10`...`7#29`
+// carrying the previous ingest's metadata, so even same-prefix siblings can disagree
+// about a filter. Prefix is not evidence of shared metadata, and only shared metadata
+// justified the widening.
+//
+// What the widening actually worked around was a fixed 10-result window. Paging the
+// probe removes that need at the root: the pin bounds the result set to the group, so
+// paging terminates on the group's own size and every member is seen exactly.
+isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, string dsId, json? userFilter,
+        DeletableDocument[] group, string pinValue, string pinKey, string sourceUriKey,
+        DeleteRetrieveCaller retrieveCaller) returns [json[], string[]]|ai:Error {
+    json pin = pinnedFilter(pinKey, pinValue);
     json filtered = userFilter is () ? pin : {andAll: [userFilter, pin]};
-    if check pinnedProbeIdentifies(dataTransport, kbId, filtered, sourceValue, pinKey, sourceUriKey,
-            retrieveCaller) {
-        return DELETE_MATCH;
+
+    DeleteEnumeration matchedProbe =
+        check enumerateDeleteIdentities(dataTransport, kbId, filtered, sourceUriKey, retrieveCaller);
+    boolean allMatched = true;
+    foreach DeletableDocument candidate in group {
+        if !matchedProbe.identities.hasKey(candidate.sourceValue) {
+            allMatched = false;
+            break;
+        }
     }
-    if check pinnedProbeIdentifies(dataTransport, kbId, pin, sourceValue, pinKey, sourceUriKey, retrieveCaller) {
-        return DELETE_SKIP;
+    // The second probe is skipped when the first already accounted for everyone —
+    // nothing is left for it to explain.
+    DeleteEnumeration reachableProbe = allMatched
+        ? {identities: {}, truncated: false}
+        : check enumerateDeleteIdentities(dataTransport, kbId, pin, sourceUriKey, retrieveCaller);
+
+    json[] toDelete = [];
+    string[] indeterminate = [];
+    foreach DeletableDocument candidate in group {
+        if matchedProbe.identities.hasKey(candidate.sourceValue) {
+            toDelete.push(candidate.identifier);
+        } else if !reachableProbe.identities.hasKey(candidate.sourceValue) {
+            // Never reached, or reached only by a truncated probe: nothing can be
+            // concluded about the filter, so say so rather than assume either way.
+            indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
+        }
+        // else: reached without the filter and not with it — the filter excluded it.
     }
-    return DELETE_INDETERMINATE;
+    return [toDelete, indeterminate];
 }
 
-// One pinned probe: did a result come back that really is `sourceValue`?
+// The pin group a candidate belongs to: every document one pinned filter selects.
 //
-// `KB_PINNED_PROBE_RESULTS` rather than 1 because a pin on
-// `KB_DOCUMENT_ID_METADATA_KEY` is not always unique: a parent that fanned out into N
-// chunks submits `<id>#0`...`<id>#N-1` as N documents that all carry the SAME
-// `ai:Metadata.id`, so the pin selects the whole family and the wanted sibling need
-// not be the top-ranked one.
-isolated function pinnedProbeIdentifies(BedrockTransport dataTransport, string kbId, json filter,
-        string sourceValue, string pinKey, string sourceUriKey, DeleteRetrieveCaller retrieveCaller)
-        returns boolean|ai:Error {
-    [json[], string?] [results, _] =
-        check retrieveCaller(dataTransport, kbId, filter, KB_PINNED_PROBE_RESULTS, ());
-    foreach json result in results {
-        string? identity = retrievalResultSourceValue(result, sourceUriKey);
-        if identity == sourceValue {
-            return true;
-        }
-        // A fan-out family shares one `ai:Metadata.id` and therefore one metadata
-        // record, so the filter's verdict is identical for every sibling: any sibling
-        // answering the pin answers for this one. Only ever applied when the pin IS
-        // the shared id — a source-uri pin is per-document and needs no such widening.
-        if pinKey == KB_DOCUMENT_ID_METADATA_KEY && identity is string &&
-                fanOutParentOf(identity) == fanOutParentOf(sourceValue) {
-            return true;
-        }
-    }
-    return false;
-}
+// A source-uri pin is per-document, so each candidate is its own group. An
+// `ai:Metadata.id` pin selects everything sharing that id — a fan-out family, plus any
+// bare-id document carrying it — so those share one group and one pair of probes.
+// Grouping is only ever an efficiency: membership decides which probe answers for a
+// candidate, never whether the candidate matched. That is decided by exact identity
+// inside `resolvePinGroup`.
+isolated function pinGroupKeyFor(string sourceValue, string pinKey) returns string
+    => pinKey == KB_DOCUMENT_ID_METADATA_KEY ? fanOutParentOf(sourceValue) : sourceValue;
 
 // `"540801#37"` -> `"540801"`; an id that never fanned out is its own parent.
 // Mirrors `documentIdFor`'s `<parent>#<ordinal>` construction.
