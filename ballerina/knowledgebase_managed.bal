@@ -230,7 +230,7 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
 
         map<json>[] dataSourceSummaries = check listDataSources(self.controlTransport, self.knowledgeBaseId);
         string[] undeletableDataSources = [];
-        string[] indeterminate = [];
+        UnresolvedCandidate[] indeterminate = [];
         string[] refused = [];
         map<json[]> toDeleteByDataSource = {};
 
@@ -399,14 +399,10 @@ isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters
 
 // The shared tail of `deleteByFilter`: everything that could not be confirmed, in one
 // error, after every delete that COULD be made has been made.
-isolated function deleteByFilterOutcome(string[] indeterminate, string[] notDeleted,
+isolated function deleteByFilterOutcome(UnresolvedCandidate[] indeterminate, string[] notDeleted,
         string[] undeletableDataSources, string[] refused = []) returns ai:Error? {
     string[] problems = [];
-    if indeterminate.length() > 0 {
-        problems.push(string `${indeterminate.length()} document(s) could not be confirmed to match or not ` +
-            string `match the filter (the enumeration did not identify them): ` +
-            string:'join(", ", ...indeterminate));
-    }
+    problems.push(...unresolvedProblems(indeterminate));
     if notDeleted.length() > 0 {
         problems.push(string `${notDeleted.length()} document(s) matched the filter but were not confirmed ` +
             string `deleted by 'DeleteKnowledgeBaseDocuments': ${string:'join(", ", ...notDeleted)}`);
@@ -416,9 +412,9 @@ isolated function deleteByFilterOutcome(string[] indeterminate, string[] notDele
             string `this API — only CUSTOM/S3 support 'DeleteKnowledgeBaseDocuments': ` +
             string:'join(", ", ...undeletableDataSources));
     }
-    // A17: a data source refused outright — enumeration truncation, or a store that
-    // does not appear to honour metadata filters — contributes NOTHING to `toDelete`,
-    // so it is reported here rather than folded into `indeterminate`.
+    // A17: a data source refused outright — a store that does not appear to honour
+    // metadata filters — contributes NOTHING to `toDelete`, so it is reported here
+    // rather than folded into `indeterminate`.
     if refused.length() > 0 {
         problems.push(string:'join("; ", ...refused));
     }
@@ -427,6 +423,71 @@ isolated function deleteByFilterOutcome(string[] indeterminate, string[] notDele
     }
     return error ai:Error(
         string `deleteByFilter deleted every confirmed match, but: ${string:'join("; ", ...problems)}`);
+}
+
+// A21: one line per CAUSE, not one name per document.
+//
+// Every candidate this call could not decide about used to be listed by id. That set
+// is a property of the KNOWLEDGE BASE, not of the request: a delete of 105 documents
+// that fully succeeded returned an error naming 455 unrelated ones, because those 455
+// carry no metadata this module can pin. An error that always fires and is always
+// enormous is an error callers learn to ignore — and this one sometimes matters.
+//
+// So each cause is reported once, with its count, an explanation a caller can act on,
+// and a bounded sample of ids. Nothing is suppressed: the counts are exact, and a
+// candidate that could not be checked is still declared rather than assumed excluded.
+isolated function unresolvedProblems(UnresolvedCandidate[] unresolved) returns string[] {
+    if unresolved.length() == 0 {
+        return [];
+    }
+    map<UnresolvedCandidate[]> byReason = {};
+    foreach UnresolvedCandidate candidate in unresolved {
+        UnresolvedCandidate[] bucket = byReason[candidate.reason] ?: [];
+        bucket.push(candidate);
+        byReason[candidate.reason] = bucket;
+    }
+    string[] problems = [];
+    foreach [string, UnresolvedCandidate[]] [reason, bucket] in byReason.entries() {
+        problems.push(string `${bucket.length()} document(s) could not be checked against the filter — ` +
+            string `${unresolvedCause(<UnresolvedReason>reason)}: ${sampleOfIds(bucket)}`);
+    }
+    return problems;
+}
+
+isolated function unresolvedCause(UnresolvedReason reason) returns string {
+    match reason {
+        UNRESOLVED_NO_DOCUMENT_ID => {
+            return "they were ingested without an 'ai:Metadata.id', so this knowledge base holds no " +
+                "attribute that identifies them and no metadata filter can select one. Re-ingest them " +
+                "with an 'ai:Metadata.id' to make them deletable by filter";
+        }
+        UNRESOLVED_NO_PIN_KEY => {
+            return "this data source exposes no metadata attribute that identifies a document, so none " +
+                "of them can be matched individually. Ingesting with an 'ai:Metadata.id' provides one";
+        }
+        UNRESOLVED_GROUP_TOO_LARGE => {
+            return string `more than ${KB_MAX_RESULTS_PER_CALL} documents share one 'ai:Metadata.id', ` +
+                "which is more than one 'Retrieve' call can return. The confirmed matches WERE deleted, " +
+                "so repeating this same call continues with the rest";
+        }
+    }
+    return "the knowledge base did not return them under their own identity, so whether they match is " +
+        "unknown; they were left in place";
+}
+
+// At most `KB_REPORTED_ID_SAMPLE` ids, then a count of the remainder. The sample makes
+// the message diagnosable; the count keeps it readable.
+isolated function sampleOfIds(UnresolvedCandidate[] candidates) returns string {
+    string[] shown = [];
+    foreach UnresolvedCandidate candidate in candidates {
+        if shown.length() >= KB_REPORTED_ID_SAMPLE {
+            break;
+        }
+        shown.push(string `${candidate.sourceValue} (data source ${candidate.dataSourceId})`);
+    }
+    string listed = string:'join(", ", ...shown);
+    int remainder = candidates.length() - shown.length();
+    return remainder > 0 ? string `${listed}, and ${remainder} more` : listed;
 }
 
 // Rejects retrieve-time configuration Bedrock would reject, before any I/O. The

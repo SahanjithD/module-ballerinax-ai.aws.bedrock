@@ -62,6 +62,10 @@ const string FILTER_PROBE_QUERY = "PLACE HOLDER";
 // under-deleting.
 const int KB_DELETE_ENUMERATION_MAX_PAGES = 100;
 
+// How many document ids a `deleteByFilter` error lists per cause before switching to
+// a count (A21). Enough to diagnose, few enough to read.
+const int KB_REPORTED_ID_SAMPLE = 10;
+
 // How many documents `observePinKey` samples before deciding a data source has no
 // usable pin key. More than one because a data source can hold both pinnable and
 // unpinnable documents; small because it only has to find ONE carrying a key.
@@ -1267,6 +1271,34 @@ isolated function storeIgnoresMetadataFilters(BedrockTransport dataTransport, st
     return results.length() > 0;
 }
 
+# Why one candidate could not be confirmed to match or not match the filter (A21).
+# Kept as a REASON rather than a formatted string so the outcome message can group
+# hundreds of candidates into one line per cause instead of listing every id.
+enum UnresolvedReason {
+    # This data source exposes no metadata key that identifies a document, so nothing
+    # here can be pinned. Structural: it applies to every candidate equally.
+    UNRESOLVED_NO_PIN_KEY,
+    # The pin key is `ai:Metadata.id`, and this document was ingested WITHOUT one —
+    # `documentIdFor` gave it a UUID — so it carries no `id` attribute for the pin to
+    # match. Known from the document id alone, before any probe.
+    UNRESOLVED_NO_DOCUMENT_ID,
+    # Pinnable, but neither probe returned it.
+    UNRESOLVED_UNREACHABLE,
+    # Its pin group exceeded the `Retrieve` cap, so it was never checked (A20).
+    UNRESOLVED_GROUP_TOO_LARGE
+}
+
+# One candidate `deleteByFilter` could not decide about.
+#
+# + sourceValue - The document id, as `listDeletableDocuments` built it
+# + dataSourceId - The data source it lives on
+# + reason - Why it could not be decided
+type UnresolvedCandidate record {|
+    string sourceValue;
+    string dataSourceId;
+    UnresolvedReason reason;
+|};
+
 # The three-way outcome of resolving one delete candidate.
 # See `probeCandidate`, which produces it.
 enum DeleteCandidateOutcome {
@@ -1291,7 +1323,7 @@ enum DeleteCandidateOutcome {
 #                    empty when this is set: NOTHING is deleted from this data source.
 type DataSourceDeleteResult record {|
     json[] toDelete;
-    string[] indeterminate;
+    UnresolvedCandidate[] indeterminate;
     string? refusalReason;
     # Explanations that are not per-document and not a refusal — currently the A20
     # cap note, which tells the caller WHY a large pin group could not be finished
@@ -1374,12 +1406,30 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
     // `ai:Metadata.id` and so guarantees the two agree for anything this module
     // ingested.
     string? pinKey = check observePinKey(dataTransport, kbId, sourceUriKey, retrieveCaller);
-    string[] indeterminate = [];
+    UnresolvedCandidate[] indeterminate = [];
     if pinKey is () {
         foreach DeletableDocument candidate in unresolved {
-            indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
+            indeterminate.push({sourceValue: candidate.sourceValue, dataSourceId: dsId,
+                reason: UNRESOLVED_NO_PIN_KEY});
         }
         return {toDelete, indeterminate, refusalReason: ()};
+    }
+
+    // A21: when the pin is `ai:Metadata.id`, a document ingested WITHOUT one can never
+    // answer it — `documentIdFor` gives such a document a random UUID, so its id does
+    // not parse as the integer the attribute would hold. That is decidable from the id
+    // alone, so these are separated out BEFORE any probe rather than after two failed
+    // ones each. On a knowledge base holding hundreds of them that is hundreds of
+    // round trips saved, and it lets the outcome say WHY they could not be checked
+    // instead of listing them as anonymously unconfirmed.
+    DeletableDocument[] pinnable = [];
+    foreach DeletableDocument candidate in unresolved {
+        if pinKey == KB_DOCUMENT_ID_METADATA_KEY && int:fromString(fanOutParentOf(candidate.sourceValue)) is error {
+            indeterminate.push({sourceValue: candidate.sourceValue, dataSourceId: dsId,
+                reason: UNRESOLVED_NO_DOCUMENT_ID});
+        } else {
+            pinnable.push(candidate);
+        }
     }
 
     // Candidates one pinned filter would select share one pair of probes. With an
@@ -1387,7 +1437,7 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
     // a 30-chunk document from costing 60 round trips; with a source-uri pin every
     // group is a single document. Either way the VERDICT is per document and exact.
     map<DeletableDocument[]> groups = {};
-    foreach DeletableDocument candidate in unresolved {
+    foreach DeletableDocument candidate in pinnable {
         string key = pinGroupKeyFor(candidate.sourceValue, pinKey);
         DeletableDocument[] group = groups[key] ?: [];
         group.push(candidate);
@@ -1395,7 +1445,7 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
     }
     int truncatedGroups = 0;
     foreach [string, DeletableDocument[]] [pinValue, group] in groups.entries() {
-        [json[], string[], boolean] [groupDeletes, groupIndeterminate, groupTruncated] =
+        [json[], UnresolvedCandidate[], boolean] [groupDeletes, groupIndeterminate, groupTruncated] =
             check resolvePinGroup(dataTransport, kbId, dsId, userFilter, group, pinValue, pinKey, sourceUriKey,
                 retrieveCaller);
         toDelete.push(...groupDeletes);
@@ -1493,7 +1543,7 @@ isolated function observePinKey(BedrockTransport dataTransport, string kbId, str
 // paging terminates on the group's own size and every member is seen exactly.
 isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, string dsId, json? userFilter,
         DeletableDocument[] group, string pinValue, string pinKey, string sourceUriKey,
-        DeleteRetrieveCaller retrieveCaller) returns [json[], string[], boolean]|ai:Error {
+        DeleteRetrieveCaller retrieveCaller) returns [json[], UnresolvedCandidate[], boolean]|ai:Error {
     json pin = pinnedFilter(pinKey, pinValue);
     json filtered = userFilter is () ? pin : {andAll: [userFilter, pin]};
 
@@ -1519,14 +1569,18 @@ isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, s
     boolean truncated = matchedProbe.truncated || reachableProbe.truncated;
 
     json[] toDelete = [];
-    string[] indeterminate = [];
+    UnresolvedCandidate[] indeterminate = [];
     foreach DeletableDocument candidate in group {
         if matchedProbe.identities.hasKey(candidate.sourceValue) {
             // Exactly identified under the caller's filter — sound regardless of
             // whether the probe saw the rest of the group.
             toDelete.push(candidate.identifier);
-        } else if truncated || !reachableProbe.identities.hasKey(candidate.sourceValue) {
-            indeterminate.push(string `${candidate.sourceValue} (data source ${dsId})`);
+        } else if truncated {
+            indeterminate.push({sourceValue: candidate.sourceValue, dataSourceId: dsId,
+                reason: UNRESOLVED_GROUP_TOO_LARGE});
+        } else if !reachableProbe.identities.hasKey(candidate.sourceValue) {
+            indeterminate.push({sourceValue: candidate.sourceValue, dataSourceId: dsId,
+                reason: UNRESOLVED_UNREACHABLE});
         }
         // else: both probes saw the whole group, reached this document without the
         // filter and not with it — the filter excluded it.
