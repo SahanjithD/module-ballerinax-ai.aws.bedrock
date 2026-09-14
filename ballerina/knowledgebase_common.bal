@@ -529,7 +529,16 @@ isolated function concurrentDuplicateMessage(string name, string[] matches, stri
         string `module can only detect the race after the fact, never prevent it. Treat '${winner}' ` +
         "(the lexicographically smallest id) as the surviving knowledge base — every racer computes the " +
         "same winner, so the account converges on it. The other(s) were NOT deleted (this module never " +
-        string `issues 'DeleteKnowledgeBase'); clean them up manually: ${string:'join("; ", ...cleanupCommands)}`;
+        string `issues 'DeleteKnowledgeBase'); clean them up manually: ${string:'join("; ", ...cleanupCommands)}. ` +
+        // Until that cleanup runs, the name matches more than one knowledge base, so
+        // EVERY later `init()` passing a definition with this name fails too — see
+        // `nameAmbiguityMessage`. Say so here: this error is where a caller actually
+        // is when it happens, and the remedy is not obvious from the symptom.
+        "Until then, every 'init()' passing a 'KnowledgeBaseDefinition' with this name will fail, " +
+        "because the name no longer identifies one knowledge base. 'KnowledgeBaseDefinition' is a " +
+        "find-or-create convenience suited to a single instance or a first-time setup; if more than " +
+        "one process can start at once, provision the knowledge base once and pass its ID to 'init()' " +
+        "instead — that path creates nothing and cannot race.";
 }
 
 // ~83s was measured for a VECTOR knowledge base to leave CREATING — a customer-owned
