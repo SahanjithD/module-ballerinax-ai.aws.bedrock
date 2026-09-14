@@ -460,3 +460,76 @@ function testAGroupThatFitsInOnePageIsNotFlaggedAsTruncated() returns error? {
         test:assertEquals(result.indeterminate.length(), 0);
     }
 }
+
+// ============================================================================
+// A21 — the error must scale with the REQUEST, not with the knowledge base.
+//
+// A delete of 105 documents that fully succeeded returned an error naming 455
+// unrelated ones, because those carry no `ai:Metadata.id` for the pin to match. An
+// error that always fires and is always enormous gets ignored, and this one sometimes
+// matters. Each cause is now reported once, with an exact count and a bounded sample.
+// ============================================================================
+
+@test:Config {}
+function testDocumentsWithNoMetadataIdAreSeparatedWithoutProbingThem() returns error? {
+    final int port = 18788;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FanOutFamilyMock(), "/");
+    check mockListener.'start();
+
+    // The 30-member family, plus 40 documents carrying UUID-shaped ids — the shape
+    // `documentIdFor` produces when the caller supplied no `ai:Metadata.id`.
+    DeletableDocument[] candidates = a19Candidates();
+    foreach int i in 0 ..< 40 {
+        string id = string `3f2b9c${i}-7a41-4e2d-9f10-000000000000`;
+        candidates.push({sourceValue: id, identifier: {dataSourceType: "CUSTOM", custom: {id}}});
+    }
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        // The family still deletes in full.
+        test:assertEquals(result.toDelete.length(), 30);
+
+        // The 40 unpinnable documents are reported, and for the RIGHT reason: an id
+        // that cannot be an `ai:Metadata.id` is decidable without asking the service,
+        // so none of them cost a probe.
+        test:assertEquals(result.indeterminate.length(), 40);
+        foreach UnresolvedCandidate candidate in result.indeterminate {
+            test:assertEquals(candidate.reason, UNRESOLVED_NO_DOCUMENT_ID,
+                string `${candidate.sourceValue} should have been ruled out before any probe`);
+        }
+    }
+}
+
+@test:Config {}
+function testTheDeleteErrorReportsOneLinePerCauseWithABoundedSample() {
+    UnresolvedCandidate[] unresolved = [];
+    foreach int i in 0 ..< 455 {
+        unresolved.push({sourceValue: string `doc-${i}`, dataSourceId: "DS1", reason: UNRESOLVED_NO_DOCUMENT_ID});
+    }
+    unresolved.push({sourceValue: "lost-1", dataSourceId: "DS1", reason: UNRESOLVED_UNREACHABLE});
+
+    ai:Error? outcome = deleteByFilterOutcome(unresolved, [], []);
+    test:assertTrue(outcome is ai:Error);
+    if outcome is ai:Error {
+        string msg = outcome.message();
+
+        // Exact counts, one line per cause.
+        test:assertTrue(msg.includes("455 document(s)"), msg);
+        test:assertTrue(msg.includes("1 document(s)"), msg);
+
+        // A bounded sample, not 455 ids: the tenth is shown, the eleventh is not.
+        test:assertTrue(msg.includes("doc-9"), msg);
+        test:assertFalse(msg.includes("doc-10 "), msg);
+        test:assertTrue(msg.includes("and 445 more"), msg);
+
+        // And the cause is actionable rather than a bare "could not confirm".
+        test:assertTrue(msg.includes("ai:Metadata.id"), msg);
+    }
+}

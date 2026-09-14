@@ -240,7 +240,7 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
 
         map<json>[] dataSourceSummaries = check listDataSources(self.controlTransport, self.knowledgeBaseId);
         string[] undeletableDataSources = [];
-        string[] indeterminate = [];
+        UnresolvedCandidate[] indeterminate = [];
         string[] refused = [];
         map<json[]> toDeleteByDataSource = {};
 
