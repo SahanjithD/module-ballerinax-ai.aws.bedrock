@@ -547,9 +547,21 @@ and pass it as a `string` instead.
 >   exists in it, and a destructive call from a constructor that might lack
 >   `bedrock:DeleteKnowledgeBase` would be worse than the duplicate it is trying to clean up.
 >
-> Callers who cannot tolerate this residual race at all should resolve the knowledge base once (by
-> name or however you like) and pass its **id** on every subsequent `init()`, rather than passing a
-> `KnowledgeBaseDefinition` from multiple places that might run concurrently.
+> **The duplicate persists, and it blocks later startups too.** This is an accepted limitation, not a
+> transient warning, so it is worth being precise about what it costs. Once two knowledge bases share
+> a name, *every* subsequent `init()` that passes a `KnowledgeBaseDefinition` with that name also
+> fails — not just the two that raced — because the name no longer identifies one knowledge base and
+> construction refuses to guess which was meant. Startup stays broken until someone deletes one, using
+> the command the error names. The module could instead pick a winner silently, but that trades a
+> visible, one-command fix for an orphan quietly consuming a knowledge base quota slot that nobody
+> is told about.
+>
+> **So pass an id in anything that starts more than once.** `KnowledgeBaseDefinition` is a
+> find-or-create convenience, and find-or-create is a read-then-write: it suits a single instance, a
+> local run, or a first-time setup. For a service with replicas, a restart loop, or any deployment
+> where two processes can boot at the same moment, provision the knowledge base once — console, CLI,
+> IaC, or one run of this module — and pass its **id** to `init()` from then on. That path does no
+> create, has no race, and is unaffected by all of the above.
 
 ### Chunking
 
