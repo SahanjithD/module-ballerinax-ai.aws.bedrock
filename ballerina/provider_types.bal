@@ -148,7 +148,7 @@ type InferenceParams record {|
     # `/openai/v1/responses` received the Chat Completions spelling and answered
     # `Unknown parameter: 'reasoning_effort'` (400). It also conflated a knob the
     # module owns with an escape hatch the CALLER owns, which must stay verbatim.
-    string reasoningEffort?;
+    ReasoningEffort reasoningEffort?;
     # Converse `guardrailConfig` body field; Invoke uses headers instead.
     GuardrailConfig guardrail?;
 |};

@@ -61,8 +61,8 @@ isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
     // dialect, which nests the same value as `reasoning: {effort: ...}`. One vendor,
     // two spellings; this is the half that made folding the knob into the passthrough
     // look correct for as long as only this route was exercised.
-    string? reasoningEffort = params?.reasoningEffort;
-    if reasoningEffort is string {
+    ReasoningEffort? reasoningEffort = params?.reasoningEffort;
+    if reasoningEffort is ReasoningEffort {
         body["reasoning_effort"] = reasoningEffort;
     }
     // Vendor passthrough (e.g. Qwen `enable_thinking`) rides additionalModelRequestFields.

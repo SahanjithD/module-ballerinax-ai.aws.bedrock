@@ -109,6 +109,38 @@ public enum Effort {
     EFFORT_MAX = "max"
 }
 
+# How much reasoning an OpenAI model spends before answering. Sent in the spelling
+# the resolved route uses — a top-level `reasoning_effort` on Chat Completions,
+# `reasoning: {effort: ...}` on the Responses API.
+#
+# These are the UNION of what the OpenAI models on Bedrock accept, harvested on
+# 2026-09-09 from the endpoint's own refusals in `us-east-1` (AWS documents the
+# parameter on neither the gpt-oss-120b nor the GPT-5.5 model card). Membership here
+# does not mean every model takes it: which values a given model accepts is the
+# MODEL's contract, and `REASONING_MINIMAL` is already accepted by one family and
+# refused by the other. An unsupported value is rejected by the endpoint, and the
+# refusal enumerates the set that model does accept — the authority for anything not
+# stated here.
+public enum ReasoningEffort {
+    # No reasoning. Accepted on both families today; OpenAI documents models that
+    # refuse it, so it is not universal.
+    REASONING_NONE = "none",
+    # gpt-oss ONLY. The single value the two families disagree on: `openai.gpt-oss-*`
+    # accepts it, every `openai.gpt-5.x` refuses it with `Invalid value: 'minimal'`
+    # (HTTP 400, verified live 2026-09-09).
+    REASONING_MINIMAL = "minimal",
+    # Least reasoning, lowest latency.
+    REASONING_LOW = "low",
+    # Moderate reasoning.
+    REASONING_MEDIUM = "medium",
+    # Deep reasoning.
+    REASONING_HIGH = "high",
+    # Extended depth beyond `high`.
+    REASONING_XHIGH = "xhigh",
+    # No constraint on depth.
+    REASONING_MAX = "max"
+}
+
 # Converse `serviceTier` passthrough. Note there is no "standard" tier — the
 # baseline is spelled `default`.
 public enum ServiceTier {

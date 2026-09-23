@@ -64,8 +64,8 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     // openai-python: `ResponseCreateParams.reasoning` is a `Reasoning` object whose
     // `effort` member carries the value, and no `reasoning_effort` member exists.
     // https://github.com/openai/openai-python/blob/main/src/openai/types/shared_params/reasoning.py
-    string? reasoningEffort = params?.reasoningEffort;
-    if reasoningEffort is string {
+    ReasoningEffort? reasoningEffort = params?.reasoningEffort;
+    if reasoningEffort is ReasoningEffort {
         body["reasoning"] = {"effort": reasoningEffort};
     }
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
