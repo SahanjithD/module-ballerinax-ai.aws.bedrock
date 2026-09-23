@@ -55,7 +55,19 @@ public enum Truncate {
 
 # Titan-specific embedding configuration.
 public type TitanEmbeddingConfig record {|
-    # Output vector size — Titan V2 accepts 256 | 512 | 1024.
+    // `dimensions` is deliberately `int`, not a closed type. A Ballerina `enum` cannot
+    // hold ints at all (its members are string constants), so the only closed form is a
+    // singleton union — `256|512|1024`. That was weighed and rejected: V1 rejects
+    // `dimensions` outright, so the model-dependent guard in the provider's `init` has
+    // to stay regardless and a closed type would only split validation across two
+    // mechanisms; callers commonly source this from a `configurable int` that has to
+    // agree with an externally-created vector index, which would not assign without a
+    // cast; and a new AWS width would be a breaking type change here versus a one-line
+    // edit to the guard. The cost accepted is that the Integrator renders a text field
+    // rather than a dropdown (its form generator emits SINGLE_SELECT only when every
+    // union member is a singleton).
+    # Output vector size — Titan V2 accepts 256 | 512 | 1024 (default 1024).
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
     int dimensions?;
     # Whether to L2-normalize the returned vector (Titan only).
     boolean normalize?;
@@ -78,7 +90,11 @@ public type CohereEmbeddingConfig record {|
 
     # Truncation behaviour for over-long inputs.
     Truncate truncate?;
-    # Output vector size — Cohere Embed v4 accepts 256..1536.
+    // `int` rather than a closed type, for the reasons spelled out on
+    // `TitanEmbeddingConfig.dimensions`.
+    # Output vector size — Cohere Embed v4 accepts 256 | 512 | 1024 | 1536 (default 1536).
+    # Embed v3 has no output-size parameter at all and always returns 1024.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
     int dimensions?;
     # Escape hatch, mirroring the model provider's passthrough.
     AdditionalRequestFields additionalModelRequestFields?;

@@ -60,7 +60,7 @@ public type AnthropicConfig record {|
     # spelling and the mode/budget pairing rules are enforced at construction.
     ThinkingConfig thinking?;
     # Reasoning depth, emitted as `output_config.effort`. The ONLY depth control on
-    # the adaptive-only models (Mythos 5, Fable 5, Opus 4.7, Mythos Preview).
+    # the adaptive-only models (Fable 5, Opus 4.7, Mythos Preview).
     Effort effort?;
 |};
 
