@@ -73,6 +73,33 @@ function testReasoningEffortNeverTouchesTheCallersPassthrough() returns error? {
     test:assertEquals(params?.reasoningEffort, "low");
 }
 
+@test:Config {}
+function testReasoningEffortEnumMembersReachTheWireAsBareValues() returns error? {
+    // The enum is a name for a value the ENDPOINT owns, so every member has to reach
+    // the wire as its bare string on whichever dialect carries it — the module names
+    // the value, it does not translate it.
+    OpenAIConfig minimal = {reasoningEffort: REASONING_MINIMAL};
+    json chatBody = check encodeOpenAIChat((), [userText("hi")], [], (), openAIParams(256, (), minimal));
+    test:assertEquals((<map<json>>chatBody)["reasoning_effort"], "minimal");
+
+    OpenAIConfig xhigh = {reasoningEffort: REASONING_XHIGH};
+    json responsesBody = check encodeResponses((), [userText("hi")], [], (), openAIParams(256, (), xhigh));
+    test:assertEquals((<map<json>>responsesBody)["reasoning"], {"effort": "xhigh"});
+}
+
+@test:Config {}
+function testReasoningEffortMinimalIsNotRefusedByTheModule() returns error? {
+    // `minimal` is the one value the two OpenAI families disagree on: gpt-oss accepts
+    // it, every gpt-5.x answers `400 Invalid value: 'minimal'`. That is a per-MODEL
+    // contract AWS documents nowhere, so the module forwards it and lets the endpoint
+    // refuse — a hard-coded per-model table here would only go stale. The enum names
+    // the value; it does not promise every model takes it.
+    readonly & InferenceParams params =
+        buildInferenceParams(256, (), (), (), (), (), (), (), (), REASONING_MINIMAL);
+    json body = check encodeResponses((), [userText("hi")], [], (), params);
+    test:assertEquals((<map<json>>body)["reasoning"], {"effort": "minimal"});
+}
+
 // ============================================================================
 // `serviceTier` / `latencyOptimized` — honoured on Converse AND Invoke, refused
 // on Mantle. Never dropped.

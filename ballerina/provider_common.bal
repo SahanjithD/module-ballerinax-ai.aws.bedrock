@@ -126,7 +126,7 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
         string[]? stopSequences, AdditionalRequestFields? additionalModelRequestFields,
         ServiceTier? serviceTier,
         boolean? latencyOptimized, GuardrailConfig? guardrail,
-        ThinkingConfig? thinking = (), Effort? effort = (), string? reasoningEffort = ())
+        ThinkingConfig? thinking = (), Effort? effort = (), ReasoningEffort? reasoningEffort = ())
         returns readonly & InferenceParams {
     InferenceParams params = {maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT};
     // No default: an unset temperature stays unset all the way to the wire, so the
@@ -160,7 +160,7 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
     }
     // OpenAI-only today. First-class rather than folded into the passthrough because
     // its wire shape is dialect-dependent — see `InferenceParams.reasoningEffort`.
-    if reasoningEffort is string {
+    if reasoningEffort is ReasoningEffort {
         params.reasoningEffort = reasoningEffort;
     }
     return params.cloneReadOnly();
@@ -246,7 +246,7 @@ isolated function validateParamsForRoute(string providerName, ApiFamily family,
             string `${providerName}: 'effort' is not supported on the ${dialect} route. Remove it, or ` +
             "select a route that carries it with 'apiFamily'.");
     }
-    if params?.reasoningEffort is string && !supports.reasoningEffort {
+    if params?.reasoningEffort is ReasoningEffort && !supports.reasoningEffort {
         return error ai:Error(
             string `${providerName}: 'reasoningEffort' is not supported on the ${dialect} route. Remove ` +
             "it, or select a route that carries it with 'apiFamily'.");

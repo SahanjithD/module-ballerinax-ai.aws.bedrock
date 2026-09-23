@@ -49,16 +49,18 @@ public type OpenAIConfig record {|
     # `reasoning_effort` on Chat Completions, `reasoning: {effort: ...}` on the
     # Responses API. You pass the value; the module picks the shape.
     #
-    # The ACCEPTED VALUES are the model's, not this module's, and are deliberately not
-    # enumerated here: they differ per model and AWS documents no closed list for
-    # either family. `low`/`medium`/`high` work broadly; `max` is accepted on GPT-OSS
-    # too (verified live, against an earlier doc comment that said otherwise). An
-    # unsupported value is rejected by the endpoint, and the refusal enumerates the
-    # set that model does accept — which is the authority worth reading, and the
-    # reason a hard-coded list here would only ever go stale.
+    # The `ReasoningEffort` members are the union of what the OpenAI models on
+    # Bedrock accepted on 2026-09-09, read out of the endpoint's own refusals in
+    # `us-east-1`. Which of them a given model takes is the MODEL's contract, not
+    # this module's, and the two families differ in exactly ONE value:
+    # `REASONING_MINIMAL` is accepted by `openai.gpt-oss-*` and refused with HTTP 400
+    # by every `openai.gpt-5.x`. That split is deliberately NOT enforced here — AWS
+    # documents no list for either family and OpenAI states the values are
+    # model-dependent, so a per-model table in this module would only go stale. The
+    # endpoint is the authority: its refusal enumerates the set that model accepts.
     #
     # Leave unset to use the model's default.
-    string reasoningEffort?;
+    ReasoningEffort reasoningEffort?;
 |};
 
 # OpenAI models on AWS Bedrock (GPT-5.x on Mantle, GPT-OSS on bedrock-runtime).
