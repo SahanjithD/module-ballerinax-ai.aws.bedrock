@@ -75,6 +75,44 @@ isolated function schemaFor(typedesc<anydata> td) returns map<json>|ai:Error {
     return generateJsonSchemaForTypedescAsJson(td);
 }
 
+// The synthetic property name used when a target type's own schema is not an object.
+const RESULT_WRAPPER_KEY = "result";
+
+// The schema to put on the wire, and whether it wraps the caller's type.
+//
+// Every dialect that forces a tool requires the tool's schema to be an OBJECT —
+// Converse rejects anything else with "toolSpec.inputSchema.json.type must be one of
+// the following: object", and Anthropic Messages says the same of `input_schema`. A
+// target like `int` or `string[]` derives a bare `{"type": "integer"}` /
+// `{"type": "array"}`, so it cannot be sent as-is. Wrapping it in a one-property
+// object is the standard workaround; `unwrapResult` takes it back off before binding.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+isolated function wireSchemaFor(typedesc<anydata> td) returns [map<json>, boolean]|ai:Error {
+    map<json> schema = check schemaFor(td);
+    if schema["type"] == "object" {
+        return [schema, false];
+    }
+    return [
+        {
+            "type": "object",
+            "properties": {[RESULT_WRAPPER_KEY]: schema},
+            "required": [RESULT_WRAPPER_KEY],
+            "additionalProperties": false
+        },
+        true
+    ];
+}
+
+// Binds the model's JSON to the target type, unwrapping the synthetic object first.
+// A model that ignores the wrapper and answers with the bare value still binds — the
+// wrapper is this module's device, not something the caller asked for.
+isolated function bindResult(json data, boolean wrapped, typedesc<anydata> td) returns anydata|ai:Error {
+    if wrapped && data is map<json> && data.hasKey(RESULT_WRAPPER_KEY) {
+        return bindJson(data[RESULT_WRAPPER_KEY], td);
+    }
+    return bindJson(data, td);
+}
+
 // Plain-text generation when the target type is `string`. Serves every route.
 // Runs one chat turn and returns the assistant text.
 isolated function plainTextResponse(ApiFamily api, readonly & ModelConverter converter, BedrockTransport transport,
@@ -111,10 +149,11 @@ isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter
         BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td)
         returns anydata|ai:Error {
+    [map<json>, boolean] [schema, wrapped] = check wireSchemaFor(td);
     ai:ChatCompletionFunctions tool = {
         name: RESULT_TOOL,
         description: "Return the result strictly as structured arguments in the required schema.",
-        parameters: check schemaFor(td)
+        parameters: schema
     };
     ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
     RequestEncoder encode = converter.encode;
@@ -138,14 +177,14 @@ isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter
     }
     ai:FunctionCall[]? toolCalls = decoded.message.toolCalls;
     if toolCalls is ai:FunctionCall[] && toolCalls.length() > 0 {
-        return bindJson(toolCalls[0].arguments ?: {}, td);
+        return bindResult(toolCalls[0].arguments ?: {}, wrapped, td);
     }
     // Fallback: some models emit the JSON in the text content instead.
     string? content = decoded.message.content;
     if content is string {
         json|error parsed = extractJson(content);
         if parsed !is error {
-            return bindJson(parsed, td);
+            return bindResult(parsed, wrapped, td);
         }
     }
     return error ai:LlmInvalidGenerationError(
@@ -257,7 +296,7 @@ isolated function generateByOutputConfig(ApiFamily api, readonly & ModelConverte
         BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td)
         returns anydata|ai:Error {
-    map<json> schema = check schemaFor(td);
+    [map<json>, boolean] [schema, wrapped] = check wireSchemaFor(td);
     ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
     RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode((), [userMsg], [], (), params);
@@ -301,5 +340,5 @@ isolated function generateByOutputConfig(ApiFamily api, readonly & ModelConverte
             string `Model '${wireModelId}' returned text that is not valid JSON despite a ` +
             string `schema-constrained request`, parsed);
     }
-    return bindJson(parsed, td);
+    return bindResult(parsed, wrapped, td);
 }

@@ -174,35 +174,45 @@ public enum Effort {
     EFFORT_MAX = "max"
 }
 
+// MEASURED ACCEPTANCE, 2026-09-24 (us-east-1), by sending each value for real:
+//
+//   openai.gpt-oss-120b  (Invoke)           low, medium, high
+//   openai.gpt-5.4       (Mantle Responses) none, low, medium, high, xhigh
+//
+// The 2026-09-09 harvest that produced the earlier doc text read the set AWS
+// ENUMERATES IN ITS 400 and assumed that was acceptance. It is not: that is the first
+// validator's set, and deeper ones refuse more. gpt-oss reports `none` as valid, then
+// rejects it with "Harmony does not support reasoning_effort='none'"; `minimal` is
+// refused by BOTH families despite gpt-oss enumerating it; gpt-5.4 enumerated `max`
+// on 09-09 and refuses it now. So the only sound reading is per model, per day.
+//
+// The enum stays a union of everything seen rather than splitting per family: a
+// closed per-model table here would be one more thing to go stale, and AWS already
+// reports its own set on refusal. The members are discoverability and typo-catching,
+// NOT a promise of acceptance.
+
 # How much reasoning an OpenAI model spends before answering. Sent in the spelling
 # the resolved route uses — a top-level `reasoning_effort` on Chat Completions,
 # `reasoning: {effort: ...}` on the Responses API.
 #
-# These are the UNION of what the OpenAI models on Bedrock accept, harvested on
-# 2026-09-09 from the endpoint's own refusals in `us-east-1` (AWS documents the
-# parameter on neither the gpt-oss-120b nor the GPT-5.5 model card). Membership here
-# does not mean every model takes it: which values a given model accepts is the
-# MODEL's contract, and `REASONING_MINIMAL` is already accepted by one family and
-# refused by the other. An unsupported value is rejected by the endpoint, and the
-# refusal enumerates the set that model does accept — the authority for anything not
-# stated here.
+# **Which values a given model accepts is the MODEL's contract, not this module's,
+# and no member here is accepted everywhere.** An unsupported value is rejected by
+# the endpoint with a 400; measured sets are in the comment above this enum.
 public enum ReasoningEffort {
-    # No reasoning. Accepted on both families today; OpenAI documents models that
-    # refuse it, so it is not universal.
+    # No reasoning. Accepted on gpt-5.x; REFUSED by gpt-oss.
     REASONING_NONE = "none",
-    # gpt-oss ONLY. The single value the two families disagree on: `openai.gpt-oss-*`
-    # accepts it, every `openai.gpt-5.x` refuses it with `Invalid value: 'minimal'`
-    # (HTTP 400, verified live 2026-09-09).
+    # Refused by both families as of 2026-09-24, despite gpt-oss listing it as valid.
+    # Kept because the model that accepts it may yet appear.
     REASONING_MINIMAL = "minimal",
-    # Least reasoning, lowest latency.
+    # Least reasoning, lowest latency. Accepted on both families.
     REASONING_LOW = "low",
-    # Moderate reasoning.
+    # Moderate reasoning. Accepted on both families.
     REASONING_MEDIUM = "medium",
-    # Deep reasoning.
+    # Deep reasoning. Accepted on both families.
     REASONING_HIGH = "high",
-    # Extended depth beyond `high`.
+    # Extended depth beyond `high`. Accepted on gpt-5.x; refused by gpt-oss.
     REASONING_XHIGH = "xhigh",
-    # No constraint on depth.
+    # No constraint on depth. Refused by gpt-oss, and by gpt-5.4 as of 2026-09-24.
     REASONING_MAX = "max"
 }
 

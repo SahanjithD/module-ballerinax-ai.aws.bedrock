@@ -80,7 +80,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
             string `the matching BedrockRuntime*ModelProvider to keep the prefix.`);
     }
 
-    MantleEntry entry = check mantleEntryForBare(bareId);
+    [string, MantleEntry] [canonicalId, entry] = check mantleEntryForBare(bareId);
     // The shape is the MODEL's, not the caller's. Every Mantle model has exactly one
     // route this module takes, so there is no API argument on the Mantle classes and
     // no way to ask for one the model is not published on.
@@ -94,11 +94,11 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
     return {
         endpoint: MANTLE,
         api: resolvedApi,
-        bareModelId: bareId,
+        bareModelId: canonicalId,
         geoPrefix: (),
         // A model may be published under different ids per endpoint (see
         // `MantleEntry.modelId`); the entry wins when it says so.
-        effectiveModelId: entry?.modelId ?: bareId,
+        effectiveModelId: entry?.modelId ?: canonicalId,
         region,
         partition: partitionForRegion(region),
         mantleEntry: entry
@@ -172,14 +172,26 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
 // `MANTLE_CAPABLE` lookup for a bare id. A Mantle path is not derivable from a model
 // id, so a model AWS has added since our last release cannot be reached on Mantle
 // until the table ships it.
-isolated function mantleEntryForBare(string bareId) returns MantleEntry|error {
+isolated function mantleEntryForBare(string bareId) returns [string, MantleEntry]|error {
     MantleEntry? entry = MANTLE_CAPABLE[bareId];
-    if entry is () {
-        return error(string `model '${bareId}' is not available on bedrock-mantle (no known request ` +
-            string `path). Use the matching BedrockRuntime*ModelProvider, or upgrade the module if AWS ` +
-            string `has since added it to bedrock-mantle`);
+    if entry is MantleEntry {
+        return [bareId, entry];
     }
-    return entry;
+    // Second chance on the MANTLE-side id. The table is keyed on the bedrock-runtime
+    // id so that both endpoints agree on one lookup key, but a handful of models are
+    // published under a different id per endpoint (`MantleEntry.modelId`) — and the
+    // id a user reads off the Mantle model card is that one. Refusing
+    // `openai.gpt-oss-120b` on a Mantle class because the table happens to be keyed
+    // on `openai.gpt-oss-120b-1:0` is this module's bookkeeping leaking out.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    foreach [string, MantleEntry] [key, candidate] in MANTLE_CAPABLE.entries() {
+        if candidate?.modelId == bareId {
+            return [key, candidate];
+        }
+    }
+    return error(string `model '${bareId}' is not available on bedrock-mantle (no known request ` +
+        string `path). Use the matching BedrockRuntime*ModelProvider, or upgrade the module if AWS ` +
+        string `has since added it to bedrock-mantle`);
 }
 
 // Strips a CRIS geo prefix for lookup, keeping it for re-application on the wire.

@@ -209,15 +209,16 @@ type Review record {| string sentiment; int score; |};
 Review review = check claude->generate(`Rate this review: ${text}`);
 ```
 
-> **Typed `generate()` needs `bedrock-runtime`.** Structured output is a runtime capability. A
-> `BedrockMantle*` class returns an `ai:Error` for any non-`string` target type, naming the model and
-> saying so. There is no silent cross-endpoint fallback — the class you constructed is the endpoint you
-> talk to, and the IAM permission you need is the one for that endpoint.
+> **Typed `generate()` works everywhere except Mantle Messages.** On `bedrock-runtime` and on the
+> OpenAI-shaped Mantle routes (Responses, Chat Completions) a typed target is obtained by forcing a
+> tool. The one exception is `BedrockMantleAnthropicModelProvider`, which resolves to the Anthropic
+> Messages API: that route rejects both `output_config.format` and `strict: true` on tools, so it
+> returns an `ai:Error` for any non-`string` target type, naming the model and saying so.
 >
-> Most flagship models are dual-homed, so the fix is to construct the runtime class instead:
-> `BedrockRuntimeAnthropicModelProvider` rather than `BedrockMantleAnthropicModelProvider`. Only
-> genuinely Mantle-only models (`MANTLE_GPT_5_4`, `MANTLE_GPT_5_5`, Gemma 4) have no runtime
-> alternative.
+> There is no silent cross-endpoint fallback — the class you constructed is the endpoint you talk to.
+> Claude is dual-homed, so the fix is `BedrockRuntimeAnthropicModelProvider` instead.
+>
+> A `string` target is plain text on every class and never hits this.
 >
 > A `string` target always returns text normally, and `chat()` is unaffected in every case.
 >
@@ -477,11 +478,13 @@ Worth knowing before you upgrade:
 > **`temperature` has no default, and that is deliberate.** Leave it unset and the field is omitted from
 > the request entirely, so the model applies its own default. This is not a style choice: Anthropic
 > deprecated sampling parameters on Claude 4.7 and later (`CLAUDE_OPUS_4_8`, `CLAUDE_OPUS_5`,
-> `CLAUDE_SONNET_5`) and OpenAI's GPT-5.x reasoning models (`MANTLE_GPT_5_4`, `MANTLE_GPT_5_5`,
-> `MANTLE_GPT_5_6_*`) never accepted them. On those models **any** value returns
+> `CLAUDE_SONNET_5`): on those models **any** value returns
 > `400 temperature is deprecated for this model`, so a module-level default would make them unusable out
-> of the box. Set `temperature` only for models you know accept it — Nova, Mistral, Qwen, Gemma,
-> DeepSeek, GPT-OSS, and Claude 4.6 and earlier.
+> of the box.
+>
+> Acceptance is per model, not per family — `MANTLE_GPT_5_4` accepts `temperature = 0.5` (verified live
+> 2026-09-24), so do not assume the GPT-5.x models refuse it. Set `temperature` when you know the model
+> takes it, and let AWS refuse it otherwise.
 
 > **`reasoningEffort` is a `ReasoningEffort` enum, and `minimal` is gpt-oss-only.** The members —
 > `REASONING_NONE`, `REASONING_MINIMAL`, `REASONING_LOW`, `REASONING_MEDIUM`, `REASONING_HIGH`,

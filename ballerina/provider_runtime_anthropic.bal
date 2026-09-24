@@ -37,7 +37,12 @@ public enum AnthropicRuntimeModel {
     # Claude Sonnet 5 — 1M context, adaptive thinking always on.
     CLAUDE_SONNET_5 = "us.anthropic.claude-sonnet-5",
     CLAUDE_SONNET_4_6 = "us.anthropic.claude-sonnet-4-6",
-    CLAUDE_HAIKU_4_5 = "us.anthropic.claude-haiku-4-5"
+    # DATED AND VERSIONED, unlike its siblings above. The model card's Programmatic
+    # Access table gives `N/A` as the runtime Model ID and names only
+    # `us.|eu.|au.|jp.|global.anthropic.claude-haiku-4-5-20251001-v1:0`; the undated
+    # id is refused with "The provided model identifier is invalid".
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
+    CLAUDE_HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 # Configuration for `BedrockRuntimeAnthropicModelProvider`.
