@@ -10,16 +10,17 @@ This module provides native [Ballerina `ai`](https://central.ballerina.io/baller
 embedding providers for **AWS Bedrock**, implementing the standard `ai:ModelProvider` and
 `ai:EmbeddingProvider` contracts.
 
-Bedrock exposes LLMs through **two endpoints with incompatible wire contracts**, and this module hides
-both:
+Bedrock exposes LLMs through **two endpoints**, and this module gives each its own provider classes:
 
-| Endpoint | Inference APIs | Signing scope |
-| --- | --- | --- |
-| `bedrock-runtime.{region}.amazonaws.com` | InvokeModel, Converse | `bedrock` |
-| `bedrock-mantle.{region}.api.aws` | Responses, Chat Completions, Messages | `bedrock-mantle` |
+| Endpoint | Inference APIs | Signing scope | IAM |
+| --- | --- | --- | --- |
+| `bedrock-runtime.{region}.amazonaws.com` **(recommended)** | Converse, InvokeModel, Chat Completions, Responses, Messages | `bedrock` | `bedrock:InvokeModel` |
+| `bedrock-mantle.{region}.api.aws` (compatibility) | Chat Completions, Responses, Messages | `bedrock-mantle` | `bedrock-mantle:CreateInference` |
 
-Claude Mythos Preview, GPT-5.5, and GPT-5.4 live **only** on `bedrock-mantle` — a Converse-only provider
-cannot reach them at all. That is the reason this module exists.
+AWS recommends `bedrock-runtime` for new applications. `bedrock-mantle` remains the only way to reach
+some models — GPT-5.4, GPT-5.5 and Gemma 4 among them — and it authorizes under a **separate IAM
+namespace**, which is why the endpoint is part of the class you construct rather than something the
+module picks for you.
 
 For usage details, the routing table, and the full provider list, see the
 [module documentation](ballerina/README.md).
@@ -125,12 +126,14 @@ cd ballerina && bal build && bal test
 
 **Why the compiler plugin is required.** `generate()` is declared `external` and returns an inferred
 `typedesc<anydata>`. The plugin (`AiAwsBedrockCodeModifier`) walks every `generate()` call site whose
-receiver is one of this package's seven provider classes, derives the JSON schema of the expected return
+receiver is one of this package's provider classes, derives the JSON schema of the expected return
 type, and attaches it to that type as an `@ai:JsonSchema` annotation. The runtime shim reads that
 annotation to bind the model's response back into the caller's type. Without the plugin, records have no
 derivable schema and `generate()` fails at runtime. Adding a new provider class means adding its name to
 `MODEL_PROVIDER_CLASS_NAMES` in `GenerateMethodModificationTask` — a class missing from that list
-silently loses type binding, with no compile error at the call site.
+silently loses type binding, with no compile error at the call site. The runtime shim in
+`native/.../Generator.java` likewise reads provider fields **by name**, so renaming a `private final`
+field on a provider class is a silent break the compiler cannot catch.
 
 Note that `./gradlew build` invokes the `io.ballerina.plugin` Gradle plugin's `commitTomlFiles` task,
 which runs `git commit` on `Ballerina.toml`, `Dependencies.toml`, and `CompilerPlugin.toml`. This is the
