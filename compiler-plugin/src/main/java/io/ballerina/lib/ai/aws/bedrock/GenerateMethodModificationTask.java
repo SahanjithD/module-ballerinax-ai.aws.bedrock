@@ -87,13 +87,11 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     private static final String AI_MODULE_NAME = "ai";
     private static final String BALLERINA_ORG_NAME = "ballerina";
     private static final String BEDROCK_MODULE_NAME = "ai.aws.bedrock";
-    // These three must match Ballerina.toml exactly, and the module coordinates in
+    // These must match Ballerina.toml exactly, and the module coordinates in
     // native/.../Generator.java, or `getTypeByName` below resolves nothing, no call
     // site receives an `@ai:JsonSchema` annotation, and `generate()` loses type
     // binding at runtime with no compile error anywhere. The org was `ballerinax`
     // while the package published as `dasunorg`, which is exactly that silent failure.
-    // The version is the MAJOR component of the package version.
-    private static final String BEDROCK_MODULE_VERSION = "1";
     private static final String BEDROCK_MODULE_ORG = "dasunorg";
 
     /**
@@ -135,6 +133,8 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             return;
         }
 
+        String moduleVersion = majorVersionOf(currentPackage);
+
         for (ModuleId moduleId : currentPackage.moduleIds()) {
             Module module = currentPackage.module(moduleId);
             SemanticModel semanticModel = compilation.getSemanticModel(moduleId);
@@ -148,7 +148,7 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             // module the names are already unique.
             ModifierData modifierData = new ModifierData();
 
-            List<ClassSymbol> providerSymbols = resolveProviderSymbols(semanticModel);
+            List<ClassSymbol> providerSymbols = resolveProviderSymbols(semanticModel, moduleVersion);
 
             for (DocumentId documentId : documentIds) {
                 analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
@@ -170,12 +170,25 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
         }
     }
 
-    private static List<ClassSymbol> resolveProviderSymbols(SemanticModel semanticModel) {
+    /**
+     * The MAJOR component of the package version, which is what `getTypeByName` keys on.
+     *
+     * <p>Read from the package being compiled rather than hardcoded. A literal here has to be
+     * edited in lockstep with every version bump, and forgetting costs no compile error: the
+     * lookup simply resolves nothing, no call site is annotated, and typed {@code generate()}
+     * fails at runtime with "Value creator object is not available". Bumping the package to
+     * 2.0.0 against a hardcoded "1" reproduced exactly that.</p>
+     */
+    private static String majorVersionOf(Package currentPackage) {
+        return String.valueOf(currentPackage.packageVersion().value().major());
+    }
+
+    private static List<ClassSymbol> resolveProviderSymbols(SemanticModel semanticModel, String moduleVersion) {
         Types types = semanticModel.types();
         List<ClassSymbol> symbols = new ArrayList<>(MODEL_PROVIDER_CLASS_NAMES.length);
         for (String className : MODEL_PROVIDER_CLASS_NAMES) {
             Optional<Symbol> symbol = types.getTypeByName(BEDROCK_MODULE_ORG, BEDROCK_MODULE_NAME,
-                    BEDROCK_MODULE_VERSION, className);
+                    moduleVersion, className);
             if (symbol.isPresent() && symbol.get() instanceof ClassSymbol classSymbol) {
                 symbols.add(classSymbol);
             }
