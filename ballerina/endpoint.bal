@@ -20,8 +20,17 @@ import ballerinax/aws;
 // id's `:`/`/` (ARNs, `-v1:0` ids) become `%3A`/`%2F`. This is the WIRE path; the
 // transport double-encodes it for the SigV4 canonical URI (SigV4 non-S3 rule).
 
-const SIGNING_BEDROCK = "bedrock";               // Converse / Invoke
-const SIGNING_BEDROCK_MANTLE = "bedrock-mantle"; // Mantle
+// SigV4 signing names, chosen by ENDPOINT rather than by wire shape. Every path on
+// `bedrock-runtime` signs as `bedrock` — including the vendor-native
+// `/openai/v1/*` and `/anthropic/v1/*` paths, per AWS's own curl
+// (`--aws-sigv4 "aws:amz:us-east-1:bedrock"`).
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+const SIGNING_BEDROCK = "bedrock";
+// Mantle signs under its own name, stated verbatim: "Either a SigV4 signature with
+// service name `bedrock-mantle`, or an Amazon Bedrock API key passed in the
+// `x-api-key` header."
+// https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html
+const SIGNING_BEDROCK_MANTLE = "bedrock-mantle";
 
 // SDK endpoint-metadata service prefixes. Mantle is served from the DUALSTACK
 // suffix family, which is partition-SPECIFIC, not partition-neutral: `api.aws` in
@@ -65,7 +74,7 @@ type Endpoint record {|
 // and signing name are NOT derived from the result — a VPCE, FIPS or gateway host
 // still signs the route's own region/service scope.
 isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error {
-    boolean mantle = route.family == MANTLE;
+    boolean mantle = route.endpoint == MANTLE;
     string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
     // Mantle is served from the dualstack suffix family; without this flag the
     // metadata falls back to `bedrock-mantle.{region}.amazonaws.com`, which does not
@@ -127,8 +136,8 @@ isolated function guardDualstack(string serviceName, string region, boolean dual
     return error(string `'dualstack' is not available on '${serviceName}': AWS publishes a dualstack ` +
         string `('.api.aws') host for 'bedrock-mantle' only, so '${serviceName}.${region}.api.aws' does ` +
         string `not resolve and every request would fail as a connection error. Drop 'dualstack' ` +
-        string `(the standard host is reached over IPv4), use 'apiFamily = MANTLE' if you need the ` +
-        string `dualstack endpoint family, or set 'customEndpoint' to dial a specific origin.`);
+        string `(the standard host is reached over IPv4), use a BedrockMantle*ModelProvider if you ` +
+        string `need the dualstack endpoint family, or set 'customEndpoint' to dial a specific origin.`);
 }
 
 // Trailing slash would double up against the route-derived path.
@@ -161,9 +170,8 @@ isolated function guardBedrockPartition(string partition, string region) returns
 // `bedrock-mantle.us-gov-east-1.api.aws` resolves even though Mantle is not served
 // there.)
 //
-// Under `AUTO` the resolver never SELECTS Mantle on a partition this rejects — it
-// prefers Converse — so reaching the guard in `buildEndpoint` means the caller named
-// `apiFamily = MANTLE` explicitly.
+// Reaching the guard in `buildEndpoint` means the caller constructed a
+// `BedrockMantle*ModelProvider` in a region whose partition serves no Mantle host.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
 isolated function mantleServedOnPartition(string partition) returns boolean
     => partition == "aws" || partition == "aws-us-gov";
@@ -197,42 +205,79 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
         check guardBedrockPartition(route.partition, route.region);
     }
 
-    if route.family == MANTLE {
+    if route.endpoint == MANTLE {
         if derived && (endpointConfig?.fips ?: false) {
             // No `bedrock-mantle-fips` host exists; `aws:resolveEndpoint` would
             // happily synthesise `bedrock-mantle-fips.{region}.api.aws` and fail at
-            // DNS. Name the mistake here instead. Verified 2026-09-03.
-            return error("'fips' is not available on the Mantle route: there is no " +
-                "bedrock-mantle FIPS endpoint. Use 'apiFamily = CONVERSE' or 'INVOKE' " +
-                "for a FIPS-compliant Bedrock call.");
+            // DNS. Name the mistake here instead. Corroborated by the PrivateLink
+            // service-name list, which carries `bedrock-fips` and
+            // `bedrock-runtime-fips` but no `bedrock-mantle-fips`.
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html
+            return error("'fips' is not available on the bedrock-mantle endpoint: there is no " +
+                "bedrock-mantle FIPS host. Use a BedrockRuntime*ModelProvider for a " +
+                "FIPS-compliant Bedrock call.");
         }
-        // Reached only on an EXPLICIT `apiFamily = MANTLE`: under `AUTO` the resolver
-        // prefers Converse on a partition that cannot serve Mantle rather than
-        // failing. See `mantleServedOnPartition`.
         if derived && !mantleServedOnPartition(route.partition) {
-            return error(string `Mantle is not available on partition '${route.partition}': no ` +
-                string `bedrock-mantle host is served there. Use 'apiFamily = CONVERSE' or ` +
-                string `'INVOKE', or a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
+            return error(string `bedrock-mantle is not available on partition '${route.partition}': no ` +
+                string `bedrock-mantle host is served there. Use a BedrockRuntime*ModelProvider, or a ` +
+                string `commercial ('aws') or GovCloud ('aws-us-gov') region.`);
         }
         MantleEntry entry = check route.mantleEntry.ensureType();
         string mantleBase = check resolveServiceUrl(route, endpointConfig);
         return {
             baseUrl: mantleBase,
             host: hostOf(mantleBase),
+            // The Mantle path is per-model table data, not derivable from the id.
             path: entry.path,
             signingService: SIGNING_BEDROCK_MANTLE
         };
     }
 
-    // Converse / Invoke on `bedrock-runtime`, partition-aware domain.
     string base = check resolveServiceUrl(route, endpointConfig);
-    // Single-encode the model-id segment (ARNs/`-v1:0` ids carry `:` and `/`).
-    string encodedId = encodePathSegment(route.effectiveModelId);
-    string path = route.family == CONVERSE
-        ? string `/model/${encodedId}/converse`
-        : string `/model/${encodedId}/invoke`;
-    return {baseUrl: base, host: hostOf(base), path, signingService: SIGNING_BEDROCK};
+    return {
+        baseUrl: base,
+        host: hostOf(base),
+        path: check runtimePath(route),
+        signingService: SIGNING_BEDROCK
+    };
 }
+
+// The `bedrock-runtime` request path for a resolved shape.
+//
+// Converse and InvokeModel address the model in the URL, so their path carries the
+// single-encoded model id. The three vendor-native shapes are FIXED paths — the
+// model is named in the request body instead — and, unlike Mantle, they are uniform
+// across models: there is no `/v1` vs `/openai/v1` split on this endpoint.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
+isolated function runtimePath(Route route) returns string|error {
+    match route.shape {
+        CONVERSE => {
+            return string `/model/${encodePathSegment(route.effectiveModelId)}/converse`;
+        }
+        INVOKE => {
+            return string `/model/${encodePathSegment(route.effectiveModelId)}/invoke`;
+        }
+        MESSAGES => {
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+            return "/anthropic/v1/messages";
+        }
+        CHAT_COMPLETIONS => {
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+            return "/openai/v1/chat/completions";
+        }
+        RESPONSES => {
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+            return "/openai/v1/responses";
+        }
+    }
+    return error(string `no bedrock-runtime path for shape '${route.shape}'`);
+}
+
+// Whether the resolved shape names the model in the URL rather than the body.
+// Converse and InvokeModel do; the three vendor-native shapes carry `model` in the
+// request body on both endpoints.
+isolated function isPathAddressed(ApiShape shape) returns boolean
+    => shape == CONVERSE || shape == INVOKE;
 
 // Which bedrock-agent plane an endpoint is for. Module-private: only the knowledge
 // base spine needs this distinction.

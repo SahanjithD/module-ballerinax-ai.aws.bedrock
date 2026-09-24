@@ -47,7 +47,8 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockCredentials 
         }
         // Embeddings: InvokeModel only — no Converse equivalent, no streaming.
         Route route = {
-            family: INVOKE,
+            endpoint: RUNTIME,
+            shape: INVOKE,
             bareModelId: bareId,
             geoPrefix,
             effectiveModelId: applyGeoPrefix(bareId, geoPrefix), // CRIS restored on the wire

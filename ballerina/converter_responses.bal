@@ -15,7 +15,7 @@
 import ballerina/ai;
 
 // OpenAI Responses wire format on Mantle. GPT-5.5/5.4 are
-// Mantle-only and use `/openai/v1/responses`. System text is the `instructions`
+// served on `/openai/v1/responses` on bedrock-runtime and on `/v1/responses` or `/openai/v1/responses` on bedrock-mantle, per model. System text is the `instructions`
 // field; turns are `input` items; the model reply is in `output` items.
 
 // Encodes an OpenAI Responses request body.

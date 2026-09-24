@@ -65,13 +65,14 @@ public type RetryConfig record {|
 // only its vendor-specific fields.
 // ============================================================================
 
-# Everything that is not the model's identity, shared across vendors.
-// NOTE `apiFamily` and `endpoint` are NOT here. Both are routing/transport decisions
+# Everything that is not the model's identity, shared by every
+# `BedrockRuntime*ModelProvider` and by `BedrockCommonModelProvider`.
+// NOTE `api` and `endpoint` are NOT here. Both are routing/transport decisions
 // a caller makes at the same moment they choose the model and the region, so they sit
 // directly on `init` alongside those rather than one level down in this record —
 // visible in the Integrator panel without expanding a config, and impossible to miss
 // when reading a call site.
-public type CommonModelConfig record {|
+public type CommonRuntimeConfig record {|
     // --- Inference ---
     # Provider-level stop sequences; a per-call `stop` overrides these.
     string[] stopSequences?;
@@ -106,6 +107,31 @@ public type CommonModelConfig record {|
     # Retry policy.
     RetryConfig retryConfig?;
     # Underlying HTTP client configuration.
+    http:ClientConfiguration httpConfig?;
+|};
+
+# The `bedrock-mantle` counterpart of `CommonRuntimeConfig`.
+#
+# Three fields are absent rather than refused: `guardrail`, `serviceTier` and
+# `latencyOptimized`. Guardrails are a bedrock-runtime feature and Mantle carries no
+# Bedrock request-option headers at all, so on the Mantle classes these are a COMPILE
+# error instead of the construction-time refusal they used to be — the payoff of
+# splitting the surface by endpoint.
+# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+public type CommonMantleConfig record {|
+    # Provider-level stop sequences; a per-call `stop` overrides these.
+    string[] stopSequences?;
+
+    # Forwarded VERBATIM into the top level of the vendor dialect's request body. The
+    # escape hatch for anything the endpoint exposes that this module does not model,
+    # and the reason it is spliced untouched — the module never rewrites, renames or
+    # reshapes what you put here.
+    AdditionalRequestFields additionalModelRequestFields?;
+
+    # Retry behaviour for throttled and transient responses.
+    RetryConfig retryConfig?;
+
+    # Underlying HTTP client configuration (timeouts, proxy, connection pooling).
     http:ClientConfiguration httpConfig?;
 |};
 
@@ -181,8 +207,12 @@ type DecodedResponse record {|
     GuardrailAction? guardrailAction;
 |};
 
-# Encode: system is hoisted out of `messages` into the signature so
-# no converter can emit it as a `role: system` message. Module-private converter plumbing.
+# Encode: system is hoisted out of `messages` into its own parameter, so a converter
+# emits it deliberately or not at all — never by accidentally letting a system turn
+# fall through the message loop. Most dialects carry it as a top-level field
+# (`system`, `instructions`, or folded into the prompt string); the OpenAI Chat
+# Completions and Mistral chat encoders DO emit `{"role": "system", ...}`, because
+# that is what those wire formats specify. Module-private converter plumbing.
 #
 # Messages arrive ALREADY RESOLVED (`ResolvedMessage`): any `ai:Prompt` has been
 # flattened to `ContentPart`s and any image URL fetched, by `resolveMessages`. That
@@ -212,7 +242,7 @@ type ResponseDecoder isolated function (json response) returns DecodedResponse|a
 #
 # `serviceTier` and `latencyOptimized` are NOT here: they are honoured by the route
 # FAMILY rather than the dialect — a Converse body field, an InvokeModel request
-# header, nothing on Mantle — so they are decided by `familyCarriesRequestOptions`.
+# header, nothing on Mantle — so they are decided by `shapeCarriesRequestOptions`.
 type DialectSupport record {|
     # A stop-sequence parameter exists in this dialect's request schema.
     boolean stopSequences = true;

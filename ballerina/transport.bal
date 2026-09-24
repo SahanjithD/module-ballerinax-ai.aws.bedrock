@@ -250,9 +250,9 @@ isolated client class BedrockTransport {
                 // "status 400" fallback — when Bedrock sent a specific reason (e.g.
                 // "Model does not support image modality"), tacking on a generic
                 // routing guess is redundant at best and misleading at worst. Never on
-                // an agent (KB) route: there is no `apiFamily` to retry with there.
+                // an agent (KB) route: there is no `api` to retry with there.
                 string hint = !agent && detail.startsWith("status ")
-                    ? " The model may not support this route; try 'apiFamily = INVOKE' (or CONVERSE)."
+                    ? " The model may not support this shape; try 'api = INVOKE' (or CONVERSE)."
                     : "";
                 return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}.${hint}`);
             }
