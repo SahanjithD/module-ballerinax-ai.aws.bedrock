@@ -75,12 +75,12 @@ property of its type, so an unreachable combination does not compile:
 | `BedrockRuntime{DeepSeek,Google,Mistral,Qwen}ModelProvider` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
 | `BedrockRuntimeAmazonModelProvider` | `CONVERSE`, `INVOKE` |
 | `BedrockCommonModelProvider` | — (Converse only) |
+| `BedrockMantle*ModelProvider` | — (the model's own shape) |
 
 `CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that shape for DeepSeek, Gemma 3, Mistral,
-Qwen3 and others. Mantle classes take an optional `api` that selects among the shapes the model is published on —
-`openai.gpt-oss-120b` serves both Responses and Chat Completions, so either is reachable. Leave it
-unset to take the model's default. Asking for a shape it does not serve is a construction error naming
-the ones it does.
+Qwen3 and others. **Mantle classes take no `api` argument at all.** Each Mantle model has exactly one route this module
+takes, so there is nothing for a caller to choose — the model decides. (`openai.gpt-oss-120b` is
+published on both Responses and Chat Completions; this module takes Chat Completions.)
 
 Per-model gaps remain and are left for AWS to report — GPT OSS serves Chat Completions, Converse and
 Invoke on `bedrock-runtime` but not Responses, for example.

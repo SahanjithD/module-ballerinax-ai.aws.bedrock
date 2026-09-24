@@ -261,30 +261,38 @@ function testMantleServesNeitherConverseNorInvoke() {
 }
 
 @test:Config {}
-function testApiSelectsAmongTheShapesAModelServes() returns error? {
-    // gpt-oss is published on BOTH Responses and Chat Completions on `/v1`, so `api`
-    // genuinely selects here rather than merely asserting.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
-    Route chat = check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION, CHAT_COMPLETIONS);
-    Route responses = check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION, RESPONSES);
-    test:assertEquals(chat.shape, CHAT_COMPLETIONS);
-    test:assertEquals(responses.shape, RESPONSES);
-    test:assertEquals((check buildEndpoint(chat)).path, "/v1/chat/completions");
-    test:assertEquals((check buildEndpoint(responses)).path, "/v1/responses");
-    // Unset takes the first shape the table lists.
-    test:assertEquals((check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION)).shape,
-            CHAT_COMPLETIONS);
+function testTheModelDecidesTheMantleShapeNotTheCaller() returns error? {
+    // There is no shape argument on the Mantle classes: each model has exactly one
+    // route this module takes, and it is the first shape its table row lists.
+    Route oss = check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION);
+    test:assertEquals(oss.shape, CHAT_COMPLETIONS);
+    test:assertEquals((check buildEndpoint(oss)).path, "/v1/chat/completions");
+
+    Route claude = check resolveMantleRoute("anthropic.claude-opus-5", REGION);
+    test:assertEquals(claude.shape, MESSAGES);
+    test:assertEquals((check buildEndpoint(claude)).path, "/anthropic/v1/messages");
+
+    Route gpt = check resolveMantleRoute("openai.gpt-5.5", REGION);
+    test:assertEquals(gpt.shape, RESPONSES);
+    test:assertEquals((check buildEndpoint(gpt)).path, "/openai/v1/responses");
 }
 
 @test:Config {}
-function testAShapeAModelDoesNotServeIsRefusedNamingWhatItDoesServe() {
-    Route|error r = resolveMantleRoute("anthropic.claude-opus-5", REGION, RESPONSES);
-    test:assertTrue(r is error);
-    if r is error {
-        test:assertTrue(r.message().includes("anthropic.claude-opus-5"), r.message());
-        test:assertTrue(r.message().includes("MESSAGES"), r.message());
+function testChatCompletionsCarriesMostOfTheMantleSurface() returns error? {
+    // A regression guard on a design question that came up twice: Chat Completions is
+    // NOT an OpenAI-only shape on bedrock-mantle. Eight of the table's models use it
+    // and none of them are OpenAI, so dropping it would leave the Mistral, Qwen and
+    // DeepSeek Mantle classes with no constructible model at all.
+    string[] chatOnly = ["zai.glm-5", "deepseek.v3.2", "mistral.mistral-large-3-675b-instruct",
+        "qwen.qwen3-coder-480b-a35b-v1:0", "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it",
+        "google.gemma-3-12b-it", "google.gemma-3-4b-it"];
+    foreach string id in chatOnly {
+        Route r = check resolveMantleRoute(id, REGION);
+        test:assertEquals(r.shape, CHAT_COMPLETIONS, id);
+        test:assertFalse(id.startsWith("openai."), id + " is not an OpenAI model");
     }
 }
+
 
 @test:Config {}
 function testEveryMantleTableEntryHasAResolvableDialect() returns error? {

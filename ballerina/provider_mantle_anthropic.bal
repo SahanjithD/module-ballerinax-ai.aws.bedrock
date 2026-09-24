@@ -69,9 +69,6 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
     #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
     #                 source, or a `BearerToken` for a Bedrock API key
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + api - The wire shape, chosen from the ones this model is published on. Leave
-    #         unset to take its default; asking for one it does not serve is a
-    #         construction error naming the shapes it does
     # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
     #              The host is derived from the region when this is `()`, which is correct
     #              in every partition — set it only for PrivateLink without private DNS,
@@ -87,13 +84,12 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
             @display {label: "Model"} AnthropicMantleModel|string model,
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
-            @display {label: "API Shape"} MantleApi? api = (),
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AnthropicMantleConfig config)
             returns ai:Error? {
-        Route|error resolved = resolveMantleRoute(model, region, api);
+        Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
             check resolveSpine("BedrockMantleAnthropicModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
