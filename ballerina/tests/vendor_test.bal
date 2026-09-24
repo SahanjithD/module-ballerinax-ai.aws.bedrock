@@ -12,65 +12,78 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import ballerina/ai;
 import ballerina/test;
 
-// Vendor facades: AUTO routing, no Tier-2,
-// per-model supportsStructuredOutput).
+// The vendor facades. The public surface is cut by ENDPOINT: a
+// `BedrockRuntime<V>ModelProvider` can only ever reach `bedrock-runtime` and a
+// `BedrockMantle<V>ModelProvider` only `bedrock-mantle`, so "which endpoint did my
+// model end up on" is answered by the type at the call site rather than by a
+// routing ladder at runtime.
 
-// ---- ApiFamily.AUTO ----
+// ---- construction smoke tests for all fourteen classes (no I/O) ----
 
 @test:Config {}
-function testAutoIsTheDefaultAndRunsTheResolver() returns error? {
-    // AUTO must behave exactly like "no forced family". By default
-    // the resolver prefers Mantle for a Mantle-capable model, so opus-4-8 → Mantle;
-    // the point of this test is that AUTO and "no family" agree.
-    Route auto = check resolveRoute("anthropic.claude-opus-4-8", REGION, {apiFamily: AUTO});
-    Route implicit = check resolveRoute("anthropic.claude-opus-4-8", REGION);
-    test:assertEquals(auto.family, MANTLE);
-    test:assertEquals(auto.family, implicit.family);
+function testEveryRuntimeProviderConstructs() returns error? {
+    BedrockCommonModelProvider _ = check new ("amazon.nova-pro-v1:0", TEST_CREDS, REGION);
+    BedrockRuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_4_6, TEST_CREDS, REGION);
+    BedrockRuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION);
+    BedrockRuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION);
+    BedrockRuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION);
+    BedrockRuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION);
+    BedrockRuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION);
+    BedrockRuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_R1, TEST_CREDS, REGION);
 }
 
 @test:Config {}
-function testAutoStillLetsMantleOnlyModelsDefaultToMantle() returns error? {
-    Route route = check resolveRoute("openai.gpt-5.4", REGION, {apiFamily: AUTO});
-    test:assertEquals(route.family, MANTLE, "AUTO runs the ladder, which defaults gpt-5.4 to Mantle");
+function testEveryMantleProviderConstructs() returns error? {
+    // Six, not seven: Amazon has no model on bedrock-mantle, so there is no
+    // `BedrockMantleAmazonModelProvider` to construct.
+    BedrockMantleAnthropicModelProvider _ = check new (MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION);
+    BedrockMantleOpenAIModelProvider _ = check new (MANTLE_GPT_5_5, TEST_CREDS, REGION);
+    BedrockMantleMistralModelProvider _ = check new (MANTLE_MISTRAL_LARGE_3, TEST_CREDS, REGION);
+    BedrockMantleQwenModelProvider _ = check new (MANTLE_QWEN3_32B, TEST_CREDS, REGION);
+    BedrockMantleGoogleModelProvider _ = check new (MANTLE_GEMMA_4_31B, TEST_CREDS, REGION);
+    BedrockMantleDeepSeekModelProvider _ = check new (MANTLE_DEEPSEEK_V3_2, TEST_CREDS, REGION);
 }
 
 @test:Config {}
-function testForcingInvokeOverridesTheResolver() returns error? {
-    Route route = check resolveRoute("anthropic.claude-opus-4-8", REGION, {apiFamily: INVOKE});
-    test:assertEquals(route.family, INVOKE);
-}
-
-// ---- supportsStructuredOutput ----
-
-@test:Config {}
-function testMantleRejectsTypedStructuredOutput() returns error? {
-    // Mantle has no structured-output path: a non-string target must fail clean.
-    Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-east-1");
-    Endpoint ep = check buildEndpoint(route);
-    readonly & ModelConverter converter = check selectConverter(route);
-    BedrockTransport transport = check new (check resolveCredentials(TEST_CREDS), route.region, ep);
-    ai:Prompt prompt = `Give me a number`;
-
-    anydata|ai:Error result = structuredGenerate(false, MANTLE, converter, transport,
-        route.effectiveModelId, {}, {temperature: 0.5d, maxTokens: 16}, prompt, int);
-    test:assertTrue(result is ai:Error);
-    if result is ai:Error {
-        test:assertTrue(result.message().includes("bedrock-mantle"), result.message());
-        test:assertTrue(result.message().includes("anthropic.claude-mythos-preview"), result.message());
+function testEveryRuntimeShapeAVendorClassOffersConstructs() returns error? {
+    // The per-vendor `*RuntimeApi` union subtypes are the module's statement about
+    // which shapes that vendor is served in. Each one must actually construct — a
+    // shape in the type but with no converter behind it is a runtime failure on a
+    // type the compiler said was fine.
+    AnthropicRuntimeApi[] apis = [CONVERSE, INVOKE, MESSAGES];
+    foreach AnthropicRuntimeApi api in apis {
+        BedrockRuntimeAnthropicModelProvider _ =
+            check new ("anthropic.claude-opus-5", TEST_CREDS, REGION, api);
+    }
+    OpenAIRuntimeApi[] openAIApis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
+    foreach OpenAIRuntimeApi api in openAIApis {
+        BedrockRuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION, api);
+    }
+    ChatRuntimeApi[] chatApis = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
+    foreach ChatRuntimeApi api in chatApis {
+        BedrockRuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION, api);
+        BedrockRuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION, api);
+        BedrockRuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION, api);
+        BedrockRuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION, api);
+    }
+    CoreRuntimeApi[] coreApis = [CONVERSE, INVOKE];
+    foreach CoreRuntimeApi api in coreApis {
+        BedrockRuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION, api);
     }
 }
 
 @test:Config {}
-function testConverseRouteSupportsStructuredOutputFlag() returns error? {
-    // The flag is derived from the resolved route: true off Mantle, false on it.
-    // nova-pro is Converse-default; opus-4-8 now prefers Mantle under AUTO.
-    Route converse = check resolveRoute("amazon.nova-pro-v1:0", REGION);
-    Route mantle = check resolveRoute("anthropic.claude-mythos-preview", REGION);
-    test:assertTrue(converse.family != MANTLE, "Converse route → structured output supported");
-    test:assertTrue(mantle.family == MANTLE, "Mantle route → structured output unsupported");
+function testGemmaOnInvokeSpeaksTheOpenAiShapedDialect() returns error? {
+    // Gemma's InvokeModel body is OpenAI-shaped, not a Google-specific one: the model
+    // card's own Invoke sample posts `{"messages": [...], "max_tokens": N}`. This test
+    // pins the converter choice, because the `google.` prefix landing on the OpenAI
+    // chat converter looks like a mistake until you have read that card.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
+    Route route = check resolveRuntimeRoute(GEMMA_3_27B_IT, REGION, INVOKE);
+    readonly & ModelConverter converter = check selectConverter(route);
+    test:assertEquals(converter.dialect, "OpenAI Chat Completions (InvokeModel)");
 }
 
 // ---- Nova Invoke: the schemaVersion landmine ----
@@ -125,7 +138,7 @@ function testOpenAIChatDecodePopulatesUsageAndStopReason() returns error? {
     test:assertEquals(decoded.responseId, "chatcmpl-1");
 }
 
-// ---- Mantle Responses converter (GPT-5.x) ----
+// ---- Responses converter (GPT-5.x, Gemma 4) ----
 
 @test:Config {}
 function testResponsesDecodePopulatesUsageAndStopReason() returns error? {
@@ -151,67 +164,54 @@ function testResponsesEncodesSystemAsInstructions() returns error? {
     test:assertEquals(body["max_output_tokens"], 100);
 }
 
-// ---- vendor construction smoke tests (no I/O) ----
+// ---- Mantle: per-model paths, all table data ----
 
 @test:Config {}
-function testAllVendorProvidersConstruct() returns error? {
-    // Smoke test: every vendor facade constructs (no I/O). Note routing varies —
-    // qwen3-32b and gpt-oss now resolve to Mantle under AUTO — but
-    // construction succeeds on any route.
-    AmazonModelProvider amazon = check new ("amazon.nova-pro-v1:0", TEST_CREDS, REGION);
-    MistralModelProvider mistral = check new ("mistral.mistral-large-2407-v1:0", TEST_CREDS, REGION);
-    QwenModelProvider qwen = check new ("qwen.qwen3-32b-v1:0", TEST_CREDS, REGION);
-    GoogleModelProvider google = check new ("google.gemma-3-27b-it", TEST_CREDS, REGION);
-    DeepSeekModelProvider deepseek = check new ("us.deepseek.r1-v1:0", TEST_CREDS, REGION);
-    OpenAIModelProvider openai = check new ("openai.gpt-oss-120b-1:0", TEST_CREDS, REGION);
-    test:assertTrue(amazon is AmazonModelProvider);
-    test:assertTrue(mistral is MistralModelProvider);
-    test:assertTrue(qwen is QwenModelProvider);
-    test:assertTrue(google is GoogleModelProvider);
-    test:assertTrue(deepseek is DeepSeekModelProvider);
-    test:assertTrue(openai is OpenAIModelProvider);
-}
-
-@test:Config {}
-function testOpenAIMantleOnlyModelResolvesToMantleResponses() returns error? {
-    // GPT-5.4 exists only on Mantle — the reason this module exists.
-    Route route = check resolveRoute("openai.gpt-5.4", REGION);
-    test:assertEquals(route.family, MANTLE);
+function testOpenAIMantleOnlyModelResolvesToTheResponsesPath() returns error? {
+    // GPT-5.4 exists only on Mantle — the reason the Mantle classes exist.
+    Route route = check resolveMantleRoute("openai.gpt-5.4", REGION);
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.path, "/openai/v1/responses");
     test:assertEquals(ep.signingService, "bedrock-mantle");
 }
 
 @test:Config {}
-function testGemma3DefaultsToMantleOnItsOwnChatCompletionsPath() returns error? {
-    // Gemma 3 is dual-homed, so under AUTO the resolver prefers Mantle. The point that
-    // matters: Gemma 3's Mantle path is `/v1/chat/completions`, DIFFERENT from Gemma
-    // 4's `/openai/v1/responses` — one vendor prefix, two Mantle path families.
+function testGemma3AndGemma4SplitAcrossTwoMantlePathFamilies() returns error? {
+    // One vendor prefix, two Mantle dialects: Gemma 3 speaks Chat Completions on
+    // `/v1` and Gemma 4 speaks Responses on `/openai/v1`. This is exactly why the
+    // path is per-model table data and never derived from the prefix.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
-    Route route = check resolveRoute("google.gemma-3-27b-it", REGION);
-    test:assertEquals(route.family, MANTLE);
-    Endpoint ep = check buildEndpoint(route);
-    test:assertEquals(ep.signingService, "bedrock-mantle");
-    test:assertEquals(ep.path, "/v1/chat/completions", "Gemma 3 uses Chat Completions, not Responses");
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
+    Route gemma3 = check resolveMantleRoute("google.gemma-3-27b-it", REGION);
+    Endpoint ep3 = check buildEndpoint(gemma3);
+    test:assertEquals(ep3.path, "/v1/chat/completions", "Gemma 3 uses Chat Completions, not Responses");
+    test:assertEquals(gemma3.shape, CHAT_COMPLETIONS);
 
-    // Forcing CONVERSE still reaches the runtime surface.
-    Route converse = check resolveRoute("google.gemma-3-27b-it", REGION, {apiFamily: CONVERSE});
-    test:assertEquals(converse.family, CONVERSE);
-    Endpoint cep = check buildEndpoint(converse);
-    test:assertEquals(cep.signingService, "bedrock");
-    test:assertTrue(cep.host.startsWith("bedrock-runtime."));
+    Route gemma4 = check resolveMantleRoute("google.gemma-4-31b", REGION);
+    Endpoint ep4 = check buildEndpoint(gemma4);
+    test:assertEquals(ep4.path, "/openai/v1/responses");
+    test:assertEquals(gemma4.shape, RESPONSES);
 }
 
 @test:Config {}
-function testGemma4IsMantleOnlyNotConverse() returns error? {
-    // REGRESSION: this previously asserted CONVERSE + signing `bedrock`, which is
-    // what the code did and what the card contradicts — the Gemma 4 support matrix
-    // marks bedrock-runtime / Converse / Invoke / Messages all NO. Signing scope
-    // `bedrock` against a Mantle-only model is a 403 on every single call.
+function testGemma3IsAlsoReachableOnTheRuntimeClass() returns error? {
+    // Gemma 3 is dual-homed, so the runtime class reaches it on `bedrock-runtime`
+    // with the `bedrock` signing scope. Nothing about the Mantle entry changes that.
+    Route runtime = check resolveRuntimeRoute("google.gemma-3-27b-it", REGION, CONVERSE);
+    Endpoint ep = check buildEndpoint(runtime);
+    test:assertEquals(ep.signingService, "bedrock");
+    test:assertTrue(ep.host.startsWith("bedrock-runtime."));
+}
+
+@test:Config {}
+function testGemma4IsMantleOnlyAndSignsAsMantle() returns error? {
+    // The Gemma 4 support matrix marks bedrock-runtime / Converse / Invoke / Messages
+    // all NO, and there is no `BedrockRuntimeGoogleModelProvider` id for it. Signing
+    // scope `bedrock` against a Mantle-only model is a 403 on every single call.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
     foreach string id in ["google.gemma-4-31b", "google.gemma-4-e2b", "google.gemma-4-26b-a4b"] {
-        Route route = check resolveRoute(id, REGION);
-        test:assertEquals(route.family, MANTLE, id + " is served ONLY on bedrock-mantle");
+        Route route = check resolveMantleRoute(id, REGION);
+        test:assertEquals(route.endpoint, MANTLE, id + " is served ONLY on bedrock-mantle");
         Endpoint ep = check buildEndpoint(route);
         test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
         test:assertTrue(ep.host.startsWith("bedrock-mantle."), "wrong host for " + id);
@@ -222,23 +222,23 @@ function testGemma4IsMantleOnlyNotConverse() returns error? {
 }
 
 @test:Config {}
-function testGemma4CannotDoStructuredOutput() returns error? {
-    // Falls out of being Mantle-only: no Converse route means no forced tools.
-    GoogleModelProvider provider = check new (GEMMA_4_31B, TEST_CREDS, REGION);
-    LiveFruitShape|ai:Error result = provider->generate(`Name a fruit.`);
-    test:assertTrue(result is ai:Error, "Gemma 4 must refuse a typed target (Mantle route)");
+function testGemma4CanStillForceAToolOnItsResponsesPath() returns error? {
+    // NOT a structured-output refusal any more. `structuredOutputStyleFor` refuses
+    // only Mantle + MESSAGES; the OpenAI-compatible Mantle shapes keep tool forcing,
+    // and Grok 4.3's card — structured outputs supported on bedrock-mantle — is the
+    // evidence a blanket "Mantle has none" would contradict.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-3.html
+    Route route = check resolveMantleRoute("google.gemma-4-31b", REGION);
+    readonly & ModelConverter converter = check selectConverter(route);
+    test:assertEquals(structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice),
+            TOOL_FORCING);
 }
-
-type LiveFruitShape record {|
-    string name;
-|};
 
 @test:Config {}
 function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
     // `openai.gpt-oss-120b-1:0` carries a colon — the SigV4 double-encoding case. It
-    // is Mantle-capable so AUTO now prefers Mantle; force CONVERSE to
-    // exercise the runtime `/model/{id}` path where the colon lands in the URI.
-    Route route = check resolveRoute("openai.gpt-oss-120b-1:0", REGION, {apiFamily: CONVERSE});
+    // only lands in the URI on the path-addressed shapes, so exercise CONVERSE.
+    Route route = check resolveRuntimeRoute("openai.gpt-oss-120b-1:0", REGION, CONVERSE);
     Endpoint ep = check buildEndpoint(route);
     test:assertTrue(ep.path.includes("%3A"), "the model id's colon must be encoded on the wire");
     string canonical = getCanonicalUri(ep.path);
@@ -246,7 +246,7 @@ function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
 }
 
 @test:Config {}
-function testAllKnownMantleOnlyModelsResolveToMantle() returns error? {
+function testAllKnownMantleOnlyModelsResolveOnTheMantleEndpoint() returns error? {
     // Cross-checked against AWS's endpoint-availability table, which is the only
     // page listing runtime-vs-mantle for every model in one place. Each id below is
     // marked `bedrock-runtime: NO` there and verified against its own card.
@@ -257,45 +257,51 @@ function testAllKnownMantleOnlyModelsResolveToMantle() returns error? {
         "openai.gpt-5.6-sol": "/openai/v1/responses",
         "openai.gpt-5.6-terra": "/openai/v1/responses",
         "openai.gpt-5.6-luna": "/openai/v1/responses",
-        "anthropic.claude-mythos-preview": "/anthropic/v1/messages",
-        "anthropic.claude-mythos-5": "/anthropic/v1/messages",
         "google.gemma-4-31b": "/openai/v1/responses",
         "google.gemma-4-e2b": "/openai/v1/responses",
         "google.gemma-4-26b-a4b": "/openai/v1/responses"
     };
     foreach [string, string] [id, expectedPath] in mantleOnly.entries() {
-        Route route = check resolveRoute(id, REGION);
-        test:assertEquals(route.family, MANTLE, id + " is served ONLY on bedrock-mantle");
+        Route route = check resolveMantleRoute(id, REGION);
+        test:assertEquals(route.endpoint, MANTLE, id + " is served ONLY on bedrock-mantle");
         Endpoint ep = check buildEndpoint(route);
         test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
         test:assertEquals(ep.path, expectedPath, "wrong Mantle path for " + id);
+        // A Mantle-only model has no runtime alternative to suggest.
+        MantleEntry entry = check route.mantleEntry.ensureType();
+        test:assertFalse(entry.onRuntime, id + " must not be marked as also on bedrock-runtime");
     }
 }
 
 @test:Config {}
-function testMantleCapableModelsDefaultToMantleUnderAuto() returns error? {
-    // AUTO prefers MANTLE → CONVERSE → INVOKE, so every model with a
-    // verified MANTLE_CAPABLE entry defaults to Mantle. (These previously defaulted
-    // to Converse; that assertion is now inverted.)
-    foreach string id in ["anthropic.claude-haiku-4-5", "anthropic.claude-opus-4-8", "zai.glm-5",
-            "deepseek.v3.2", "mistral.mistral-large-3-675b-instruct", "qwen.qwen3-coder-480b-a35b-v1:0",
+function testDualHomedModelsAreMarkedAsSuchInTheTable() returns error? {
+    // `onRuntime` no longer drives routing; it is what lets a Mantle class tell a
+    // caller which runtime class to use for a capability Mantle lacks.
+    foreach string id in ["anthropic.claude-haiku-4-5", "anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-5", "anthropic.claude-sonnet-5", "zai.glm-5", "deepseek.v3.2",
+            "mistral.mistral-large-3-675b-instruct", "qwen.qwen3-coder-480b-a35b-v1:0",
             "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it", "google.gemma-3-12b-it",
-            "google.gemma-3-4b-it"] {
-        Route route = check resolveRoute(id, REGION);
-        test:assertEquals(route.family, MANTLE, id + " is Mantle-capable and must default to Mantle");
+            "google.gemma-3-4b-it", "openai.gpt-oss-120b-1:0"] {
+        Route route = check resolveMantleRoute(id, REGION);
+        MantleEntry entry = check route.mantleEntry.ensureType();
+        test:assertTrue(entry.onRuntime, id + " is dual-homed and must be marked so");
+        // ...and the runtime resolver reaches the same model with no table lookup.
+        Route runtime = check resolveRuntimeRoute(id, REGION, CONVERSE);
+        test:assertEquals(runtime.endpoint, RUNTIME, id);
     }
 }
 
 @test:Config {}
-function testRuntimeOnlyModelsDefaultToConverse() returns error? {
-    // Models with NO Mantle entry sink to Converse — the table-driven safety: we
-    // prefer Mantle only where we hold a verified wire shape, never by guessing.
-    // sonnet-4-6 is genuinely runtime-only (its card marks bedrock-mantle NO), so it
-    // will never gain an entry; nova-pro simply has none.
+function testRuntimeOnlyModelsHaveNoMantleEntryAtAll() returns error? {
+    // The table-driven safety: we reach Mantle only where we hold a verified wire
+    // shape, never by guessing. sonnet-4-6 is genuinely runtime-only (its card marks
+    // bedrock-mantle NO); nova-pro simply has no entry.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
     foreach string id in ["anthropic.claude-sonnet-4-6", "amazon.nova-pro-v1:0",
             "mistral.mistral-large-2407-v1:0"] {
-        Route route = check resolveRoute(id, REGION);
-        test:assertEquals(route.family, CONVERSE, id + " has no Mantle entry, so it defaults to Converse");
+        test:assertFalse(MANTLE_CAPABLE.hasKey(id), id + " must have no Mantle entry");
+        test:assertTrue(resolveMantleRoute(id, REGION) is error, id + " must be refused on Mantle");
+        Route runtime = check resolveRuntimeRoute(id, REGION, CONVERSE);
+        test:assertEquals(runtime.endpoint, RUNTIME, id);
     }
 }

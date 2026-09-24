@@ -189,39 +189,112 @@ function testExtractJsonSignalsAbsenceWithAnError() {
 
 // ---- Routes with no structured-output path refuse cleanly, before any I/O ----
 
-function mantleTransport() returns BedrockTransport|error =>
+function mantleTransport(string path = "/anthropic/v1/messages") returns BedrockTransport|error =>
     new (check resolveCredentials(TEST_CREDS), "us-east-1",
         {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`,
-            host: "bedrock-mantle.us-east-1.api.aws", path: "/openai/v1/responses",
+            host: "bedrock-mantle.us-east-1.api.aws", path,
             signingService: SIGNING_BEDROCK_MANTLE});
 
+// ---- `structuredOutputStyleFor` decides the mechanism, once, at construction ----
+
 @test:Config {}
-function testMantleRefusesStructuredOutputNamingTheModel() returns error? {
+function testStructuredOutputStyleIsNoneWhenTheDialectCannotForceATool() {
+    // Mistral text completion has no tool-calling at all, so neither mechanism is
+    // available regardless of endpoint or shape.
+    test:assertEquals(structuredOutputStyleFor(RUNTIME, INVOKE, NO_TOOL_CHOICE), NO_STRUCTURED_OUTPUT);
+    test:assertEquals(structuredOutputStyleFor(MANTLE, CHAT_COMPLETIONS, NO_TOOL_CHOICE),
+            NO_STRUCTURED_OUTPUT);
+}
+
+@test:Config {}
+function testStructuredOutputStyleIsNoneOnMantleMessagesOnly() {
+    // Anthropic Messages on bedrock-mantle rejects `output_config.format` AND
+    // `strict: true` on a tool, so tool forcing does not rescue it either. Every
+    // OTHER Mantle shape keeps tool forcing — "Mantle has no structured output" as a
+    // blanket rule is wrong, and Grok 4.3's card is the counter-example.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-structured-outputs.html
+    test:assertEquals(structuredOutputStyleFor(MANTLE, MESSAGES, ANTHROPIC_TOOL_CHOICE),
+            NO_STRUCTURED_OUTPUT);
+    test:assertEquals(structuredOutputStyleFor(MANTLE, CHAT_COMPLETIONS, OPENAI_CHAT_TOOL_CHOICE),
+            TOOL_FORCING);
+    test:assertEquals(structuredOutputStyleFor(MANTLE, RESPONSES, RESPONSES_TOOL_CHOICE), TOOL_FORCING);
+}
+
+@test:Config {}
+function testMessagesOnTheRuntimeEndpointStillDoesToolForcing() {
+    // The refusal is keyed on the ENDPOINT + shape pair, not the shape alone: the
+    // same Anthropic Messages dialect on `bedrock-runtime` is not the surface AWS
+    // documents the rejection for.
+    test:assertEquals(structuredOutputStyleFor(RUNTIME, MESSAGES, ANTHROPIC_TOOL_CHOICE), TOOL_FORCING);
+    test:assertEquals(structuredOutputStyleFor(RUNTIME, CONVERSE, CONVERSE_TOOL_CHOICE), TOOL_FORCING);
+    test:assertEquals(structuredOutputStyleFor(RUNTIME, INVOKE, ANTHROPIC_TOOL_CHOICE), TOOL_FORCING);
+}
+
+@test:Config {}
+function testNativeOutputConfigIsImplementedButNotYetSelected() {
+    // The member exists and `generate()` dispatches on it; nothing SELECTS it while
+    // the one live call that would settle `outputConfig` support is outstanding.
+    // Pinned so flipping the single return in `structuredOutputStyleFor` is a
+    // deliberate act with a failing test behind it, not a silent edit.
+    BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
+    foreach BedrockEndpoint endpoint in endpoints {
+        ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+        foreach ApiShape shape in shapes {
+            test:assertNotEquals(structuredOutputStyleFor(endpoint, shape, CONVERSE_TOOL_CHOICE),
+                    NATIVE_OUTPUT_CONFIG, string `${endpoint}/${shape} must not select the native member yet`);
+        }
+    }
+}
+
+@test:Config {}
+function testMantleMessagesRefusesStructuredOutputNamingTheModel() returns error? {
+    // The one route with no typed-generation path at all. It must fail locally,
+    // before any I/O, and the message must name the model and the dialect.
     BedrockTransport transport = check mantleTransport();
-    anydata|ai:Error result = structuredGenerate(false, MANTLE, MANTLE_RESPONSES_CONVERTER, transport,
-            "openai.gpt-5.4", {}, GEN_PARAMS, `Rate this`, Review);
-    test:assertTrue(result is ai:Error, "a typed target on Mantle must be a clean error");
+    anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, MESSAGES,
+            NATIVE_MESSAGES_CONVERTER, transport, "anthropic.claude-opus-5", {}, GEN_PARAMS,
+            `Rate this`, Review);
+    test:assertTrue(result is ai:Error, "a typed target on Mantle Messages must be a clean error");
     if result is ai:Error {
         string message = result.message();
-        test:assertTrue(message.includes("openai.gpt-5.4"), "the error must name the model; got: " + message);
-        test:assertTrue(message.includes("bedrock-mantle"),
-                "the error must name the route that lacks the capability; got: " + message);
+        test:assertTrue(message.includes("anthropic.claude-opus-5"),
+                "the error must name the model; got: " + message);
+        test:assertTrue(message.includes("Anthropic Messages"),
+                "the error must name the dialect that lacks the capability; got: " + message);
+        test:assertTrue(message.includes("CONVERSE"),
+                "the error must point at the way out; got: " + message);
+    }
+}
+
+@test:Config {}
+function testAStringTargetIsNeverRefusedEvenWithNoStructuredOutput() returns error? {
+    // `string` needs no structure, so the guard must not fire — it is checked before
+    // any route capability. Reaching the transport (and failing there, with no
+    // credentials that AWS would accept) proves the refusal did NOT happen locally.
+    BedrockTransport transport = check mantleTransport();
+    anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, MESSAGES,
+            NATIVE_MESSAGES_CONVERTER, transport, "anthropic.claude-opus-5", {}, GEN_PARAMS,
+            `Say OK`, string);
+    if result is ai:Error {
+        test:assertFalse(result.message().includes("target type must be 'string'"),
+                "a string target must not hit the structured-output refusal: " + result.message());
     }
 }
 
 @test:Config {}
 function testMistralTextDialectRefusesStructuredOutput() returns error? {
-    // supportsStructuredOutput is true here (INVOKE, not Mantle) — the refusal must
-    // come from the CONVERTER having no tool-calling at all.
+    // INVOKE on bedrock-runtime, so the endpoint carries structured output — the
+    // refusal must come from the CONVERTER having no tool-calling at all.
     BedrockTransport transport = check mantleTransport();
-    anydata|ai:Error result = structuredGenerate(true, INVOKE, INVOKE_MISTRAL_TEXT_CONVERTER, transport,
+    anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, INVOKE,
+            INVOKE_MISTRAL_TEXT_CONVERTER, transport,
             "mistral.mistral-7b-instruct-v0:2", {}, GEN_PARAMS, `Rate this`, Review);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         string message = result.message();
         test:assertTrue(message.includes("mistral.mistral-7b-instruct-v0:2"),
                 "the error must name the model; got: " + message);
-        test:assertTrue(message.includes("Converse"), "the error must point at the way out; got: " + message);
+        test:assertTrue(message.includes("CONVERSE"), "the error must point at the way out; got: " + message);
     }
 }
 
