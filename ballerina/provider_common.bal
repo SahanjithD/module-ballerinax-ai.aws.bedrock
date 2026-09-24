@@ -352,6 +352,27 @@ isolated function guardRegion(string region) returns ai:Error? {
             "constant such as 'aws:US_EAST_1', or a region string), or use a model ARN " +
             "that carries its own region.");
     }
+    // Reject anything that is not a bare lowercase region token. Without this, two
+    // ordinary typos become failures that name neither the field nor the mistake:
+    // a trailing space is percent-encoded into the hostname and surfaces as a
+    // connection error against `bedrock-runtime.us-east-1%20.amazonaws.com`, and an
+    // uppercase region reaches SigV4 intact and comes back as a 403 "Credential
+    // should be scoped to a valid region" — which reads as a broken login.
+    //
+    // Deliberately a SHAPE check, not an allowlist: AWS adds regions faster than this
+    // module ships, so anything lowercase-alphanumeric with hyphens is let through
+    // and AWS decides. Only characters no region has ever contained are refused.
+    foreach string:Char c in region {
+        if c == " " || c == "\t" || c == "\n" || c == "\r" {
+            return error ai:Error(string `Invalid AWS region '${region}': it contains whitespace. ` +
+                string `Pass a bare region such as 'us-east-1'.`);
+        }
+        if c != "-" && !(c >= "a" && c <= "z") && !(c >= "0" && c <= "9") {
+            return error ai:Error(string `Invalid AWS region '${region}': regions are lowercase ` +
+                string `and contain only letters, digits and hyphens. Pass a bare region such as ` +
+                string `'us-east-1', or an 'aws:Region' constant.`);
+        }
+    }
 }
 
 // Guardrail-support construction guard, shared by every facade.
