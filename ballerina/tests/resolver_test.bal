@@ -29,7 +29,7 @@ const REGION = "us-east-1";
 function testBareIdResolvesOnTheRuntimeEndpoint() returns error? {
     Route r = check resolveRuntimeRoute("amazon.nova-pro-v1:0", REGION, CONVERSE);
     test:assertEquals(r.endpoint, RUNTIME);
-    test:assertEquals(r.shape, CONVERSE);
+    test:assertEquals(r.api, CONVERSE);
     test:assertEquals(r.bareModelId, "amazon.nova-pro-v1:0");
     test:assertEquals(r.effectiveModelId, "amazon.nova-pro-v1:0");
     test:assertEquals(r.geoPrefix, ());
@@ -41,10 +41,10 @@ function testBareIdResolvesOnTheRuntimeEndpoint() returns error? {
 function testTheShapeArgumentIsCarriedOntoTheRoute() returns error? {
     // The class fixes the endpoint; the `api` argument fixes the shape. Nothing in
     // the resolver may override either.
-    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-    foreach ApiShape shape in shapes {
-        Route r = check resolveRuntimeRoute("anthropic.claude-opus-5", REGION, shape);
-        test:assertEquals(r.shape, shape);
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiFamily api in apis {
+        Route r = check resolveRuntimeRoute("anthropic.claude-opus-5", REGION, api);
+        test:assertEquals(r.api, api);
         test:assertEquals(r.endpoint, RUNTIME);
     }
 }
@@ -83,7 +83,7 @@ function testAMantleOnlyIdOnTheRuntimeResolverIsNotRewrittenOrRefused() returns 
     // with its own diagnosis if it truly is not served there.
     Route r = check resolveRuntimeRoute("openai.gpt-5.5", REGION, RESPONSES);
     test:assertEquals(r.endpoint, RUNTIME);
-    test:assertEquals(r.shape, RESPONSES);
+    test:assertEquals(r.api, RESPONSES);
     test:assertEquals(r.effectiveModelId, "openai.gpt-5.5");
 }
 
@@ -93,11 +93,11 @@ function testAMantleOnlyIdOnTheRuntimeResolverIsNotRewrittenOrRefused() returns 
 function testMantleOnlyModelResolvesToItsPublishedPath() returns error? {
     Route r = check resolveMantleRoute("openai.gpt-5.4", REGION);
     test:assertEquals(r.endpoint, MANTLE);
-    test:assertEquals(r.shape, RESPONSES);
+    test:assertEquals(r.api, RESPONSES);
     test:assertEquals(r.effectiveModelId, "openai.gpt-5.4", "Mantle takes the bare id on the wire");
     MantleEntry entry = check r.mantleEntry.ensureType();
-    test:assertEquals(check mantlePathFor(entry.basePath, r.shape), "/openai/v1/responses");
-    test:assertFalse(usesApiKeyHeader(r.shape));
+    test:assertEquals(check mantlePathFor(entry.basePath, r.api), "/openai/v1/responses");
+    test:assertFalse(usesApiKeyHeader(r.api));
     test:assertEquals(NATIVE_RESPONSES_CONVERTER.toolChoice, RESPONSES_TOOL_CHOICE);
 }
 
@@ -105,10 +105,10 @@ function testMantleOnlyModelResolvesToItsPublishedPath() returns error? {
 function testMantleAnthropicModelResolvesToTheMessagesPath() returns error? {
     Route r = check resolveMantleRoute("anthropic.claude-opus-5", REGION);
     test:assertEquals(r.endpoint, MANTLE);
-    test:assertEquals(r.shape, MESSAGES);
+    test:assertEquals(r.api, MESSAGES);
     MantleEntry entry = check r.mantleEntry.ensureType();
-    test:assertEquals(check mantlePathFor(entry.basePath, r.shape), "/anthropic/v1/messages");
-    test:assertTrue(usesApiKeyHeader(r.shape));
+    test:assertEquals(check mantlePathFor(entry.basePath, r.api), "/anthropic/v1/messages");
+    test:assertTrue(usesApiKeyHeader(r.api));
     test:assertEquals(NATIVE_MESSAGES_CONVERTER.toolChoice, ANTHROPIC_TOOL_CHOICE);
 }
 
@@ -253,10 +253,10 @@ function testThePathSuffixIsDerivedFromTheShape() returns error? {
 
 @test:Config {}
 function testMantleServesNeitherConverseNorInvoke() {
-    ApiShape[] runtimeOnly = [CONVERSE, INVOKE];
-    foreach ApiShape shape in runtimeOnly {
-        string|error path = mantlePathFor("/v1", shape);
-        test:assertTrue(path is error, shape);
+    ApiFamily[] runtimeOnly = [CONVERSE, INVOKE];
+    foreach ApiFamily api in runtimeOnly {
+        string|error path = mantlePathFor("/v1", api);
+        test:assertTrue(path is error, api);
     }
 }
 
@@ -265,15 +265,15 @@ function testTheModelDecidesTheMantleShapeNotTheCaller() returns error? {
     // There is no shape argument on the Mantle classes: each model has exactly one
     // route this module takes, and it is the first shape its table row lists.
     Route oss = check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION);
-    test:assertEquals(oss.shape, CHAT_COMPLETIONS);
+    test:assertEquals(oss.api, CHAT_COMPLETIONS);
     test:assertEquals((check buildEndpoint(oss)).path, "/v1/chat/completions");
 
     Route claude = check resolveMantleRoute("anthropic.claude-opus-5", REGION);
-    test:assertEquals(claude.shape, MESSAGES);
+    test:assertEquals(claude.api, MESSAGES);
     test:assertEquals((check buildEndpoint(claude)).path, "/anthropic/v1/messages");
 
     Route gpt = check resolveMantleRoute("openai.gpt-5.5", REGION);
-    test:assertEquals(gpt.shape, RESPONSES);
+    test:assertEquals(gpt.api, RESPONSES);
     test:assertEquals((check buildEndpoint(gpt)).path, "/openai/v1/responses");
 }
 
@@ -288,7 +288,7 @@ function testChatCompletionsCarriesMostOfTheMantleSurface() returns error? {
         "google.gemma-3-12b-it", "google.gemma-3-4b-it"];
     foreach string id in chatOnly {
         Route r = check resolveMantleRoute(id, REGION);
-        test:assertEquals(r.shape, CHAT_COMPLETIONS, id);
+        test:assertEquals(r.api, CHAT_COMPLETIONS, id);
         test:assertFalse(id.startsWith("openai."), id + " is not an OpenAI model");
     }
 }
@@ -300,13 +300,13 @@ function testEveryMantleTableEntryHasAResolvableDialect() returns error? {
     // An entry no derivation understands would fail at construction with an
     // internal-sounding message, so assert the whole table up front.
     foreach [string, MantleEntry] [id, entry] in MANTLE_CAPABLE.entries() {
-        test:assertTrue(entry.shapes.length() > 0, id);
+        test:assertTrue(entry.apis.length() > 0, id);
         Route r = check resolveMantleRoute(id, REGION);
-        test:assertEquals(r.shape, entry.shapes[0], id);
-        string _ = check mantlePathFor(entry.basePath, r.shape);
+        test:assertEquals(r.api, entry.apis[0], id);
+        string _ = check mantlePathFor(entry.basePath, r.api);
         readonly & ModelConverter _ = check selectConverter(r);
         Endpoint ep = check buildEndpoint(r);
-        test:assertEquals(ep.path, check mantlePathFor(entry.basePath, r.shape), id);
+        test:assertEquals(ep.path, check mantlePathFor(entry.basePath, r.api), id);
         test:assertEquals(ep.signingService, SIGNING_BEDROCK_MANTLE, id);
     }
 }

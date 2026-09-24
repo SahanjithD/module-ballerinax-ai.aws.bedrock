@@ -54,7 +54,7 @@ public type GoogleMantleConfig record {|
 public isolated distinct client class BedrockMantleGoogleModelProvider {
     *ai:ModelProvider;
 
-    private final ApiShape shape;
+    private final ApiFamily api;
     private final string wireModelId;
     private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
@@ -93,7 +93,7 @@ public isolated distinct client class BedrockMantleGoogleModelProvider {
             check resolveSpine("BedrockMantleGoogleModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
-        self.shape = route.shape;
+        self.api = route.api;
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
@@ -102,12 +102,12 @@ public isolated distinct client class BedrockMantleGoogleModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (), ());
-        check validateParamsForRoute("BedrockMantleGoogleModelProvider", route.shape, converter, resolvedParams);
+        check validateParamsForRoute("BedrockMantleGoogleModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();
         self.structuredOutput =
-            structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice);
+            structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
     # Sends a chat request. Opens an observe span and closes it on every path.
@@ -119,7 +119,7 @@ public isolated distinct client class BedrockMantleGoogleModelProvider {
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Google", self.shape, self.wireModelId, self.converter, self.transport,
+        => runChat("Google", self.api, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
     # Generates a value of the expected type.

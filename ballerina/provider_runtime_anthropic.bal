@@ -61,7 +61,7 @@ public type AnthropicRuntimeConfig record {|
 public isolated distinct client class BedrockRuntimeAnthropicModelProvider {
     *ai:ModelProvider;
 
-    private final ApiShape shape;
+    private final ApiFamily api;
     private final string wireModelId;
     private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
@@ -76,7 +76,7 @@ public isolated distinct client class BedrockRuntimeAnthropicModelProvider {
     #                 source, or a `BearerToken` for a Bedrock API key
     # + region - AWS region, e.g. `aws:US_EAST_1`. An ARN `model`'s region segment
     #            overrides it
-    # + api - The wire shape to use. `CONVERSE` (the default) is model-agnostic and
+    # + api - The API family to call. `CONVERSE` (the default) is model-agnostic and
     #         the one AWS recommends; the others are this vendor's native dialects
     # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
     #              The host is derived from the region when this is `()`, which is correct
@@ -93,7 +93,7 @@ public isolated distinct client class BedrockRuntimeAnthropicModelProvider {
             @display {label: "Model"} AnthropicRuntimeModel|string model,
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
-            @display {label: "API Shape"} AnthropicRuntimeApi api = CONVERSE,
+            @display {label: "API"} AnthropicRuntimeApi api = CONVERSE,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
@@ -104,7 +104,7 @@ public isolated distinct client class BedrockRuntimeAnthropicModelProvider {
             check resolveSpine("BedrockRuntimeAnthropicModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
-        self.shape = route.shape;
+        self.api = route.api;
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
@@ -118,12 +118,12 @@ public isolated distinct client class BedrockRuntimeAnthropicModelProvider {
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
                 config?.guardrail, thinking, config?.effort);
-        check validateParamsForRoute("BedrockRuntimeAnthropicModelProvider", route.shape, converter, resolvedParams);
+        check validateParamsForRoute("BedrockRuntimeAnthropicModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();
         self.structuredOutput =
-            structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice);
+            structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
     # Sends a chat request. Opens an observe span and closes it on every path.
@@ -135,7 +135,7 @@ public isolated distinct client class BedrockRuntimeAnthropicModelProvider {
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Anthropic", self.shape, self.wireModelId, self.converter, self.transport,
+        => runChat("Anthropic", self.api, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
     # Generates a value of the expected type.

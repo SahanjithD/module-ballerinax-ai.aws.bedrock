@@ -227,8 +227,8 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
         return {
             baseUrl: mantleBase,
             host: hostOf(mantleBase),
-            // Base path is per-model table data; the shape suffix is derived.
-            path: check mantlePathFor(entry.basePath, route.shape),
+            // Base path is per-model table data; the API family's suffix is derived.
+            path: check mantlePathFor(entry.basePath, route.api),
             signingService: SIGNING_BEDROCK_MANTLE
         };
     }
@@ -242,7 +242,7 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
     };
 }
 
-// The `bedrock-runtime` request path for a resolved shape.
+// The `bedrock-runtime` request path for a resolved API family.
 //
 // Converse and InvokeModel address the model in the URL, so their path carries the
 // single-encoded model id. The three vendor-native shapes are FIXED paths — the
@@ -250,7 +250,7 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
 // across models: there is no `/v1` vs `/openai/v1` split on this endpoint.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
 isolated function runtimePath(Route route) returns string|error {
-    match route.shape {
+    match route.api {
         CONVERSE => {
             return string `/model/${encodePathSegment(route.effectiveModelId)}/converse`;
         }
@@ -270,14 +270,14 @@ isolated function runtimePath(Route route) returns string|error {
             return "/openai/v1/responses";
         }
     }
-    return error(string `no bedrock-runtime path for shape '${route.shape}'`);
+    return error(string `no bedrock-runtime path for api '${route.api}'`);
 }
 
-// Whether the resolved shape names the model in the URL rather than the body.
+// Whether the resolved API family names the model in the URL rather than the body.
 // Converse and InvokeModel do; the three vendor-native shapes carry `model` in the
 // request body on both endpoints.
-isolated function isPathAddressed(ApiShape shape) returns boolean
-    => shape == CONVERSE || shape == INVOKE;
+isolated function isPathAddressed(ApiFamily api) returns boolean
+    => api == CONVERSE || api == INVOKE;
 
 // Which bedrock-agent plane an endpoint is for. Module-private: only the knowledge
 // base spine needs this distinction.

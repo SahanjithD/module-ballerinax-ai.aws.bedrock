@@ -16,14 +16,15 @@
 // Public enums.
 // ============================================================================
 
-# A wire dialect. Bedrock serves five, and which of them a given provider class
-# offers is expressed by the union subtypes below rather than by a runtime check —
-# the endpoint is fixed by the class, so an unreachable shape is unrepresentable.
+# An API family — one of the five request/response dialects Bedrock serves. Which of
+# them a given provider class offers is expressed by the union subtypes below rather
+# than by a runtime check: the endpoint is fixed by the class, so an unreachable
+# family is unrepresentable.
 #
 # `bedrock-runtime` serves all five; `bedrock-mantle` serves only the last three and
 # has no Converse and no InvokeModel at all.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
-public enum ApiShape {
+public enum ApiFamily {
     # `POST /model/{id}/converse` — the model-agnostic Bedrock dialect, and the only
     # one that works without per-vendor knowledge. `bedrock-runtime` only.
     CONVERSE,
@@ -40,9 +41,14 @@ public enum ApiShape {
     MESSAGES
 }
 
-# The shapes each vendor's models are served in on `bedrock-runtime`. A union
-# subtype rather than a per-vendor enum so the members stay a single set: the same
-# `CONVERSE` constant is valid on every class that admits it.
+# The API families each vendor's models are served in on `bedrock-runtime`. One
+# alias per provider class, named for the vendor rather than for the set it happens
+# to hold today: four of them are the same union right now, but they answer
+# independent questions ("what does Qwen serve?" is not "what does Gemma serve?"),
+# so when AWS adds a shape to one vendor only that alias moves.
+#
+# Union subtypes rather than per-vendor enums so the members stay a single set: the
+# same `CONVERSE` constant is valid on every class that admits it.
 #
 # `CHAT_COMPLETIONS` is deliberately NOT OpenAI-only. AWS lists DeepSeek, Gemma 3,
 # Mistral, Qwen3, MiniMax, Moonshot, NVIDIA, Writer, xAI and Z.AI as
@@ -59,13 +65,21 @@ public type AnthropicRuntimeApi CONVERSE|INVOKE|MESSAGES;
 # https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
 public type OpenAIRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS|RESPONSES;
 
-# DeepSeek, Google, Mistral and Qwen on `bedrock-runtime`: Converse, InvokeModel and
-# the OpenAI-compatible Chat Completions path.
-public type ChatRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
-
 # Amazon on `bedrock-runtime`. Nova and Titan are served on the Bedrock-native
 # dialects only — no vendor-compatible path carries them.
-public type CoreRuntimeApi CONVERSE|INVOKE;
+public type AmazonRuntimeApi CONVERSE|INVOKE;
+
+# Mistral on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+public type MistralRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
+
+# Qwen on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+public type QwenRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
+
+# Google (Gemma) on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+public type GoogleRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
+
+# DeepSeek on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+public type DeepSeekRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 
 
 # Which Bedrock endpoint a route targets. Module-private: the endpoint is chosen by
@@ -85,7 +99,7 @@ enum BedrockEndpoint {
 # How a wire dialect forces a single named tool. This is a property of
 # the CONVERTER, not the route: Nova on InvokeModel is Converse-shaped, and Mistral's
 # chat dialect looks OpenAI-shaped but forces tools with the bare string `"any"`.
-# Deriving it from `ApiShape` silently emits the wrong field for those dialects.
+# Deriving it from `ApiFamily` silently emits the wrong field for those dialects.
 # Module-private: it lives on the internal `ModelConverter`, never on user config.
 enum ToolChoiceStyle {
     # Converse: `toolConfig.toolChoice = {"tool": {"name": ...}}`.
@@ -257,19 +271,19 @@ enum GuardrailAction {
 #                    `/v1`."
 #   Same vendor, same APIs, different base path. `google.gemma-3-*` (`/v1`) versus
 #   `google.gemma-4-*` (`/openai/v1`) is the same story. So the base path is derivable
-#   from neither the vendor prefix nor the shape, and something has to record it.
+#   from neither the vendor prefix nor the API family, and something has to record it.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
 # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
 type MantleEntry record {|
     # The base path — the ONE per-model fact here. `/v1`, `/openai/v1` or
-    # `/anthropic/v1`. The full request path is this plus the shape's own suffix,
+    # `/anthropic/v1`. The full request path is this plus the API family's own suffix,
     # which IS derivable (see `mantlePathFor`).
     string basePath;
 
     # The shapes this model serves on that base path. More than one is normal —
     # gpt-oss serves both Responses and Chat Completions on `/v1` — and the `api`
     # argument selects among them. The first entry is the default.
-    ApiShape[] shapes;
+    ApiFamily[] apis;
 
     # The id to put on the wire when it DIFFERS from the `bedrock-runtime` id.
     #
@@ -288,7 +302,7 @@ type Route record {|
     # Which endpoint this route targets. Fixed by the provider class.
     BedrockEndpoint endpoint;
     # The resolved wire dialect.
-    ApiShape shape;
+    ApiFamily api;
     # Lookup key with any CRIS geo prefix stripped, e.g. `anthropic.claude-opus-4-8`.
     string bareModelId;
     # The stripped CRIS geo prefix, re-applied on the wire. Always `()` on a Mantle

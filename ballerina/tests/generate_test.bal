@@ -238,10 +238,10 @@ function testNativeOutputConfigIsImplementedButNotYetSelected() {
     // deliberate act with a failing test behind it, not a silent edit.
     BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
     foreach BedrockEndpoint endpoint in endpoints {
-        ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-        foreach ApiShape shape in shapes {
-            test:assertNotEquals(structuredOutputStyleFor(endpoint, shape, CONVERSE_TOOL_CHOICE),
-                    NATIVE_OUTPUT_CONFIG, string `${endpoint}/${shape} must not select the native member yet`);
+        ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+        foreach ApiFamily api in apis {
+            test:assertNotEquals(structuredOutputStyleFor(endpoint, api, CONVERSE_TOOL_CHOICE),
+                    NATIVE_OUTPUT_CONFIG, string `${endpoint}/${api} must not select the native member yet`);
         }
     }
 }

@@ -35,7 +35,7 @@ function testDeepSeekV32IsReachableOnBothEndpointsUnderTheSameId() returns error
     Route mantle = check resolveMantleRoute(MANTLE_DEEPSEEK_V3_2, "us-east-1");
     test:assertEquals(mantle.endpoint, MANTLE);
     test:assertEquals(mantle.effectiveModelId, "deepseek.v3.2");
-    test:assertEquals(mantle.shape, CHAT_COMPLETIONS);
+    test:assertEquals(mantle.api, CHAT_COMPLETIONS);
 }
 
 @test:Config {}
@@ -88,10 +88,10 @@ function testClaudeSonnet5AndOpus5UseTheMessagesPathOnMantle() returns error? {
     foreach [string, string] [id, wireId] in ids.entries() {
         Route route = check resolveMantleRoute(id, "us-east-1");
         MantleEntry entry = check route.mantleEntry.ensureType();
-        test:assertEquals(check mantlePathFor(entry.basePath, route.shape), "/anthropic/v1/messages", id);
-        test:assertEquals(route.shape, MESSAGES, id);
+        test:assertEquals(check mantlePathFor(entry.basePath, route.api), "/anthropic/v1/messages", id);
+        test:assertEquals(route.api, MESSAGES, id);
         test:assertEquals(NATIVE_MESSAGES_CONVERTER.toolChoice, ANTHROPIC_TOOL_CHOICE);
-        test:assertTrue(usesApiKeyHeader(route.shape), id);
+        test:assertTrue(usesApiKeyHeader(route.api), id);
         test:assertEquals(route.effectiveModelId, wireId, "the card lists no separate Mantle id");
     }
 }
@@ -174,7 +174,7 @@ function testTheRuntimeClassIsTheDocumentedWayOutOfThatRefusal() returns error? 
     // the advice is a dead end.
     Route route = check resolveRuntimeRoute(CLAUDE_SONNET_5, REGION, CONVERSE);
     readonly & ModelConverter converter = check selectConverter(route);
-    test:assertEquals(structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice),
+    test:assertEquals(structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice),
             TOOL_FORCING);
     BedrockRuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION, CONVERSE);
 }

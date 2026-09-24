@@ -139,7 +139,7 @@ final readonly & ModelConverter INVOKE_MISTRAL_TEXT_CONVERTER = {
 // dialects are served on both hosts, so `bedrock-runtime` and `bedrock-mantle` share
 // these converters and differ only in host, path and signing name.
 isolated function selectConverter(Route route) returns readonly & ModelConverter|error {
-    match route.shape {
+    match route.api {
         CONVERSE => {
             return CONVERSE_CONVERTER; // model-agnostic — serves every vendor
         }
@@ -158,14 +158,14 @@ isolated function selectConverter(Route route) returns readonly & ModelConverter
     return selectInvokeConverter(route.bareModelId);
 }
 
-// The Mantle request path for a resolved shape: the model's base path plus the
+// The Mantle request path for a resolved API family: the model's base path plus the
 // shape's own suffix.
 //
 // The SUFFIX is derivable and identical on both endpoints — only the base path is
 // per-model data. That asymmetry is the whole reason `MantleEntry` exists and is
 // this small.
-isolated function mantlePathFor(string basePath, ApiShape shape) returns string|error {
-    match shape {
+isolated function mantlePathFor(string basePath, ApiFamily api) returns string|error {
+    match api {
         MESSAGES => {
             return basePath + "/messages";
         }
@@ -178,7 +178,7 @@ isolated function mantlePathFor(string basePath, ApiShape shape) returns string|
     }
     // CONVERSE and INVOKE are bedrock-runtime dialects; bedrock-mantle serves neither.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-    return error(string `the bedrock-mantle endpoint does not serve the ${shape} API`);
+    return error(string `the bedrock-mantle endpoint does not serve the ${api} API`);
 }
 
 // Whether a route authenticates with `x-api-key` rather than `Authorization: Bearer`.
@@ -192,7 +192,7 @@ isolated function mantlePathFor(string basePath, ApiShape shape) returns string|
 // never mentions `x-api-key`, so whether Bearer is ALSO accepted on the Messages path
 // is unverified. We send what AWS's own Messages examples send.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
-isolated function usesApiKeyHeader(ApiShape shape) returns boolean => shape == MESSAGES;
+isolated function usesApiKeyHeader(ApiFamily api) returns boolean => api == MESSAGES;
 
 // Picks the InvokeModel converter from the bare id's vendor prefix.
 isolated function selectInvokeConverter(string bareModelId) returns readonly & ModelConverter|error {
@@ -271,7 +271,7 @@ isolated function usesDeepSeekTextDialect(string bareModelId) returns boolean =>
     bareModelId.startsWith("deepseek.r1");
 
 // How `generate()` should obtain a typed result on a resolved route. Decided once at
-// construction from the endpoint, the shape and the dialect's tool-choice style.
+// construction from the endpoint, the API family and the dialect's tool-choice style.
 //
 // The answer is NOT a property of the endpoint alone, which is what the old
 // `family != MANTLE` flag assumed. AWS's evidence cuts both ways:
@@ -296,13 +296,13 @@ isolated function usesDeepSeekTextDialect(string bareModelId) returns boolean =>
 //
 // Per-model variation beyond this is left for AWS to reject: a model that refuses a
 // forced tool answers with its own diagnosis, which is more use than a stale table.
-isolated function structuredOutputStyleFor(BedrockEndpoint endpoint, ApiShape shape,
+isolated function structuredOutputStyleFor(BedrockEndpoint endpoint, ApiFamily api,
         ToolChoiceStyle toolChoice) returns StructuredOutputStyle {
     // A dialect with no tool-calling at all (Mistral text completion) can do neither.
     if toolChoice == NO_TOOL_CHOICE {
         return NO_STRUCTURED_OUTPUT;
     }
-    if endpoint == MANTLE && shape == MESSAGES {
+    if endpoint == MANTLE && api == MESSAGES {
         return NO_STRUCTURED_OUTPUT;
     }
     // Converse is where the native member lives; see StructuredOutputStyle for why it
