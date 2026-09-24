@@ -32,10 +32,10 @@ function testGuardrailIsRefusedOnEveryMantleRoute() {
     // and unsupported on bedrock-mantle — for every shape Mantle serves.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
     GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"};
-    ApiShape[] shapes = [MESSAGES, CHAT_COMPLETIONS, RESPONSES];
-    foreach ApiShape shape in shapes {
-        ai:Error? e = guardGuardrailSupport(MANTLE, shape, guardrail);
-        test:assertTrue(e is ai:Error, string `Mantle/${shape} must refuse a guardrail`);
+    ApiFamily[] apis = [MESSAGES, CHAT_COMPLETIONS, RESPONSES];
+    foreach ApiFamily api in apis {
+        ai:Error? e = guardGuardrailSupport(MANTLE, api, guardrail);
+        test:assertTrue(e is ai:Error, string `Mantle/${api} must refuse a guardrail`);
         if e is ai:Error {
             test:assertTrue(e.message().includes("ApplyGuardrail"), e.message());
         }
@@ -80,10 +80,10 @@ function testGuardrailIsAllowedOnConverseInvokeAndChatCompletions() {
     // The three shapes AWS documents guardrail parameters for. A guard that refused
     // everything would be trivially "safe" and useless.
     GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"};
-    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
-    foreach ApiShape shape in shapes {
-        test:assertTrue(guardGuardrailSupport(RUNTIME, shape, guardrail) is (),
-                string `RUNTIME/${shape} must accept a guardrail`);
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
+    foreach ApiFamily api in apis {
+        test:assertTrue(guardGuardrailSupport(RUNTIME, api, guardrail) is (),
+                string `RUNTIME/${api} must accept a guardrail`);
     }
 }
 
@@ -92,9 +92,9 @@ function testNoGuardrailIsNeverRefusedAnywhere() {
     // The guard keys on the guardrail being SET, not on the route.
     BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
     foreach BedrockEndpoint endpoint in endpoints {
-        ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-        foreach ApiShape shape in shapes {
-            test:assertTrue(guardGuardrailSupport(endpoint, shape, ()) is ());
+        ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+        foreach ApiFamily api in apis {
+            test:assertTrue(guardGuardrailSupport(endpoint, api, ()) is ());
         }
     }
 }

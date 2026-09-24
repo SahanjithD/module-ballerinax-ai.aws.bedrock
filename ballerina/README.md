@@ -63,21 +63,24 @@ gate. On a runtime class an unrecognised id simply goes on the wire and AWS answ
 *Mantle* model is the one case that needs a module release, because its request path cannot be derived
 from its id.
 
-### Choosing the API shape
+### Choosing the API family
 
-Runtime classes take an `api` argument defaulting to `CONVERSE`. Which shapes a class offers is a
+Runtime classes take an `api` argument defaulting to `CONVERSE`. Which families a class offers is a
 property of its type, so an unreachable combination does not compile:
 
-| Class | `api` accepts |
-| --- | --- |
-| `BedrockRuntimeAnthropicModelProvider` | `CONVERSE`, `INVOKE`, `MESSAGES` |
-| `BedrockRuntimeOpenAIModelProvider` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS`, `RESPONSES` |
-| `BedrockRuntime{DeepSeek,Google,Mistral,Qwen}ModelProvider` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
-| `BedrockRuntimeAmazonModelProvider` | `CONVERSE`, `INVOKE` |
-| `BedrockCommonModelProvider` | — (Converse only) |
-| `BedrockMantle*ModelProvider` | — (the model's own shape) |
+| Class | Type of `api` | Accepts |
+| --- | --- | --- |
+| `BedrockRuntimeAnthropicModelProvider` | `AnthropicRuntimeApi` | `CONVERSE`, `INVOKE`, `MESSAGES` |
+| `BedrockRuntimeOpenAIModelProvider` | `OpenAIRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS`, `RESPONSES` |
+| `BedrockRuntimeMistralModelProvider` | `MistralRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `BedrockRuntimeQwenModelProvider` | `QwenRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `BedrockRuntimeGoogleModelProvider` | `GoogleRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `BedrockRuntimeDeepSeekModelProvider` | `DeepSeekRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `BedrockRuntimeAmazonModelProvider` | `AmazonRuntimeApi` | `CONVERSE`, `INVOKE` |
+| `BedrockCommonModelProvider` | — | Converse only |
+| `BedrockMantle*ModelProvider` | — | the model's own family |
 
-`CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that shape for DeepSeek, Gemma 3, Mistral,
+`CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that family for DeepSeek, Gemma 3, Mistral,
 Qwen3 and others. **Mantle classes take no `api` argument at all.** Each Mantle model has exactly one route this module
 takes, so there is nothing for a caller to choose — the model decides. (`openai.gpt-oss-120b` is
 published on both Responses and Chat Completions; this module takes Chat Completions.)
@@ -266,7 +269,7 @@ config rather than a method argument. It defaults to `SEARCH_DOCUMENT`.
 
 ## Routing
 
-You pick the endpoint by picking the class, and the shape with `api`. What is left for the module to
+You pick the endpoint by picking the class, and the API family with `api`. What is left for the module to
 resolve is the model id and the request path, and that happens once, at construction — before any
 network call.
 
@@ -314,9 +317,9 @@ is irregular. Two of its own notes contradict each other across models of the sa
 > **GPT-5.6 Sol** — "On `bedrock-mantle`, both APIs use the `/openai/v1` base path, not `/v1`."
 
 `google.gemma-3-*` (`/v1`) versus `google.gemma-4-*` (`/openai/v1`) is the same story. So the base path
-follows neither the vendor prefix nor the shape, and something has to record it — that is the entire
+follows neither the vendor prefix nor the API family, and something has to record it — that is the entire
 job of `MANTLE_CAPABLE`, and the only per-model datum in it. The path suffix, the dialect, the
-converter and the auth-header style are all derived from the shape.
+converter and the auth-header style are all derived from the API family.
 
 The cost is that a Mantle model AWS ships after a release is unreachable until the table carries it.
 An id absent from the table is refused by name rather than sent to a guessed URL.

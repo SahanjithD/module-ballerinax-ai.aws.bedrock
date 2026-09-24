@@ -39,7 +39,7 @@ public type GoogleRuntimeConfig record {|
 public isolated distinct client class BedrockRuntimeGoogleModelProvider {
     *ai:ModelProvider;
 
-    private final ApiShape shape;
+    private final ApiFamily api;
     private final string wireModelId;
     private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
@@ -54,7 +54,7 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
     #                 source, or a `BearerToken` for a Bedrock API key
     # + region - AWS region, e.g. `aws:US_EAST_1`. An ARN `model`'s region segment
     #            overrides it
-    # + api - The wire shape to use. `CONVERSE` (the default) is model-agnostic and
+    # + api - The API family to call. `CONVERSE` (the default) is model-agnostic and
     #         the one AWS recommends; the others are this vendor's native dialects
     # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
     #              The host is derived from the region when this is `()`, which is correct
@@ -71,7 +71,7 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
             @display {label: "Model"} GoogleRuntimeModel|string model,
             @display {label: "AWS Credentials"} BedrockCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
-            @display {label: "API Shape"} ChatRuntimeApi api = CONVERSE,
+            @display {label: "API"} GoogleRuntimeApi api = CONVERSE,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
@@ -82,7 +82,7 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
             check resolveSpine("BedrockRuntimeGoogleModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
-        self.shape = route.shape;
+        self.api = route.api;
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
@@ -91,12 +91,12 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("BedrockRuntimeGoogleModelProvider", route.shape, converter, resolvedParams);
+        check validateParamsForRoute("BedrockRuntimeGoogleModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();
         self.structuredOutput =
-            structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice);
+            structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
     # Sends a chat request. Opens an observe span and closes it on every path.
@@ -108,7 +108,7 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Google", self.shape, self.wireModelId, self.converter, self.transport,
+        => runChat("Google", self.api, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
     # Generates a value of the expected type.

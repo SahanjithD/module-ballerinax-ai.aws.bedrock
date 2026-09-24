@@ -58,45 +58,45 @@ final readonly & string[] CRIS_PREFIXES = ["global", "us", "eu", "apac", "jp", "
 //
 // The BASE PATH is the per-model datum — see `MantleEntry` for AWS's own two
 // contradicting per-card notes that make it so. Everything else is derived: the path
-// suffix from the shape (`mantlePathFor`), the converter from the shape
-// (`selectConverter`), and the auth header style from the shape (`usesApiKeyHeader`).
+// suffix from the API family (`mantlePathFor`), the converter from the API family
+// (`selectConverter`), and the auth header style from the API family (`usesApiKeyHeader`).
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // --- Anthropic: `/anthropic/v1`, Messages only. Uniform across every Claude. ---
     // Auth is `x-api-key` plus an `anthropic-version: 2023-06-01` header, both keyed
     // off the MESSAGES shape rather than stored here.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
-    "anthropic.claude-haiku-4-5": {basePath: "/anthropic/v1", shapes: [MESSAGES]},
+    "anthropic.claude-haiku-4-5": {basePath: "/anthropic/v1", apis: [MESSAGES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
-    "anthropic.claude-opus-4-8": {basePath: "/anthropic/v1", shapes: [MESSAGES]},
+    "anthropic.claude-opus-4-8": {basePath: "/anthropic/v1", apis: [MESSAGES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
-    "anthropic.claude-opus-5": {basePath: "/anthropic/v1", shapes: [MESSAGES]},
+    "anthropic.claude-opus-5": {basePath: "/anthropic/v1", apis: [MESSAGES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
-    "anthropic.claude-sonnet-5": {basePath: "/anthropic/v1", shapes: [MESSAGES]},
+    "anthropic.claude-sonnet-5": {basePath: "/anthropic/v1", apis: [MESSAGES]},
 
     // --- `/openai/v1` models. The base path is the per-model datum, and these cards
     // --- say so in as many words: "both APIs use the `/openai/v1` base path, not
-    // --- `/v1`". Only RESPONSES is listed because that is the shape each card's
+    // --- `/v1`". Only RESPONSES is listed because that is the API family each card's
     // --- Programmatic Access row records; adding CHAT_COMPLETIONS needs the same
     // --- per-card check rather than an inference from the base path.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
-    "openai.gpt-5.5": {basePath: "/openai/v1", shapes: [RESPONSES]},
-    "openai.gpt-5.4": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "openai.gpt-5.5": {basePath: "/openai/v1", apis: [RESPONSES]},
+    "openai.gpt-5.4": {basePath: "/openai/v1", apis: [RESPONSES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
-    "openai.gpt-5.6-sol": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "openai.gpt-5.6-sol": {basePath: "/openai/v1", apis: [RESPONSES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html
-    "openai.gpt-5.6-terra": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "openai.gpt-5.6-terra": {basePath: "/openai/v1", apis: [RESPONSES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html
-    "openai.gpt-5.6-luna": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "openai.gpt-5.6-luna": {basePath: "/openai/v1", apis: [RESPONSES]},
     // Gemma 4 is Mantle-ONLY, and sits on `/openai/v1` — unlike Gemma 3 below. One
     // vendor prefix, two base paths, which is the clearest single proof that this
     // cannot be derived from the vendor.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
-    "google.gemma-4-31b": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "google.gemma-4-31b": {basePath: "/openai/v1", apis: [RESPONSES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-e2b.html
-    "google.gemma-4-e2b": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "google.gemma-4-e2b": {basePath: "/openai/v1", apis: [RESPONSES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-26b-a4b.html
-    "google.gemma-4-26b-a4b": {basePath: "/openai/v1", shapes: [RESPONSES]},
+    "google.gemma-4-26b-a4b": {basePath: "/openai/v1", apis: [RESPONSES]},
 
     // --- `/v1` models. ---
     // gpt-oss is the worked example for BOTH irregularities at once. Its card states
@@ -108,34 +108,34 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     "openai.gpt-oss-120b-1:0": {
         basePath: "/v1",
-        shapes: [CHAT_COMPLETIONS, RESPONSES],
+        apis: [CHAT_COMPLETIONS, RESPONSES],
         modelId: "openai.gpt-oss-120b"
     },
-    "zai.glm-5": {basePath: "/v1", shapes: [CHAT_COMPLETIONS]},
+    "zai.glm-5": {basePath: "/v1", apis: [CHAT_COMPLETIONS]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
-    "deepseek.v3.2": {basePath: "/v1", shapes: [CHAT_COMPLETIONS]},
+    "deepseek.v3.2": {basePath: "/v1", apis: [CHAT_COMPLETIONS]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-    "mistral.mistral-large-3-675b-instruct": {basePath: "/v1", shapes: [CHAT_COMPLETIONS]},
+    "mistral.mistral-large-3-675b-instruct": {basePath: "/v1", apis: [CHAT_COMPLETIONS]},
     // Both Qwen3 ids are published under a different id per endpoint, like gpt-oss.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
     "qwen.qwen3-coder-480b-a35b-v1:0": {
         basePath: "/v1",
-        shapes: [CHAT_COMPLETIONS],
+        apis: [CHAT_COMPLETIONS],
         modelId: "qwen.qwen3-coder-480b-a35b-instruct"
     },
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
     "qwen.qwen3-32b-v1:0": {
         basePath: "/v1",
-        shapes: [CHAT_COMPLETIONS],
+        apis: [CHAT_COMPLETIONS],
         modelId: "qwen.qwen3-32b"
     },
     // Gemma 3 sits on `/v1` with Chat Completions — the counterpart to Gemma 4 above.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
-    "google.gemma-3-27b-it": {basePath: "/v1", shapes: [CHAT_COMPLETIONS]},
+    "google.gemma-3-27b-it": {basePath: "/v1", apis: [CHAT_COMPLETIONS]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-12b-it.html
-    "google.gemma-3-12b-it": {basePath: "/v1", shapes: [CHAT_COMPLETIONS]},
+    "google.gemma-3-12b-it": {basePath: "/v1", apis: [CHAT_COMPLETIONS]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-4b-it.html
-    "google.gemma-3-4b-it": {basePath: "/v1", shapes: [CHAT_COMPLETIONS]}
+    "google.gemma-3-4b-it": {basePath: "/v1", apis: [CHAT_COMPLETIONS]}
 };
 
 // NOTE: there is deliberately no `CONVERSE_MODELS` allowlist to mirror this one.

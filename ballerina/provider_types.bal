@@ -242,7 +242,7 @@ type ResponseDecoder isolated function (json response) returns DecodedResponse|a
 #
 # `serviceTier` and `latencyOptimized` are NOT here: they are honoured by the route
 # FAMILY rather than the dialect — a Converse body field, an InvokeModel request
-# header, nothing on Mantle — so they are decided by `shapeCarriesRequestOptions`.
+# header, nothing on Mantle — so they are decided by `apiCarriesRequestOptions`.
 type DialectSupport record {|
     # A stop-sequence parameter exists in this dialect's request schema.
     boolean stopSequences = true;

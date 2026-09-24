@@ -148,11 +148,11 @@ function testTheInvokeRequestOptionHeadersAreOnlySentOnInvoke() {
     readonly & InferenceParams params = buildInferenceParams(256, (), (), (), TIER_FLEX, true, ());
     map<string> invoke = buildRouteHeaders(runtimeRoute("m", INVOKE), (), TEST_CREDS, params);
     test:assertEquals(invoke["X-Amzn-Bedrock-Service-Tier"], "flex");
-    ApiShape[] shapes = [CONVERSE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-    foreach ApiShape shape in shapes {
-        map<string> headers = buildRouteHeaders(runtimeRoute("m", shape), (), TEST_CREDS, params);
-        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-Service-Tier"), shape);
-        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-PerformanceConfig-Latency"), shape);
+    ApiFamily[] apis = [CONVERSE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiFamily api in apis {
+        map<string> headers = buildRouteHeaders(runtimeRoute("m", api), (), TEST_CREDS, params);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-Service-Tier"), api);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-PerformanceConfig-Latency"), api);
     }
 }
 

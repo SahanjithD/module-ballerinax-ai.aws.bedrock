@@ -24,7 +24,7 @@ import ballerinax/aws.auth;
 // transports, find-or-create, data-source resolution, chunking-strategy detection,
 // and the document/knowledge-base wire calls both `ingest()` and `deleteByFilter()`
 // need. `BedrockVectorKnowledgeBase` (knowledgebase_vector.bal) is built over the
-// same spine, with its own request bodies where the self-managed API shape differs.
+// same spine, with its own request bodies where the self-managed API family differs.
 
 // Bedrock's `_source_uri` metadata attribute — injected on every retrieval result,
 // holding the document's `customDocumentIdentifier.id` (CUSTOM sources) or S3 object

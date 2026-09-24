@@ -51,7 +51,7 @@ public final class Generator {
                 // class, so chat() and generate() share a route, converter and
                 // transport. The former gen* duplicates are gone.
                 modelProvider.get(StringUtils.fromString("structuredOutput")),
-                modelProvider.get(StringUtils.fromString("shape")),
+                modelProvider.get(StringUtils.fromString("api")),
                 modelProvider.get(StringUtils.fromString("converter")),
                 modelProvider.get(StringUtils.fromString("transport")),
                 modelProvider.get(StringUtils.fromString("wireModelId")),

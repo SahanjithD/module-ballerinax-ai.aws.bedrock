@@ -67,14 +67,14 @@ function testEveryRuntimeShapeHasItsDocumentedPathAndSignsAsBedrock() returns er
         [CHAT_COMPLETIONS]: "/openai/v1/chat/completions",
         [RESPONSES]: "/openai/v1/responses"
     };
-    foreach [string, string] [shape, path] in expected.entries() {
-        Route route = check resolveRuntimeRoute("anthropic.claude-opus-5", REGION, <ApiShape>shape);
+    foreach [string, string] [api, path] in expected.entries() {
+        Route route = check resolveRuntimeRoute("anthropic.claude-opus-5", REGION, <ApiFamily>api);
         Endpoint ep = check buildEndpoint(route);
-        test:assertEquals(ep.path, path, shape);
+        test:assertEquals(ep.path, path, api);
         // Every path on bedrock-runtime signs as `bedrock`, the vendor-native ones
         // included — AWS's own curl is `--aws-sigv4 "aws:amz:us-east-1:bedrock"`.
-        test:assertEquals(ep.signingService, SIGNING_BEDROCK, "wrong signing scope for " + shape);
-        test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com", shape);
+        test:assertEquals(ep.signingService, SIGNING_BEDROCK, "wrong signing scope for " + api);
+        test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com", api);
     }
 }
 
@@ -274,11 +274,11 @@ function testChinaPartitionFailsAtConstructionOnEveryShape() returns error? {
     // has no China section, and `bedrock-runtime.cn-north-1.amazonaws.com` is
     // NXDOMAIN. `aws:resolveEndpoint` would still build a host, so the guard is the
     // only thing standing between a China user and an opaque connection error.
-    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-    foreach ApiShape shape in shapes {
-        Route route = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "cn-north-1", shape);
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiFamily api in apis {
+        Route route = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "cn-north-1", api);
         Endpoint|error ep = buildEndpoint(route);
-        test:assertTrue(ep is error, shape + " must not build a China endpoint");
+        test:assertTrue(ep is error, api + " must not build a China endpoint");
         if ep is error {
             test:assertTrue(ep.message().includes("China"), ep.message());
         }

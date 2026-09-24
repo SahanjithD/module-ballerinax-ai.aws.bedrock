@@ -61,15 +61,15 @@ function testEveryRuntimeShapeAVendorClassOffersConstructs() returns error? {
     foreach OpenAIRuntimeApi api in openAIApis {
         BedrockRuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION, api);
     }
-    ChatRuntimeApi[] chatApis = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
-    foreach ChatRuntimeApi api in chatApis {
+    QwenRuntimeApi[] chatApis = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
+    foreach QwenRuntimeApi api in chatApis {
         BedrockRuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION, api);
         BedrockRuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION, api);
         BedrockRuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION, api);
         BedrockRuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION, api);
     }
-    CoreRuntimeApi[] coreApis = [CONVERSE, INVOKE];
-    foreach CoreRuntimeApi api in coreApis {
+    AmazonRuntimeApi[] coreApis = [CONVERSE, INVOKE];
+    foreach AmazonRuntimeApi api in coreApis {
         BedrockRuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION, api);
     }
 }
@@ -185,12 +185,12 @@ function testGemma3AndGemma4SplitAcrossTwoMantlePathFamilies() returns error? {
     Route gemma3 = check resolveMantleRoute("google.gemma-3-27b-it", REGION);
     Endpoint ep3 = check buildEndpoint(gemma3);
     test:assertEquals(ep3.path, "/v1/chat/completions", "Gemma 3 uses Chat Completions, not Responses");
-    test:assertEquals(gemma3.shape, CHAT_COMPLETIONS);
+    test:assertEquals(gemma3.api, CHAT_COMPLETIONS);
 
     Route gemma4 = check resolveMantleRoute("google.gemma-4-31b", REGION);
     Endpoint ep4 = check buildEndpoint(gemma4);
     test:assertEquals(ep4.path, "/openai/v1/responses");
-    test:assertEquals(gemma4.shape, RESPONSES);
+    test:assertEquals(gemma4.api, RESPONSES);
 }
 
 @test:Config {}
@@ -230,7 +230,7 @@ function testGemma4CanStillForceAToolOnItsResponsesPath() returns error? {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-3.html
     Route route = check resolveMantleRoute("google.gemma-4-31b", REGION);
     readonly & ModelConverter converter = check selectConverter(route);
-    test:assertEquals(structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice),
+    test:assertEquals(structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice),
             TOOL_FORCING);
 }
 

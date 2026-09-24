@@ -21,20 +21,20 @@ import ballerina/test;
 
 // A Route built by hand, so the header/dialect rules can be driven without going
 // near a provider class. Mirrors exactly what the resolvers produce.
-function mantleRoute(string bareModelId, string basePath, ApiShape shape) returns Route => {
+function mantleRoute(string bareModelId, string basePath, ApiFamily api) returns Route => {
     endpoint: MANTLE,
-    shape,
+    api,
     bareModelId,
     geoPrefix: (),
     effectiveModelId: bareModelId,
     region: "us-east-1",
     partition: "aws",
-    mantleEntry: {basePath, shapes: [shape]}
+    mantleEntry: {basePath, apis: [api]}
 };
 
-function runtimeRoute(string bareModelId, ApiShape shape) returns Route => {
+function runtimeRoute(string bareModelId, ApiFamily api) returns Route => {
     endpoint: RUNTIME,
-    shape,
+    api,
     bareModelId,
     geoPrefix: (),
     effectiveModelId: bareModelId,
@@ -181,10 +181,10 @@ function testApiKeyHeaderIsAbsentForTheBearerShapes() returns error? {
     Route chat = mantleRoute("deepseek.v3.2", "/v1", CHAT_COMPLETIONS);
     test:assertFalse(buildRouteHeaders(chat, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
 
-    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
 
-    foreach ApiShape shape in shapes {
-        test:assertFalse(usesApiKeyHeader(shape), shape + " must authenticate with Bearer/SigV4");
+    foreach ApiFamily api in apis {
+        test:assertFalse(usesApiKeyHeader(api), api + " must authenticate with Bearer/SigV4");
     }
     test:assertTrue(usesApiKeyHeader(MESSAGES));
 }
@@ -236,11 +236,11 @@ function testGuardrailHeadersAreEmittedOnInvokeAndChatCompletions() {
     // on that path.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
     GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "DRAFT"};
-    ApiShape[] shapes = [INVOKE, CHAT_COMPLETIONS];
-    foreach ApiShape shape in shapes {
-        map<string> headers = buildRouteHeaders(runtimeRoute("m", shape), guardrail, TEST_CREDS);
-        test:assertEquals(headers["X-Amzn-Bedrock-GuardrailIdentifier"], "gr-1", shape);
-        test:assertEquals(headers["X-Amzn-Bedrock-GuardrailVersion"], "DRAFT", shape);
+    ApiFamily[] apis = [INVOKE, CHAT_COMPLETIONS];
+    foreach ApiFamily api in apis {
+        map<string> headers = buildRouteHeaders(runtimeRoute("m", api), guardrail, TEST_CREDS);
+        test:assertEquals(headers["X-Amzn-Bedrock-GuardrailIdentifier"], "gr-1", api);
+        test:assertEquals(headers["X-Amzn-Bedrock-GuardrailVersion"], "DRAFT", api);
     }
 }
 
@@ -260,11 +260,11 @@ function testConverseCarriesTheGuardrailInTheBodyNotAHeader() returns error? {
 
 @test:Config {}
 function testNoGuardrailMeansNoGuardrailHeaders() {
-    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-    foreach ApiShape shape in shapes {
-        map<string> headers = buildRouteHeaders(runtimeRoute("m", shape), (), TEST_CREDS);
-        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailIdentifier"), shape);
-        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailVersion"), shape);
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiFamily api in apis {
+        map<string> headers = buildRouteHeaders(runtimeRoute("m", api), (), TEST_CREDS);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailIdentifier"), api);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailVersion"), api);
     }
 }
 

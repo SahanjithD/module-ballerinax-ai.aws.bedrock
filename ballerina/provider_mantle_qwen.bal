@@ -48,7 +48,7 @@ public type QwenMantleConfig record {|
 public isolated distinct client class BedrockMantleQwenModelProvider {
     *ai:ModelProvider;
 
-    private final ApiShape shape;
+    private final ApiFamily api;
     private final string wireModelId;
     private final readonly & ModelConverter converter;
     private final BedrockTransport transport;
@@ -87,7 +87,7 @@ public isolated distinct client class BedrockMantleQwenModelProvider {
             check resolveSpine("BedrockMantleQwenModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
-        self.shape = route.shape;
+        self.api = route.api;
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
@@ -104,12 +104,12 @@ public isolated distinct client class BedrockMantleQwenModelProvider {
         }
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, extra, (), (), ());
-        check validateParamsForRoute("BedrockMantleQwenModelProvider", route.shape, converter, resolvedParams);
+        check validateParamsForRoute("BedrockMantleQwenModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();
         self.structuredOutput =
-            structuredOutputStyleFor(route.endpoint, route.shape, converter.toolChoice);
+            structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
     # Sends a chat request. Opens an observe span and closes it on every path.
@@ -121,7 +121,7 @@ public isolated distinct client class BedrockMantleQwenModelProvider {
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Qwen", self.shape, self.wireModelId, self.converter, self.transport,
+        => runChat("Qwen", self.api, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
     # Generates a value of the expected type.

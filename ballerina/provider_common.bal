@@ -22,12 +22,12 @@ import ballerinax/aws.auth;
 // Shared facade machinery: every vendor provider is a thin class
 // over these. `runChat` is the whole `chat()` body; `buildInferenceParams`
 // assembles the resolved `InferenceParams`; `buildRouteHeaders` builds every
-// route-specific header. Only the model enum, the shape-enum subtype, the config
+// route-specific header. Only the model enum, the API-family subtype, the config
 // extras and the params assembly differ per vendor.
 
 // The full `chat()` implementation, shared by every vendor facade.
 // Opens an observe span and closes it on every path.
-isolated function runChat(string providerName, ApiShape shape, string wireModelId,
+isolated function runChat(string providerName, ApiFamily api, string wireModelId,
         readonly & ModelConverter converter, BedrockTransport transport, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:ChatMessage[]|ai:ChatUserMessage messages,
         ai:ChatCompletionFunctions[] tools, string? stop) returns ai:ChatAssistantMessage|ai:Error {
@@ -74,7 +74,7 @@ isolated function runChat(string providerName, ApiShape shape, string wireModelI
     }
     // Converse and InvokeModel name the model in the URL; the three vendor-native
     // shapes name it in the body, on both endpoints.
-    json body = isPathAddressed(shape) ? encoded : injectModel(encoded, wireModelId);
+    json body = isPathAddressed(api) ? encoded : injectModel(encoded, wireModelId);
 
     TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
     if response is ai:Error {
@@ -181,7 +181,7 @@ isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, Bed
     // `X-Amzn-Bedrock-GuardrailIdentifier` / `-GuardrailVersion` / `-Trace` as
     // `extra_headers` on that path.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
-    if route.shape == INVOKE || route.shape == CHAT_COMPLETIONS {
+    if route.api == INVOKE || route.api == CHAT_COMPLETIONS {
         if guardrail is GuardrailConfig {
             headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
             headers["X-Amzn-Bedrock-GuardrailVersion"] = guardrail.guardrailVersion;
@@ -189,10 +189,10 @@ isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, Bed
     }
     // The request-option headers are InvokeModel's alone; Chat Completions does not
     // document them.
-    if route.shape == INVOKE {
+    if route.api == INVOKE {
         addInvokeRequestOptionHeaders(headers, params);
     }
-    if route.shape == MESSAGES {
+    if route.api == MESSAGES {
         // Required on the native Messages path, and a DIFFERENT value and mechanism
         // from InvokeModel's `anthropic_version: bedrock-2023-05-31` BODY field. Both
         // conventions are live on bedrock-runtime at once, one per shape.
@@ -244,7 +244,7 @@ isolated function addInvokeRequestOptionHeaders(map<string> headers, InferencePa
 //
 // One spine now serves both `chat()` and `generate()` — the provider class fixes the
 // endpoint, so there is no second route to check against.
-isolated function validateParamsForRoute(string providerName, ApiShape shape,
+isolated function validateParamsForRoute(string providerName, ApiFamily api,
         readonly & ModelConverter converter, InferenceParams params) returns ai:Error? {
     DialectSupport supports = converter.supports;
     string dialect = converter.dialect;
@@ -259,23 +259,23 @@ isolated function validateParamsForRoute(string providerName, ApiShape shape,
     if params?.thinking is ThinkingConfig && !supports.thinking {
         return error ai:Error(
             string `${providerName}: 'thinking' is not supported on the ${dialect} route. Remove it, or ` +
-            "select a shape that carries it with 'api'.");
+            "select a api that carries it with 'api'.");
     }
     if params?.effort is Effort && !supports.effort {
         return error ai:Error(
             string `${providerName}: 'effort' is not supported on the ${dialect} route. Remove it, or ` +
-            "select a shape that carries it with 'api'.");
+            "select a api that carries it with 'api'.");
     }
     if params?.reasoningEffort is ReasoningEffort && !supports.reasoningEffort {
         return error ai:Error(
             string `${providerName}: 'reasoningEffort' is not supported on the ${dialect} route. Remove ` +
-            "it, or select a shape that carries it with 'api'.");
+            "it, or select a api that carries it with 'api'.");
     }
 
     // `serviceTier`/`latencyOptimized` are a ROUTE-FAMILY capability, not a dialect
     // one — a Converse body field, an InvokeModel request header, and nothing at all
     // on Mantle.
-    if shapeCarriesRequestOptions(shape) {
+    if apiCarriesRequestOptions(api) {
         return;
     }
     string[] unsupported = [];
@@ -303,17 +303,17 @@ isolated function validateParamsForRoute(string providerName, ApiShape shape,
     // There is no latency-optimization concept on bedrock-mantle at all.
     return error ai:Error(
         string `${providerName}: ${string:'join(", ", ...unsupported)} ` +
-        string `${unsupported.length() == 1 ? "is" : "are"} not supported on the ${shape} shape — ` +
+        string `${unsupported.length() == 1 ? "is" : "are"} not supported on the ${api} api — ` +
         "the vendor-compatible surfaces have no Bedrock request-option headers, and they spell service " +
         "tiers with the VENDOR's value set rather than Bedrock's, so this module will not guess a " +
-        "mapping. Use the CONVERSE or INVOKE shape to set them as Bedrock defines them, or send " +
+        "mapping. Use the CONVERSE or INVOKE api to set them as Bedrock defines them, or send " +
         "the vendor's own spelling verbatim through 'additionalModelRequestFields'.");
 }
 
 // Which shapes carry `serviceTier`/`latencyOptimized`: Converse as body fields,
 // InvokeModel as request headers. The three vendor-native shapes document neither.
-isolated function shapeCarriesRequestOptions(ApiShape shape) returns boolean
-    => shape == CONVERSE || shape == INVOKE;
+isolated function apiCarriesRequestOptions(ApiFamily api) returns boolean
+    => api == CONVERSE || api == INVOKE;
 
 // `x-api-key` for a Mantle path that authenticates with it (the Anthropic Messages
 // surface). Derived from the path via `usesApiKeyHeader`, not stored per model.
@@ -335,7 +335,7 @@ isolated function shapeCarriesRequestOptions(ApiShape shape) returns boolean
 // Only a BearerToken can populate it: with SigV4 credentials there is no api key,
 // and the signature alone must authenticate the request.
 isolated function addNativeApiKeyHeader(map<string> headers, Route route, BedrockCredentials creds) {
-    if usesApiKeyHeader(route.shape) && creds is BearerToken {
+    if usesApiKeyHeader(route.api) && creds is BearerToken {
         headers["x-api-key"] = creds.apiKey;
     }
 }
@@ -375,7 +375,7 @@ isolated function guardRegion(string region) returns ai:Error? {
 //    and quietly not applied is the dangerous direction for a safety control — the
 //    caller believes traffic is screened when it is not. Reversible the moment AWS
 //    documents it either way.
-isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiShape shape,
+isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiFamily api,
         GuardrailConfig? guardrail) returns ai:Error? {
     if guardrail !is GuardrailConfig {
         return;
@@ -389,15 +389,15 @@ isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiShape shape
             "matching BedrockRuntime*ModelProvider, or apply the standalone ApplyGuardrail API " +
             "on bedrock-runtime.");
     }
-    if shape == RESPONSES {
-        return error ai:Error("Guardrails do not apply to the Responses API. Use the CONVERSE shape " +
+    if api == RESPONSES {
+        return error ai:Error("Guardrails do not apply to the Responses API. Use the CONVERSE api " +
             "to guardrail this model, or apply the standalone ApplyGuardrail API.");
     }
-    if shape == MESSAGES {
+    if api == MESSAGES {
         return error ai:Error("Guardrails are not sent on the Anthropic Messages path: AWS documents " +
             "guardrail parameters for Converse, InvokeModel and Chat Completions, but not for " +
             "'/anthropic/v1/messages', so this module will not send them where it cannot confirm " +
-            "they are honoured. Use the CONVERSE or INVOKE shape, or apply the standalone " +
+            "they are honoured. Use the CONVERSE or INVOKE api, or apply the standalone " +
             "ApplyGuardrail API.");
     }
 }
@@ -416,7 +416,7 @@ isolated function resolveSpine(string providerName, BedrockCredentials credentia
         // legitimately supplies it, so an ARN model with no `region` and no AWS_REGION
         // in the environment is well-formed and must not be rejected.
         check guardRegion(route.region);
-        check guardGuardrailSupport(route.endpoint, route.shape, guardrail);
+        check guardGuardrailSupport(route.endpoint, route.api, guardrail);
         Endpoint ep = check buildEndpoint(route, endpointConfig);   // L2, pure
         readonly & ModelConverter converter = check selectConverter(route);
         // CREDENTIALS LAST among the fallible steps. Resolving them can reach the

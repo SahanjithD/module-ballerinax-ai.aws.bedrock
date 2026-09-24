@@ -29,14 +29,14 @@
 // Unknown ids are NOT an error. Converse is model-agnostic, so an id this module has
 // never heard of goes on the wire as-is and AWS answers for it — which is what keeps
 // a model AWS ships tomorrow usable today.
-isolated function resolveRuntimeRoute(string model, string region, ApiShape shape) returns Route|error {
+isolated function resolveRuntimeRoute(string model, string region, ApiFamily api) returns Route|error {
     if isArn(model) {
-        return resolveRuntimeArn(model, region, shape);
+        return resolveRuntimeArn(model, region, api);
     }
     [string, string?] [bareId, geoPrefix] = normalizeModelId(model);
     return {
         endpoint: RUNTIME,
-        shape,
+        api,
         bareModelId: bareId,
         geoPrefix,
         // Cross-region inference is a `bedrock-runtime` concept: the geo prefix is
@@ -82,18 +82,18 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
 
     MantleEntry entry = check mantleEntryForBare(bareId);
     // The shape is the MODEL's, not the caller's. Every Mantle model has exactly one
-    // route this module takes, so there is no shape argument on the Mantle classes and
+    // route this module takes, so there is no API argument on the Mantle classes and
     // no way to ask for one the model is not published on.
     //
     // `shapes` stays a list because the underlying fact is a list — gpt-oss really is
     // published on both Responses and Chat Completions on `/v1` — so recording it
     // truthfully means a selector can be reintroduced later with no data change.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
-    ApiShape resolvedShape = entry.shapes[0];
+    ApiFamily resolvedApi = entry.apis[0];
 
     return {
         endpoint: MANTLE,
-        shape: resolvedShape,
+        api: resolvedApi,
         bareModelId: bareId,
         geoPrefix: (),
         // A model may be published under different ids per endpoint (see
@@ -107,7 +107,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
 
 // ARN dispatch for the runtime endpoint — the resource-type token settles the case
 // before any call. The ARN's region and partition override the caller's.
-isolated function resolveRuntimeArn(string arnStr, string region, ApiShape shape) returns Route|error {
+isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api) returns Route|error {
     ParsedArn arn = check parseArn(arnStr);
 
     if arn.'service != "bedrock" {
@@ -126,7 +126,7 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiShape shape
         [string, string?] [bareId, geoPrefix] = normalizeModelId(arn.resourceId);
         return {
             endpoint: RUNTIME,
-            shape,
+            api,
             bareModelId: bareId,
             geoPrefix,
             effectiveModelId: applyGeoPrefix(bareId, geoPrefix),
@@ -159,7 +159,7 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiShape shape
     // verbatim, URL-encoded in endpoint.bal.
     return {
         endpoint: RUNTIME,
-        shape,
+        api,
         bareModelId: arnStr,
         geoPrefix: (),
         effectiveModelId: arnStr,
