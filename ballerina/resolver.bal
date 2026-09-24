@@ -81,13 +81,17 @@ isolated function resolveMantleRoute(string model, string region, MantleApi? sha
     }
 
     MantleEntry entry = check mantleEntryForBare(bareId);
-    ApiShape resolvedShape = check mantleShapeForPath(entry.path);
-    if shape is MantleApi && shape != resolvedShape {
-        // The table holds the one path this module has verified for the model, so a
-        // disagreeing override cannot be honoured by inventing a URL for it.
-        return error(string `model '${bareId}' is served on bedrock-mantle as ${resolvedShape} ` +
-            string `(${entry.path}), not ${shape}. Drop the 'api' argument to use the path this ` +
-            string `model is published on.`);
+    // `api` SELECTS among the shapes this model serves; unset takes the first. A
+    // model published on two shapes (gpt-oss serves Responses and Chat Completions
+    // on `/v1`) is reachable on either.
+    ApiShape resolvedShape = entry.shapes[0];
+    if shape is MantleApi {
+        if entry.shapes.indexOf(shape) is () {
+            return error(string `model '${bareId}' is not served as ${shape} on bedrock-mantle. ` +
+                string `It is served as ${string:'join(" or ", ...entry.shapes)}; drop the 'api' ` +
+                string `argument to use ${entry.shapes[0]}.`);
+        }
+        resolvedShape = shape;
     }
 
     return {

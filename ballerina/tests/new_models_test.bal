@@ -88,7 +88,7 @@ function testClaudeSonnet5AndOpus5UseTheMessagesPathOnMantle() returns error? {
     foreach [string, string] [id, wireId] in ids.entries() {
         Route route = check resolveMantleRoute(id, "us-east-1");
         MantleEntry entry = check route.mantleEntry.ensureType();
-        test:assertEquals(entry.path, "/anthropic/v1/messages", id);
+        test:assertEquals(check mantlePathFor(entry.basePath, route.shape), "/anthropic/v1/messages", id);
         test:assertEquals(route.shape, MESSAGES, id);
         test:assertEquals(NATIVE_MESSAGES_CONVERTER.toolChoice, ANTHROPIC_TOOL_CHOICE);
         test:assertTrue(usesApiKeyHeader(route.shape), id);

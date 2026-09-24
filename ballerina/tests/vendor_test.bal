@@ -267,27 +267,25 @@ function testAllKnownMantleOnlyModelsResolveOnTheMantleEndpoint() returns error?
         Endpoint ep = check buildEndpoint(route);
         test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
         test:assertEquals(ep.path, expectedPath, "wrong Mantle path for " + id);
-        // A Mantle-only model has no runtime alternative to suggest.
-        MantleEntry entry = check route.mantleEntry.ensureType();
-        test:assertFalse(entry.onRuntime, id + " must not be marked as also on bedrock-runtime");
     }
 }
 
 @test:Config {}
-function testDualHomedModelsAreMarkedAsSuchInTheTable() returns error? {
-    // `onRuntime` no longer drives routing; it is what lets a Mantle class tell a
-    // caller which runtime class to use for a capability Mantle lacks.
+function testDualHomedModelsResolveOnBothEndpointsWithNoTableOnTheRuntimeSide() returns error? {
+    // The asymmetry the design rests on: a Mantle route needs a table row because its
+    // base path is per-model data, while the SAME model on bedrock-runtime resolves
+    // with no lookup at all, because there the path is a pure function of the shape.
     foreach string id in ["anthropic.claude-haiku-4-5", "anthropic.claude-opus-4-8",
             "anthropic.claude-opus-5", "anthropic.claude-sonnet-5", "zai.glm-5", "deepseek.v3.2",
             "mistral.mistral-large-3-675b-instruct", "qwen.qwen3-coder-480b-a35b-v1:0",
             "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it", "google.gemma-3-12b-it",
             "google.gemma-3-4b-it", "openai.gpt-oss-120b-1:0"] {
-        Route route = check resolveMantleRoute(id, REGION);
-        MantleEntry entry = check route.mantleEntry.ensureType();
-        test:assertTrue(entry.onRuntime, id + " is dual-homed and must be marked so");
-        // ...and the runtime resolver reaches the same model with no table lookup.
+        Route mantle = check resolveMantleRoute(id, REGION);
+        test:assertEquals(mantle.endpoint, MANTLE, id);
         Route runtime = check resolveRuntimeRoute(id, REGION, CONVERSE);
         test:assertEquals(runtime.endpoint, RUNTIME, id);
+        test:assertEquals((check buildEndpoint(runtime)).path,
+                string `/model/${encodePathSegment(id)}/converse`, id);
     }
 }
 

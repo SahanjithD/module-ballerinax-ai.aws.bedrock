@@ -227,8 +227,8 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
         return {
             baseUrl: mantleBase,
             host: hostOf(mantleBase),
-            // The Mantle path is per-model table data, not derivable from the id.
-            path: entry.path,
+            // Base path is per-model table data; the shape suffix is derived.
+            path: check mantlePathFor(entry.basePath, route.shape),
             signingService: SIGNING_BEDROCK_MANTLE
         };
     }

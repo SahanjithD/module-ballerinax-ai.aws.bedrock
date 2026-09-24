@@ -158,23 +158,27 @@ isolated function selectConverter(Route route) returns readonly & ModelConverter
     return selectInvokeConverter(route.bareModelId);
 }
 
-// The wire shape a Mantle request path implies. Path -> dialect is 1:1 across every
-// model AWS serves on Mantle, which is why `MANTLE_CAPABLE` stores only the path.
+// The Mantle request path for a resolved shape: the model's base path plus the
+// shape's own suffix.
 //
-// Deriving the dialect from the VENDOR prefix instead would be wrong:
-// `google.gemma-3-*` speaks Chat Completions on `/v1` while `google.gemma-4-*` speaks
-// Responses on `/openai/v1` — one prefix, two dialects. The path tells them apart.
-isolated function mantleShapeForPath(string path) returns ApiShape|error {
-    if path.endsWith("/messages") {
-        return MESSAGES;
+// The SUFFIX is derivable and identical on both endpoints — only the base path is
+// per-model data. That asymmetry is the whole reason `MantleEntry` exists and is
+// this small.
+isolated function mantlePathFor(string basePath, ApiShape shape) returns string|error {
+    match shape {
+        MESSAGES => {
+            return basePath + "/messages";
+        }
+        RESPONSES => {
+            return basePath + "/responses";
+        }
+        CHAT_COMPLETIONS => {
+            return basePath + "/chat/completions";
+        }
     }
-    if path.endsWith("/responses") {
-        return RESPONSES;
-    }
-    if path.endsWith("/chat/completions") {
-        return CHAT_COMPLETIONS;
-    }
-    return error(string `no known wire dialect for Mantle path '${path}'`);
+    // CONVERSE and INVOKE are bedrock-runtime dialects; bedrock-mantle serves neither.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+    return error(string `the bedrock-mantle endpoint does not serve the ${shape} API`);
 }
 
 // Whether a route authenticates with `x-api-key` rather than `Authorization: Bearer`.
