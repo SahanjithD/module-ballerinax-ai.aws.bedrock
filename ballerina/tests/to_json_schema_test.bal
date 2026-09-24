@@ -38,7 +38,7 @@ type StringArray string[];
 // typed with the CONCRETE provider class (how users write it), which is the case
 // that would break if the annotation only fired for the `ai:ModelProvider`
 // interface. Never executed — the plugin rewrites source, so existing is enough.
-function schemaProbeCallSite(AnthropicModelProvider provider) returns error? {
+function schemaProbeCallSite(BedrockRuntimeAnthropicModelProvider provider) returns error? {
     SchemaProbe _ = check provider->generate(`rate this`);
     SchemaProbe[] _ = check provider->generate(`rate these`);
 }

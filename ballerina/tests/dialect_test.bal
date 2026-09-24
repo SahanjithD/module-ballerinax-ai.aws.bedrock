@@ -19,6 +19,30 @@ import ballerina/test;
 // vendor-shaped mental model gets wrong: "OpenAI" is not one format — Responses and
 // Chat Completions disagree, and we serve both.
 
+// A Route built by hand, so the header/dialect rules can be driven without going
+// near a provider class. Mirrors exactly what the resolvers produce.
+function mantleRoute(string bareModelId, string path) returns Route|error => {
+    endpoint: MANTLE,
+    shape: check mantleShapeForPath(path),
+    bareModelId,
+    geoPrefix: (),
+    effectiveModelId: bareModelId,
+    region: "us-east-1",
+    partition: "aws",
+    mantleEntry: {path}
+};
+
+function runtimeRoute(string bareModelId, ApiShape shape) returns Route => {
+    endpoint: RUNTIME,
+    shape,
+    bareModelId,
+    geoPrefix: (),
+    effectiveModelId: bareModelId,
+    region: "us-east-1",
+    partition: "aws",
+    mantleEntry: ()
+};
+
 // ---- tool_choice: Responses is FLAT, Chat Completions is NESTED ----
 
 @test:Config {}
@@ -28,7 +52,7 @@ function testResponsesForcesToolsWithTheFlatShape() {
     // the model answered in prose and generate() failed with "no tool call" on every
     // GPT-5.x and Gemma 4 request. Sources, first-party and unambiguous:
     // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/tool_choice_function.py
-    map<json> forced = <map<json>>applyToolChoice({}, MANTLE_RESPONSES_CONVERTER.toolChoice, "my_tool");
+    map<json> forced = <map<json>>applyToolChoice({}, NATIVE_RESPONSES_CONVERTER.toolChoice, "my_tool");
     test:assertEquals(forced["tool_choice"], <json>{"type": "function", "name": "my_tool"},
             "Responses takes the tool name FLAT, not nested under `function`");
 }
@@ -36,7 +60,7 @@ function testResponsesForcesToolsWithTheFlatShape() {
 @test:Config {}
 function testChatCompletionsForcesToolsWithTheNestedShape() {
     // https://github.com/openai/openai-python/blob/main/src/openai/types/chat/chat_completion_named_tool_choice_param.py
-    map<json> forced = <map<json>>applyToolChoice({}, MANTLE_CHAT_CONVERTER.toolChoice, "my_tool");
+    map<json> forced = <map<json>>applyToolChoice({}, NATIVE_CHAT_CONVERTER.toolChoice, "my_tool");
     test:assertEquals(forced["tool_choice"], <json>{"type": "function", "function": {"name": "my_tool"}},
             "Chat Completions nests the tool name under `function`");
 }
@@ -44,9 +68,22 @@ function testChatCompletionsForcesToolsWithTheNestedShape() {
 @test:Config {}
 function testTheTwoOpenAiDialectsDoNotShareAToolChoiceStyle() {
     // The bug was one enum value spanning two incompatible dialects; keep them split.
-    test:assertNotEquals(MANTLE_RESPONSES_CONVERTER.toolChoice, MANTLE_CHAT_CONVERTER.toolChoice);
-    test:assertEquals(INVOKE_OPENAI_CHAT_CONVERTER.toolChoice, MANTLE_CHAT_CONVERTER.toolChoice,
-            "gpt-oss on Invoke speaks Chat Completions, like Mantle's chat route");
+    test:assertNotEquals(NATIVE_RESPONSES_CONVERTER.toolChoice, NATIVE_CHAT_CONVERTER.toolChoice);
+    test:assertEquals(INVOKE_OPENAI_CHAT_CONVERTER.toolChoice, NATIVE_CHAT_CONVERTER.toolChoice,
+            "gpt-oss on Invoke speaks Chat Completions, like the native chat route");
+}
+
+@test:Config {}
+function testTheSameConvertersServeBothEndpoints() {
+    // The three vendor-native dialects are served on bedrock-runtime AND
+    // bedrock-mantle, so the converters are shared and the endpoints differ only in
+    // host, path and signing name. That is why they are no longer named MANTLE_*.
+    BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
+    foreach BedrockEndpoint endpoint in endpoints {
+        Route route = endpoint == RUNTIME ? runtimeRoute("m", MESSAGES) : checkpanic mantleRoute("m", "/anthropic/v1/messages");
+        readonly & ModelConverter converter = checkpanic selectConverter(route);
+        test:assertEquals(converter.dialect, NATIVE_MESSAGES_CONVERTER.dialect);
+    }
 }
 
 // ---- Responses has no stop-sequence parameter ----
@@ -115,101 +152,138 @@ function testResponsesReplaysAssistantToolCallAsFunctionCallItem() returns error
     test:assertEquals(blanks.length(), 0, "the tool-call turn must not become an empty output_text item");
 }
 
-// ---- x-api-key follows the PATH, not the vendor or the provider class ----
+// ---- x-api-key follows the SHAPE, not the vendor or the provider class ----
 
 @test:Config {}
-function testMantleApiKeyHeaderFollowsTheMessagesPathNotTheProviderClass() returns error? {
+function testApiKeyHeaderFollowsTheMessagesShapeNotTheProviderClass() returns error? {
     // REGRESSION: this lived in the Anthropic facade alone, so the same rule was
     // honoured there and silently ignored everywhere else. Driven here through
-    // `commonExtraHeaders` — the shared path — to prove the route decides, not the
-    // class. A Messages path gets `x-api-key`; see the Bearer case below.
-    MantleEntry entry = {path: "/anthropic/v1/messages"};
-    Route route = {
-        family: MANTLE,
-        bareModelId: "anthropic.claude-mythos-5",
-        geoPrefix: (),
-        effectiveModelId: "anthropic.claude-mythos-5",
-        region: "us-east-1",
-        partition: "aws",
-        mantleEntry: entry
-    };
-    map<string> headers = commonExtraHeaders(route, (), {apiKey: "secret-key"});
+    // `buildRouteHeaders` — the shared path — to prove the route decides, not the
+    // class. A Messages shape gets `x-api-key`; see the Bearer case below.
+    Route route = check mantleRoute("anthropic.claude-opus-5", "/anthropic/v1/messages");
+    map<string> headers = buildRouteHeaders(route, (), {apiKey: "secret-key"});
     test:assertEquals(headers["x-api-key"], "secret-key");
+
+    // ...and it holds on bedrock-runtime too: AWS's documented curl for the Anthropic
+    // Messages path sends `x-api-key` on both hosts.
+    map<string> runtimeHeaders =
+        buildRouteHeaders(runtimeRoute("anthropic.claude-opus-5", MESSAGES), (), {apiKey: "secret-key"});
+    test:assertEquals(runtimeHeaders["x-api-key"], "secret-key");
 }
 
 @test:Config {}
-function testMantleApiKeyHeaderIsAbsentForBearerStyleEntries() {
-    // A BEARER entry needs nothing extra: the transport's `Authorization: Bearer`
-    // already carries the key.
-    MantleEntry entry = {path: "/openai/v1/responses"};
-    Route route = {
-        family: MANTLE,
-        bareModelId: "openai.gpt-5.4",
-        geoPrefix: (),
-        effectiveModelId: "openai.gpt-5.4",
-        region: "us-east-1",
-        partition: "aws",
-        mantleEntry: entry
-    };
-    map<string> headers = commonExtraHeaders(route, (), {apiKey: "secret-key"});
-    test:assertFalse(headers.hasKey("x-api-key"));
+function testApiKeyHeaderIsAbsentForTheBearerShapes() returns error? {
+    // The OpenAI-compatible shapes need nothing extra: the transport's
+    // `Authorization: Bearer` already carries the key.
+    Route responses = check mantleRoute("openai.gpt-5.4", "/openai/v1/responses");
+    test:assertFalse(buildRouteHeaders(responses, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
+
+    Route chat = check mantleRoute("deepseek.v3.2", "/v1/chat/completions");
+    test:assertFalse(buildRouteHeaders(chat, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
+
+    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
+
+    foreach ApiShape shape in shapes {
+        test:assertFalse(usesApiKeyHeader(shape), shape + " must authenticate with Bearer/SigV4");
+    }
+    test:assertTrue(usesApiKeyHeader(MESSAGES));
 }
 
 @test:Config {}
-function testMantleApiKeyHeaderIsAbsentForSigV4Credentials() {
+function testApiKeyHeaderIsAbsentForSigV4Credentials() returns error? {
     // With SigV4 credentials there is no api key to send — the signature alone must
     // authenticate. Emitting the secret access key here would leak it in a header.
-    MantleEntry entry = {path: "/anthropic/v1/messages"};
-    Route route = {
-        family: MANTLE,
-        bareModelId: "anthropic.claude-mythos-5",
-        geoPrefix: (),
-        effectiveModelId: "anthropic.claude-mythos-5",
-        region: "us-east-1",
-        partition: "aws",
-        mantleEntry: entry
-    };
-    map<string> headers = commonExtraHeaders(route, (), TEST_CREDS);
-    test:assertFalse(headers.hasKey("x-api-key"));
+    Route route = check mantleRoute("anthropic.claude-opus-5", "/anthropic/v1/messages");
+    test:assertFalse(buildRouteHeaders(route, (), TEST_CREDS).hasKey("x-api-key"));
 }
 
-// ---- Claude-only knobs: `anthropic-workspace` header + `thinking` fold ----
+// ---- the two Anthropic version conventions, both live on bedrock-runtime ----
 
 @test:Config {}
-function testAnthropicWorkspaceHeaderAndThinkingKnobAreEmitted() returns error? {
-    // COVERAGE GAP (2026-08-04): the two Claude-only config knobs had NO test.
-    // `anthropicWorkspaceId` (the `anthropic-workspace` cost-scoping header on the
-    // Mantle Messages route) and `thinking` (folded into the additionalModelRequestFields
-    // passthrough) were both wired but unasserted — and an untested request header is
-    // exactly the class that shipped broken before (the Mantle double-header 401).
-    MantleEntry entry = {path: "/anthropic/v1/messages"};
-    Route mantleRoute = {
-        family: MANTLE,
-        bareModelId: "anthropic.claude-opus-4-8",
-        geoPrefix: (),
-        effectiveModelId: "anthropic.claude-opus-4-8",
-        region: "us-east-1",
-        partition: "aws",
-        mantleEntry: entry
-    };
-    AnthropicConfig config = {thinking: {mode: ENABLED, budgetTokens: 1024}, effort: EFFORT_HIGH};
+function testAnthropicVersionIsAHeaderOnMessagesAndABodyFieldOnInvoke() returns error? {
+    // Same vendor, same host, two shapes, two mechanisms — and they must not cross.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
+    map<string> messagesHeaders =
+        buildRouteHeaders(runtimeRoute("anthropic.claude-opus-5", MESSAGES), (), TEST_CREDS);
+    test:assertEquals(messagesHeaders["anthropic-version"], "2023-06-01");
 
-    // 1) A Messages-dialect Mantle path carries `anthropic-version` — derived from the
-    //    path, not stored per model.
-    map<string> headers = buildExtraHeaders(mantleRoute, config, TEST_CREDS);
-    test:assertEquals(headers["anthropic-version"], "2023-06-01");
+    map<string> invokeHeaders =
+        buildRouteHeaders(runtimeRoute("anthropic.claude-opus-5", INVOKE), (), TEST_CREDS);
+    test:assertFalse(invokeHeaders.hasKey("anthropic-version"),
+            "InvokeModel carries the version in the BODY, never as this header");
 
-    // 2) REGRESSION: `thinking` used to be folded into additionalModelRequestFields,
-    //    but `encodeAnthropicMessages` ignores that field entirely — so the knob was
-    //    silently dropped on exactly the two Claude-native dialects. It is now a
-    //    first-class body field and must actually reach the wire.
-    InferenceParams params = check resolveParams(8000, (), config);
+    readonly & InferenceParams params = buildInferenceParams(256, (), (), (), (), (), ());
+    map<json> invokeBody = <map<json>>check encodeInvokeAnthropic((), [userText("hi")], [], (), params);
+    test:assertEquals(invokeBody["anthropic_version"], "bedrock-2023-05-31");
+
+    map<json> messagesBody = <map<json>>check encodeMantleMessages((), [userText("hi")], [], (), params);
+    test:assertFalse(messagesBody.hasKey("anthropic_version"),
+            "the Messages dialect carries the version in the HEADER, never in the body");
+
+    // And the header belongs to the SHAPE, so it is sent on Mantle's Messages path too.
+    Route mantle = check mantleRoute("anthropic.claude-opus-5", "/anthropic/v1/messages");
+    test:assertEquals(buildRouteHeaders(mantle, (), TEST_CREDS)["anthropic-version"], "2023-06-01");
+}
+
+// ---- guardrail headers: InvokeModel AND Chat Completions ----
+
+@test:Config {}
+function testGuardrailHeadersAreEmittedOnInvokeAndChatCompletions() {
+    // The OpenAI-compatible Chat Completions path reuses the INVOKEMODEL header
+    // convention rather than the Converse body field — AWS documents
+    // `X-Amzn-Bedrock-GuardrailIdentifier` / `-GuardrailVersion` as `extra_headers`
+    // on that path.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+    GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "DRAFT"};
+    ApiShape[] shapes = [INVOKE, CHAT_COMPLETIONS];
+    foreach ApiShape shape in shapes {
+        map<string> headers = buildRouteHeaders(runtimeRoute("m", shape), guardrail, TEST_CREDS);
+        test:assertEquals(headers["X-Amzn-Bedrock-GuardrailIdentifier"], "gr-1", shape);
+        test:assertEquals(headers["X-Amzn-Bedrock-GuardrailVersion"], "DRAFT", shape);
+    }
+}
+
+@test:Config {}
+function testConverseCarriesTheGuardrailInTheBodyNotAHeader() returns error? {
+    // Converse models `guardrailConfig` natively, so the headers must NOT appear —
+    // sending both would be two ways of asking for the same thing.
+    GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "DRAFT"};
+    map<string> headers = buildRouteHeaders(runtimeRoute("m", CONVERSE), guardrail, TEST_CREDS);
+    test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailIdentifier"), headers.toString());
+
+    readonly & InferenceParams params = buildInferenceParams(256, (), (), (), (), (), guardrail);
+    map<json> body = <map<json>>check encodeConverse((), [userText("hi")], [], (), params);
+    test:assertEquals(body["guardrailConfig"],
+            <json>{"guardrailIdentifier": "gr-1", "guardrailVersion": "DRAFT"});
+}
+
+@test:Config {}
+function testNoGuardrailMeansNoGuardrailHeaders() {
+    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiShape shape in shapes {
+        map<string> headers = buildRouteHeaders(runtimeRoute("m", shape), (), TEST_CREDS);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailIdentifier"), shape);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-GuardrailVersion"), shape);
+    }
+}
+
+// ---- Claude-only knobs: `thinking` is a body field, `effort` its sibling ----
+
+@test:Config {}
+function testThinkingAndEffortReachTheMessagesDialectAsBodyFields() returns error? {
+    // REGRESSION: `thinking` used to be folded into additionalModelRequestFields,
+    // but `encodeMantleMessages` ignores that field entirely — so the knob was
+    // silently dropped on exactly the two Claude-native dialects. It is now a
+    // first-class body field and must actually reach the wire.
+    AnthropicRuntimeConfig config = {thinking: {mode: ENABLED, budgetTokens: 1024}, effort: EFFORT_HIGH};
+    readonly & InferenceParams params = check anthropicParams(8000, (), config);
     map<json> body = check encodeMantleMessages((), SAMPLE_MESSAGES, [], (), params).ensureType();
     test:assertEquals(body["thinking"], <json>{"type": "enabled", "budget_tokens": 1024},
             "thinking must be a top-level body field on the Messages dialect");
 
-    // 3) `effort` is a SIBLING of `thinking`, never nested inside it — AWS returns a
-    //    ValidationException for the nested form.
+    // `effort` is a SIBLING of `thinking`, never nested inside it — AWS returns a
+    // ValidationException for the nested form.
     test:assertEquals(body["output_config"], <json>{"effort": "high"});
     map<json> thinkingBlock = check body["thinking"].ensureType();
     test:assertFalse(thinkingBlock.hasKey("effort"),
@@ -219,23 +293,25 @@ function testAnthropicWorkspaceHeaderAndThinkingKnobAreEmitted() returns error? 
 @test:Config {}
 function testThinkingBudgetRulesFailAtConstruction() {
     // All three are Bedrock 400s; catching them here names the actual mistake.
-    InferenceParams|ai:Error tooSmall = resolveParams(8000, (),
-            {thinking: {mode: ENABLED, budgetTokens: 512}});
-    test:assertTrue(tooSmall is ai:Error);
-
-    InferenceParams|ai:Error overMax = resolveParams(2000, (),
-            {thinking: {mode: ENABLED, budgetTokens: 4000}});
-    test:assertTrue(overMax is ai:Error);
-
-    InferenceParams|ai:Error missing = resolveParams(8000, (), {thinking: {mode: ENABLED}});
-    test:assertTrue(missing is ai:Error);
+    test:assertTrue(anthropicParams(8000, (), {thinking: {mode: ENABLED, budgetTokens: 512}}) is ai:Error);
+    test:assertTrue(anthropicParams(2000, (), {thinking: {mode: ENABLED, budgetTokens: 4000}}) is ai:Error);
+    test:assertTrue(anthropicParams(8000, (), {thinking: {mode: ENABLED}}) is ai:Error);
 
     // budgetTokens is meaningless outside ENABLED — adaptive uses `effort` instead.
-    InferenceParams|ai:Error wrongMode = resolveParams(8000, (),
-            {thinking: {mode: ADAPTIVE, budgetTokens: 4000}});
-    test:assertTrue(wrongMode is ai:Error);
+    test:assertTrue(anthropicParams(8000, (), {thinking: {mode: ADAPTIVE, budgetTokens: 4000}}) is ai:Error);
 
     // ADAPTIVE alone is the recommended, and default, configuration.
-    InferenceParams|ai:Error ok = resolveParams(8000, (), {thinking: {}});
-    test:assertTrue(ok is InferenceParams);
+    test:assertTrue(anthropicParams(8000, (), {thinking: {}}) is InferenceParams);
+}
+
+@test:Config {}
+function testThinkingBudgetRulesAlsoFireOnTheMantleClass() {
+    // The validation moved into the shared spine, so it must hold on both endpoints.
+    BedrockMantleAnthropicModelProvider|ai:Error provider = new (
+            MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION, (), (), 2000,
+            thinking = {mode: ENABLED, budgetTokens: 4000});
+    test:assertTrue(provider is ai:Error);
+    if provider is ai:Error {
+        test:assertTrue(provider.message().includes("budgetTokens"), provider.message());
+    }
 }

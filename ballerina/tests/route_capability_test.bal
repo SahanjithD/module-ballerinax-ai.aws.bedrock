@@ -23,6 +23,25 @@ import ballerina/test;
 // the field is emitted correctly for that dialect, or construction refuses it by
 // name. A 200 with the field dropped is what must never happen again.
 
+// Params assembly, exactly as each provider class does it. Kept here rather than in
+// the module so the tests drive the same shared builders the classes do.
+function openAIParams(int maxTokens, decimal? temperature, OpenAIRuntimeConfig config)
+        returns readonly & InferenceParams =>
+    buildInferenceParams(maxTokens, temperature, config?.stopSequences,
+            config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
+            config?.guardrail, (), (), config?.reasoningEffort);
+
+function anthropicParams(int maxTokens, decimal? temperature, AnthropicRuntimeConfig config)
+        returns readonly & InferenceParams|ai:Error {
+    ThinkingConfig? thinking = config?.thinking;
+    if thinking is ThinkingConfig {
+        check validateThinking(thinking, maxTokens);
+    }
+    return buildInferenceParams(maxTokens, temperature, config?.stopSequences,
+            config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
+            config?.guardrail, thinking, config?.effort);
+}
+
 // ============================================================================
 // `reasoningEffort` — one value, three dialects, three wire shapes.
 // ============================================================================
@@ -62,7 +81,7 @@ function testReasoningEffortNeverTouchesTheCallersPassthrough() returns error? {
     // It used to be FOLDED into `additionalModelRequestFields` at the provider, which
     // is what erased the per-dialect shape — and quietly put a module-owned key into
     // an escape hatch documented as forwarded verbatim.
-    OpenAIConfig config = {reasoningEffort: "low", additionalModelRequestFields: {"top_p": 0.9}};
+    OpenAIRuntimeConfig config = {reasoningEffort: "low", additionalModelRequestFields: {"top_p": 0.9}};
     readonly & InferenceParams params = openAIParams(256, (), config);
     AdditionalRequestFields? passthrough = params?.additionalModelRequestFields;
     test:assertTrue(passthrough is AdditionalRequestFields);
@@ -78,11 +97,11 @@ function testReasoningEffortEnumMembersReachTheWireAsBareValues() returns error?
     // The enum is a name for a value the ENDPOINT owns, so every member has to reach
     // the wire as its bare string on whichever dialect carries it — the module names
     // the value, it does not translate it.
-    OpenAIConfig minimal = {reasoningEffort: REASONING_MINIMAL};
+    OpenAIRuntimeConfig minimal = {reasoningEffort: REASONING_MINIMAL};
     json chatBody = check encodeOpenAIChat((), [userText("hi")], [], (), openAIParams(256, (), minimal));
     test:assertEquals((<map<json>>chatBody)["reasoning_effort"], "minimal");
 
-    OpenAIConfig xhigh = {reasoningEffort: REASONING_XHIGH};
+    OpenAIRuntimeConfig xhigh = {reasoningEffort: REASONING_XHIGH};
     json responsesBody = check encodeResponses((), [userText("hi")], [], (), openAIParams(256, (), xhigh));
     test:assertEquals((<map<json>>responsesBody)["reasoning"], {"effort": "xhigh"});
 }
@@ -101,8 +120,13 @@ function testReasoningEffortMinimalIsNotRefusedByTheModule() returns error? {
 }
 
 // ============================================================================
-// `serviceTier` / `latencyOptimized` — honoured on Converse AND Invoke, refused
-// on Mantle. Never dropped.
+// `serviceTier` / `latencyOptimized` — honoured on Converse AND Invoke, refused on
+// every vendor-native shape. Never dropped.
+//
+// On the Mantle CLASSES these two fields do not exist at all: `CommonMantleConfig`
+// omits them, so setting one is a COMPILE error rather than the construction-time
+// refusal it used to be. That is the payoff of splitting the surface by endpoint,
+// and it is why the refusal tests below are all runtime-class tests.
 // ============================================================================
 
 @test:Config {}
@@ -115,6 +139,21 @@ function testInvokeCarriesServiceTierAndLatencyAsRequestHeaders() {
     addInvokeRequestOptionHeaders(headers, buildInferenceParams(256, (), (), (), TIER_FLEX, true, ()));
     test:assertEquals(headers["X-Amzn-Bedrock-Service-Tier"], "flex");
     test:assertEquals(headers["X-Amzn-Bedrock-PerformanceConfig-Latency"], "optimized");
+}
+
+@test:Config {}
+function testTheInvokeRequestOptionHeadersAreOnlySentOnInvoke() {
+    // Chat Completions takes the guardrail headers but NOT these — AWS documents the
+    // request-option headers for InvokeModel alone.
+    readonly & InferenceParams params = buildInferenceParams(256, (), (), (), TIER_FLEX, true, ());
+    map<string> invoke = buildRouteHeaders(runtimeRoute("m", INVOKE), (), TEST_CREDS, params);
+    test:assertEquals(invoke["X-Amzn-Bedrock-Service-Tier"], "flex");
+    ApiShape[] shapes = [CONVERSE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiShape shape in shapes {
+        map<string> headers = buildRouteHeaders(runtimeRoute("m", shape), (), TEST_CREDS, params);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-Service-Tier"), shape);
+        test:assertFalse(headers.hasKey("X-Amzn-Bedrock-PerformanceConfig-Latency"), shape);
+    }
 }
 
 @test:Config {}
@@ -136,28 +175,31 @@ function testConverseStillCarriesServiceTierAndLatencyInTheBody() returns error?
 }
 
 @test:Config {}
-function testLatencyOptimizedOnAMantleRouteIsRefusedAtConstruction() {
-    // Mythos is Mantle-only, so `AUTO` resolves it there. Previously this constructed
-    // fine, returned an ordinary 200, and did nothing.
-    AnthropicModelProvider|ai:Error provider = new (
-        "anthropic.claude-mythos-preview", TEST_CREDS, "us-east-1", latencyOptimized = true);
+function testLatencyOptimizedOnAShapeThatCannotCarryItIsRefusedAtConstruction() {
+    // The Anthropic Messages shape has no Bedrock request-option headers and no
+    // body field for this. Previously the equivalent route constructed fine,
+    // returned an ordinary 200, and did nothing.
+    BedrockRuntimeAnthropicModelProvider|ai:Error provider = new (
+            "anthropic.claude-opus-5", TEST_CREDS, "us-east-1", MESSAGES, latencyOptimized = true);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("latencyOptimized"), provider.message());
-        test:assertTrue(provider.message().includes("bedrock-mantle"), provider.message());
+        test:assertTrue(provider.message().includes("MESSAGES"), provider.message());
     }
 }
 
 @test:Config {}
-function testServiceTierOnAMantleRouteIsRefusedAtConstruction() {
+function testServiceTierOnAShapeThatCannotCarryItIsRefusedAtConstruction() {
     // The sibling the live suite left open because it had no model that refuses a
-    // tier to A/B against. It needs no live model: Mantle has no mechanism at all.
-    AnthropicModelProvider|ai:Error provider = new (
-        "anthropic.claude-mythos-preview", TEST_CREDS, "us-east-1", serviceTier = TIER_FLEX);
+    // tier to A/B against. It needs no live model: the vendor-native shapes have no
+    // mechanism at all, and their own `service_tier` field uses the VENDOR's value
+    // vocabulary rather than Bedrock's — a mapping this module will not guess.
+    BedrockRuntimeOpenAIModelProvider|ai:Error provider = new (
+            GPT_OSS_120B, TEST_CREDS, "us-east-1", CHAT_COMPLETIONS, serviceTier = TIER_FLEX);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("serviceTier"), provider.message());
-        // The refusal must point somewhere: the two families that DO carry it, and
+        // The refusal must point somewhere: the two shapes that DO carry it, and
         // the passthrough for a caller who knows their model's own vocabulary.
         test:assertTrue(provider.message().includes("CONVERSE"), provider.message());
         test:assertTrue(provider.message().includes("additionalModelRequestFields"), provider.message());
@@ -165,15 +207,23 @@ function testServiceTierOnAMantleRouteIsRefusedAtConstruction() {
 }
 
 @test:Config {}
-function testTheSameFieldsAreAcceptedWhenTheCallerForcesACarryingRoute() returns error? {
-    // The refusal is about the ROUTE, not the field, so naming a route that carries
+function testTheSameFieldsAreAcceptedOnAShapeThatCarriesThem() returns error? {
+    // The refusal is about the SHAPE, not the field, so naming a shape that carries
     // it must lift it — otherwise the guard is just a smaller cage.
-    AnthropicModelProvider _ = check new (
-        "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", apiFamily = CONVERSE,
-        serviceTier = TIER_FLEX, latencyOptimized = true);
-    AnthropicModelProvider _ = check new (
-        "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", apiFamily = INVOKE,
-        serviceTier = TIER_FLEX, latencyOptimized = true);
+    BedrockRuntimeAnthropicModelProvider _ = check new (
+            "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,
+            serviceTier = TIER_FLEX, latencyOptimized = true);
+    BedrockRuntimeAnthropicModelProvider _ = check new (
+            "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", INVOKE,
+            serviceTier = TIER_FLEX, latencyOptimized = true);
+}
+
+@test:Config {}
+function testExplicitlyDisablingLatencyOptimizationIsNotRefusedAnywhere() returns error? {
+    // `false` asks for `standard`, which is what an unset flag already produces on
+    // every route. Refusing it would reject a call asking for what it will get.
+    BedrockRuntimeAnthropicModelProvider _ = check new (
+            "anthropic.claude-opus-5", TEST_CREDS, "us-east-1", MESSAGES, latencyOptimized = false);
 }
 
 // ============================================================================
@@ -184,13 +234,18 @@ function testTheSameFieldsAreAcceptedWhenTheCallerForcesACarryingRoute() returns
 function testConfiguredStopSequencesAreRefusedOnTheResponsesDialect() {
     // The Responses API has no stop-sequence parameter. The encoder already refused a
     // per-call `stop`; a CONFIGURED one now fails at construction, before any I/O.
-    OpenAIModelProvider|ai:Error provider = new (
-        "openai.gpt-5.6-sol", TEST_CREDS, "us-east-1", stopSequences = ["END"]);
+    BedrockMantleOpenAIModelProvider|ai:Error provider = new (
+            MANTLE_GPT_5_6_SOL, TEST_CREDS, "us-east-1", stopSequences = ["END"]);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("stopSequences"), provider.message());
         test:assertTrue(provider.message().includes("OpenAI Responses"), provider.message());
     }
+    // ...and the same refusal on the runtime endpoint's Responses shape, because it
+    // is the DIALECT that lacks the field, not the endpoint.
+    BedrockRuntimeOpenAIModelProvider|ai:Error runtime = new (
+            GPT_OSS_120B, TEST_CREDS, "us-east-1", RESPONSES, stopSequences = ["END"]);
+    test:assertTrue(runtime is ai:Error);
 }
 
 @test:Config {}
@@ -201,16 +256,16 @@ function testEveryConverterDeclaresWhatItCanCarry() {
     test:assertTrue(CONVERSE_CONVERTER.supports.thinking);
     test:assertTrue(CONVERSE_CONVERTER.supports.effort);
     test:assertTrue(INVOKE_ANTHROPIC_CONVERTER.supports.thinking);
-    test:assertTrue(MANTLE_MESSAGES_CONVERTER.supports.effort);
-    test:assertFalse(MANTLE_RESPONSES_CONVERTER.supports.stopSequences);
-    test:assertTrue(MANTLE_RESPONSES_CONVERTER.supports.reasoningEffort);
+    test:assertTrue(NATIVE_MESSAGES_CONVERTER.supports.effort);
+    test:assertFalse(NATIVE_RESPONSES_CONVERTER.supports.stopSequences);
+    test:assertTrue(NATIVE_RESPONSES_CONVERTER.supports.reasoningEffort);
     test:assertTrue(INVOKE_OPENAI_CHAT_CONVERTER.supports.reasoningEffort);
     test:assertFalse(INVOKE_NOVA_CONVERTER.supports.reasoningEffort);
     test:assertFalse(INVOKE_MISTRAL_TEXT_CONVERTER.supports.thinking);
     // Every dialect names itself, so a refusal can say which one refused.
     test:assertNotEquals(INVOKE_MISTRAL_CHAT_CONVERTER.dialect, "");
     test:assertNotEquals(INVOKE_DEEPSEEK_CONVERTER.dialect, "");
-    test:assertNotEquals(MANTLE_CHAT_CONVERTER.dialect, "");
+    test:assertNotEquals(NATIVE_CHAT_CONVERTER.dialect, "");
 }
 
 // ============================================================================
@@ -231,9 +286,9 @@ function testThePassthroughIsSplicedOnTheAnthropicMessagesDialects() returns err
     test:assertEquals(invoke["anthropic_beta"], ["context-1m-2025-08-07"]);
     test:assertEquals(invoke["anthropic_version"], "bedrock-2023-05-31");
 
-    map<json> mantle = <map<json>>check encodeMantleMessages((), [userText("hi")], [], (), params);
-    test:assertEquals(mantle["top_k"], 40);
-    test:assertFalse(mantle.hasKey("anthropic_version"), mantle.toJsonString());
+    map<json> messages = <map<json>>check encodeMantleMessages((), [userText("hi")], [], (), params);
+    test:assertEquals(messages["top_k"], 40);
+    test:assertFalse(messages.hasKey("anthropic_version"), messages.toJsonString());
 }
 
 @test:Config {}
@@ -255,9 +310,9 @@ function testDualstackIsRefusedOnTheRuntimeHostFamily() {
     // DNS-verified: `bedrock-runtime.{region}.api.aws` has no record in any region
     // tried. Without the guard this built the host happily and died at call time as
     // a bare connection error after a full retry cycle.
-    AnthropicModelProvider|ai:Error provider = new (
-        "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", apiFamily = CONVERSE,
-        endpoint = {dualstack: true});
+    BedrockRuntimeAnthropicModelProvider|ai:Error provider = new (
+            "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,
+            endpoint = {dualstack: true});
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("dualstack"), provider.message());
@@ -301,8 +356,8 @@ function testDualstackIsRefusedOnBothKnowledgeBaseAgentPlanes() returns error? {
 function testDualstackIsStillHonouredWhereItExists() returns error? {
     // Mantle is the one host family that HAS a dualstack host, and the module forces
     // it there. The guard must not touch that.
-    AnthropicModelProvider _ = check new (
-        "anthropic.claude-mythos-preview", TEST_CREDS, "us-east-1", endpoint = {dualstack: true});
+    BedrockMantleAnthropicModelProvider _ = check new (
+            MANTLE_CLAUDE_OPUS_5, TEST_CREDS, "us-east-1", endpoint = {dualstack: true});
 }
 
 @test:Config {}
@@ -310,15 +365,7 @@ function testACustomEndpointStillOutranksTheDualstackGuard() returns error? {
     // A concrete origin means there is no derived host to validate — the same
     // doctrine the China-partition and Mantle+FIPS guards follow. It is also the
     // escape hatch if AWS publishes a dualstack host this guard does not know about.
-    AnthropicModelProvider _ = check new (
-        "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", apiFamily = CONVERSE,
-        endpoint = {dualstack: true, customEndpoint: "https://bedrock.internal.example.com"});
-}
-
-@test:Config {}
-function testExplicitlyDisablingLatencyOptimizationIsNotRefusedAnywhere() returns error? {
-    // `false` asks for `standard`, which is what an unset flag already produces on
-    // every route. Refusing it would reject a call asking for what it will get.
-    AnthropicModelProvider _ = check new (
-        "anthropic.claude-mythos-preview", TEST_CREDS, "us-east-1", latencyOptimized = false);
+    BedrockRuntimeAnthropicModelProvider _ = check new (
+            "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,
+            endpoint = {dualstack: true, customEndpoint: "https://bedrock.internal.example.com"});
 }

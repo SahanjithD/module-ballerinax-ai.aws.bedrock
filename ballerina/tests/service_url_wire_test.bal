@@ -65,7 +65,7 @@ function testCustomServiceUrlIsHonouredOnTheWire() returns error? {
 
     // Point the provider at the local server. `http://` (not https) also proves the
     // override is taken verbatim rather than forced onto a scheme.
-    AnthropicModelProvider provider = check new (
+    BedrockRuntimeAnthropicModelProvider provider = check new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1",
             endpoint = {customEndpoint: string `http://localhost:${port}`});
     _ = check provider->chat([{role: "user", content: "hi"}]);

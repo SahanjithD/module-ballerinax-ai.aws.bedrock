@@ -22,7 +22,7 @@ const ARN = "arn:aws:bedrock:us-west-2:123456789012:provisioned-model/abc123";
 
 @test:Config {}
 function testWirePathSingleEncodesArnModelIdSegment() returns error? {
-    Route route = check resolveRoute(ARN, REGION, {apiFamily: INVOKE});
+    Route route = check resolveRuntimeRoute(ARN, REGION, INVOKE);
     Endpoint ep = check buildEndpoint(route);
     test:assertTrue(ep.path.startsWith("/model/") && ep.path.endsWith("/invoke"));
     test:assertTrue(ep.path.includes("%3A"), "ARN colons must be %3A on the wire");
@@ -33,7 +33,7 @@ function testWirePathSingleEncodesArnModelIdSegment() returns error? {
 @test:Config {}
 function testCanonicalUriDoubleEncodesWirePath() returns error? {
     // SigV4 non-S3 rule: the canonical URI is the wire path encoded again.
-    Route route = check resolveRoute(ARN, REGION, {apiFamily: INVOKE});
+    Route route = check resolveRuntimeRoute(ARN, REGION, INVOKE);
     Endpoint ep = check buildEndpoint(route);
     string canonical = getCanonicalUri(ep.path);
     test:assertTrue(canonical.includes("%253A"), "canonical URI must double-encode the colon");
@@ -44,16 +44,54 @@ function testCanonicalUriDoubleEncodesWirePath() returns error? {
 
 @test:Config {}
 function testBareIdWirePathHasNoEncodingArtifacts() returns error? {
-    Route route = check resolveRoute("us.anthropic.claude-opus-4-8", REGION);
+    Route route = check resolveRuntimeRoute("us.anthropic.claude-opus-4-8", REGION, CONVERSE);
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.path, "/model/us.anthropic.claude-opus-4-8/converse");
     // Unreserved chars: single == double, so the signature matches without ARNs.
     test:assertEquals(getCanonicalUri(ep.path), "/model/us.anthropic.claude-opus-4-8/converse");
 }
 
+// ---- One host, five paths: the bedrock-runtime shapes ----
+
+@test:Config {}
+function testEveryRuntimeShapeHasItsDocumentedPathAndSignsAsBedrock() returns error? {
+    // The three vendor-native shapes are FIXED paths on bedrock-runtime — the model
+    // is named in the body — and, unlike Mantle, they are uniform across models.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+    map<string> expected = {
+        [CONVERSE]: "/model/anthropic.claude-opus-5/converse",
+        [INVOKE]: "/model/anthropic.claude-opus-5/invoke",
+        [MESSAGES]: "/anthropic/v1/messages",
+        [CHAT_COMPLETIONS]: "/openai/v1/chat/completions",
+        [RESPONSES]: "/openai/v1/responses"
+    };
+    foreach [string, string] [shape, path] in expected.entries() {
+        Route route = check resolveRuntimeRoute("anthropic.claude-opus-5", REGION, <ApiShape>shape);
+        Endpoint ep = check buildEndpoint(route);
+        test:assertEquals(ep.path, path, shape);
+        // Every path on bedrock-runtime signs as `bedrock`, the vendor-native ones
+        // included — AWS's own curl is `--aws-sigv4 "aws:amz:us-east-1:bedrock"`.
+        test:assertEquals(ep.signingService, SIGNING_BEDROCK, "wrong signing scope for " + shape);
+        test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com", shape);
+    }
+}
+
+@test:Config {}
+function testOnlyConverseAndInvokeAddressTheModelInTheUrl() {
+    // The three vendor-native shapes carry `model` in the request BODY on both
+    // endpoints, so `runChat` must inject it for exactly those three.
+    test:assertTrue(isPathAddressed(CONVERSE));
+    test:assertTrue(isPathAddressed(INVOKE));
+    test:assertFalse(isPathAddressed(MESSAGES));
+    test:assertFalse(isPathAddressed(CHAT_COMPLETIONS));
+    test:assertFalse(isPathAddressed(RESPONSES));
+}
+
 @test:Config {}
 function testMantleEndpointHostAndSigningService() returns error? {
-    Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-east-1");
+    Route route = check resolveMantleRoute("anthropic.claude-opus-5", "us-east-1");
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.host, "bedrock-mantle.us-east-1.api.aws");
     test:assertEquals(ep.path, "/anthropic/v1/messages");
@@ -62,11 +100,10 @@ function testMantleEndpointHostAndSigningService() returns error? {
 
 // GovCloud is a SUPPORTED Mantle partition — `us-gov-west-1` carries bedrock-mantle
 // per AWS's endpoint availability table — so the partition guard must not reject it.
-// The `api.aws` suffix is partition-neutral, hence no GovCloud-specific host shape.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
 @test:Config {}
 function testMantleEndpointOnGovCloudPartition() returns error? {
-    Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-gov-west-1");
+    Route route = check resolveMantleRoute("anthropic.claude-opus-5", "us-gov-west-1");
     test:assertEquals(route.partition, "aws-us-gov");
 
     Endpoint ep = check buildEndpoint(route);
@@ -76,9 +113,7 @@ function testMantleEndpointOnGovCloudPartition() returns error? {
 
 @test:Config {}
 function testConverseSigningServiceIsBedrock() returns error? {
-    // nova-pro is Converse-default (not Mantle-capable); opus-4-8 now prefers Mantle
-    // under AUTO, so it no longer exercises the runtime signing path.
-    Route route = check resolveRoute("amazon.nova-pro-v1:0", "us-east-1");
+    Route route = check resolveRuntimeRoute("amazon.nova-pro-v1:0", "us-east-1", CONVERSE);
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com");
     test:assertEquals(ep.signingService, "bedrock");
@@ -193,7 +228,7 @@ function testPathSegmentEncoderFollowsRfc3986NotFormEncoding() {
 function testCanonicalUriAgreesWithTheWirePathEncoder() returns error? {
     // The two must use the SAME rule or the server cannot reconstruct what we
     // signed. A model id with a space is the case that used to diverge.
-    Route r = check resolveRoute("converse/some vendor.model~x", "us-east-1");
+    Route r = check resolveRuntimeRoute("some vendor.model~x", "us-east-1", CONVERSE);
     Endpoint ep = check buildEndpoint(r);
     test:assertEquals(ep.path, "/model/some%20vendor.model~x/converse");
     test:assertEquals(getCanonicalUri(ep.path), "/model/some%2520vendor.model~x/converse");
@@ -207,13 +242,13 @@ function testCanonicalUriAgreesWithTheWirePathEncoder() returns error? {
 // string with no placeholders, so a concrete URL needs no sentinel.
 
 @test:Config {}
-function testDefaultServiceUrlTemplateResolvesPerRouteFamily() returns error? {
-    Route converse = check resolveRoute("anthropic.claude-sonnet-4-6", "eu-west-1");
-    test:assertEquals((check buildEndpoint(converse)).baseUrl,
+function testDefaultServiceUrlTemplateResolvesPerEndpoint() returns error? {
+    Route runtime = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "eu-west-1", CONVERSE);
+    test:assertEquals((check buildEndpoint(runtime)).baseUrl,
             "https://bedrock-runtime.eu-west-1.amazonaws.com");
 
-    // Same template, different family → the `api.aws` suffix, not `amazonaws.com`.
-    Route mantle = check resolveRoute("openai.gpt-5.4", "eu-west-1");
+    // Same template, different endpoint → the `api.aws` suffix, not `amazonaws.com`.
+    Route mantle = check resolveMantleRoute("openai.gpt-5.4", "eu-west-1");
     test:assertEquals((check buildEndpoint(mantle)).baseUrl,
             "https://bedrock-mantle.eu-west-1.api.aws");
 }
@@ -221,38 +256,32 @@ function testDefaultServiceUrlTemplateResolvesPerRouteFamily() returns error? {
 @test:Config {}
 function testDerivedOriginFollowsThePartitionSuffix() returns error? {
     // The suffix is the partition's, and it is AWS SDK metadata's spelling, not ours.
-    Route gov = check resolveRoute("anthropic.claude-sonnet-4-6", "us-gov-west-1");
+    Route gov = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-gov-west-1", CONVERSE);
     test:assertEquals((check buildEndpoint(gov)).baseUrl,
             "https://bedrock-runtime.us-gov-west-1.amazonaws.com");
-    Route iso = check resolveRoute("anthropic.claude-sonnet-4-6", "us-iso-east-1");
+    Route iso = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-iso-east-1", CONVERSE);
     test:assertEquals((check buildEndpoint(iso)).baseUrl,
             "https://bedrock-runtime.us-iso-east-1.c2s.ic.gov");
-    Route eusc = check resolveRoute("anthropic.claude-sonnet-4-6", "eusc-de-east-1");
+    Route eusc = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "eusc-de-east-1", CONVERSE);
     test:assertEquals((check buildEndpoint(eusc)).baseUrl,
             "https://bedrock-runtime.eusc-de-east-1.amazonaws.eu");
 }
 
 @test:Config {}
-function testChinaPartitionFailsAtConstructionOnEveryFamily() returns error? {
+function testChinaPartitionFailsAtConstructionOnEveryShape() returns error? {
     // Bedrock is not offered in `aws-cn` on ANY endpoint: the partition carries no
     // `bedrock` entry in the SDK endpoint metadata, the regional-availability table
     // has no China section, and `bedrock-runtime.cn-north-1.amazonaws.com` is
     // NXDOMAIN. `aws:resolveEndpoint` would still build a host, so the guard is the
     // only thing standing between a China user and an opaque connection error.
-    Route converse = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1",
-            {apiFamily: CONVERSE});
-    Endpoint|error converseEp = buildEndpoint(converse);
-    test:assertTrue(converseEp is error, "CONVERSE must not build a China endpoint");
-    if converseEp is error {
-        test:assertTrue(converseEp.message().includes("China"), converseEp.message());
-    }
-
-    Route invoke = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1",
-            {apiFamily: INVOKE});
-    Endpoint|error invokeEp = buildEndpoint(invoke);
-    test:assertTrue(invokeEp is error, "INVOKE must not build a China endpoint");
-    if invokeEp is error {
-        test:assertTrue(invokeEp.message().includes("China"), invokeEp.message());
+    ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiShape shape in shapes {
+        Route route = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "cn-north-1", shape);
+        Endpoint|error ep = buildEndpoint(route);
+        test:assertTrue(ep is error, shape + " must not build a China endpoint");
+        if ep is error {
+            test:assertTrue(ep.message().includes("China"), ep.message());
+        }
     }
 }
 
@@ -261,7 +290,7 @@ function testCustomEndpointSkipsTheHostShapeGuards() returns error? {
     // The guards validate a host we are about to DERIVE. A concrete origin replaces
     // it wholesale, so there is nothing left to validate — a mock or gateway must
     // still work in a region whose derived host we would refuse.
-    Route cn = check resolveRoute("anthropic.claude-sonnet-4-6", "cn-north-1");
+    Route cn = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "cn-north-1", CONVERSE);
     Endpoint ep = check buildEndpoint(cn, {customEndpoint: "http://localhost:4566"});
     test:assertEquals(ep.baseUrl, "http://localhost:4566");
     test:assertEquals(ep.signingService, SIGNING_BEDROCK);
@@ -271,7 +300,7 @@ function testCustomEndpointSkipsTheHostShapeGuards() returns error? {
 function testConcreteServiceUrlPassesThroughAndKeepsTheRouteDerivedPath() returns error? {
     // The no-sentinel property: a URL with no placeholders is returned untouched, so
     // nothing has to ask "did the caller accept the default?".
-    Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
+    Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
     Endpoint ep = check buildEndpoint(r, {customEndpoint: "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"});
     test:assertEquals(ep.baseUrl, "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com");
     test:assertEquals(ep.host, "vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com",
@@ -283,9 +312,20 @@ function testConcreteServiceUrlPassesThroughAndKeepsTheRouteDerivedPath() return
 }
 
 @test:Config {}
+function testACustomEndpointOnMantleKeepsTheMantleSigningScope() returns error? {
+    // The mirror of the test above: the signing name follows the ENDPOINT the class
+    // chose, never the host. A gateway in front of Mantle still signs bedrock-mantle.
+    Route r = check resolveMantleRoute("openai.gpt-5.4", "us-east-1");
+    Endpoint ep = check buildEndpoint(r, {customEndpoint: "https://gw.corp"});
+    test:assertEquals(ep.baseUrl, "https://gw.corp");
+    test:assertEquals(ep.path, "/openai/v1/responses");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK_MANTLE);
+}
+
+@test:Config {}
 function testServiceUrlTrailingSlashIsTrimmed() returns error? {
     // Otherwise it doubles up against the leading slash of the route-derived path.
-    Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
+    Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
     test:assertEquals((check buildEndpoint(r, {customEndpoint: "https://gw.corp/"})).baseUrl, "https://gw.corp");
 }
 
@@ -299,7 +339,7 @@ function testServiceUrlTrailingSlashIsTrimmed() returns error? {
 function testFipsResolvesToTheFipsHostFromSdkMetadata() returns error? {
     // The host spelling is AWS's, not ours — that is the whole point of routing
     // this through SDK metadata rather than string-building `-fips` ourselves.
-    Route r = check resolveRoute("anthropic.claude-sonnet-4-6", "us-east-1");
+    Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
     Endpoint ep = check buildEndpoint(r, {fips: true});
     test:assertEquals(ep.baseUrl, "https://bedrock-runtime-fips.us-east-1.amazonaws.com");
     test:assertEquals(ep.host, "bedrock-runtime-fips.us-east-1.amazonaws.com");
@@ -311,12 +351,12 @@ function testFipsResolvesToTheFipsHostFromSdkMetadata() returns error? {
 function testFipsIsRejectedOnAMantleRouteBeforeAnyIo() returns error? {
     // There is no `bedrock-mantle-fips` host. Without this guard the SDK fallback
     // would synthesise one and the failure would surface as an opaque DNS error.
-    Route mantle = check resolveRoute("openai.gpt-5.4", "us-east-1");
+    Route mantle = check resolveMantleRoute("openai.gpt-5.4", "us-east-1");
     Endpoint|error ep = buildEndpoint(mantle, {fips: true});
     test:assertTrue(ep is error);
     if ep is error {
         test:assertTrue(ep.message().includes("fips"), ep.message());
-        test:assertTrue(ep.message().includes("Mantle"), ep.message());
+        test:assertTrue(ep.message().includes("mantle"), ep.message());
     }
 }
 
@@ -327,8 +367,7 @@ function testMantleRequiresTheDualstackVariantToReachApiAws() returns error? {
     // resolve — `api.aws` is modelled as the dualstack suffix. If someone drops
     // the `dualstack: mantle` flag in resolveServiceUrl, every Mantle call breaks
     // at DNS, and this is the only thing that would catch it.
-    Route mantle = check resolveRoute("openai.gpt-5.4", "us-east-1");
+    Route mantle = check resolveMantleRoute("openai.gpt-5.4", "us-east-1");
     test:assertEquals((check buildEndpoint(mantle)).baseUrl,
             "https://bedrock-mantle.us-east-1.api.aws");
 }
-
