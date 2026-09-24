@@ -21,15 +21,15 @@ import ballerina/test;
 
 // A Route built by hand, so the header/dialect rules can be driven without going
 // near a provider class. Mirrors exactly what the resolvers produce.
-function mantleRoute(string bareModelId, string path) returns Route|error => {
+function mantleRoute(string bareModelId, string basePath, ApiShape shape) returns Route => {
     endpoint: MANTLE,
-    shape: check mantleShapeForPath(path),
+    shape,
     bareModelId,
     geoPrefix: (),
     effectiveModelId: bareModelId,
     region: "us-east-1",
     partition: "aws",
-    mantleEntry: {path}
+    mantleEntry: {basePath, shapes: [shape]}
 };
 
 function runtimeRoute(string bareModelId, ApiShape shape) returns Route => {
@@ -80,7 +80,7 @@ function testTheSameConvertersServeBothEndpoints() {
     // host, path and signing name. That is why they are no longer named MANTLE_*.
     BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
     foreach BedrockEndpoint endpoint in endpoints {
-        Route route = endpoint == RUNTIME ? runtimeRoute("m", MESSAGES) : checkpanic mantleRoute("m", "/anthropic/v1/messages");
+        Route route = endpoint == RUNTIME ? runtimeRoute("m", MESSAGES) : mantleRoute("m", "/anthropic/v1", MESSAGES);
         readonly & ModelConverter converter = checkpanic selectConverter(route);
         test:assertEquals(converter.dialect, NATIVE_MESSAGES_CONVERTER.dialect);
     }
@@ -160,7 +160,7 @@ function testApiKeyHeaderFollowsTheMessagesShapeNotTheProviderClass() returns er
     // honoured there and silently ignored everywhere else. Driven here through
     // `buildRouteHeaders` — the shared path — to prove the route decides, not the
     // class. A Messages shape gets `x-api-key`; see the Bearer case below.
-    Route route = check mantleRoute("anthropic.claude-opus-5", "/anthropic/v1/messages");
+    Route route = mantleRoute("anthropic.claude-opus-5", "/anthropic/v1", MESSAGES);
     map<string> headers = buildRouteHeaders(route, (), {apiKey: "secret-key"});
     test:assertEquals(headers["x-api-key"], "secret-key");
 
@@ -175,10 +175,10 @@ function testApiKeyHeaderFollowsTheMessagesShapeNotTheProviderClass() returns er
 function testApiKeyHeaderIsAbsentForTheBearerShapes() returns error? {
     // The OpenAI-compatible shapes need nothing extra: the transport's
     // `Authorization: Bearer` already carries the key.
-    Route responses = check mantleRoute("openai.gpt-5.4", "/openai/v1/responses");
+    Route responses = mantleRoute("openai.gpt-5.4", "/openai/v1", RESPONSES);
     test:assertFalse(buildRouteHeaders(responses, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
 
-    Route chat = check mantleRoute("deepseek.v3.2", "/v1/chat/completions");
+    Route chat = mantleRoute("deepseek.v3.2", "/v1", CHAT_COMPLETIONS);
     test:assertFalse(buildRouteHeaders(chat, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
 
     ApiShape[] shapes = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
@@ -193,7 +193,7 @@ function testApiKeyHeaderIsAbsentForTheBearerShapes() returns error? {
 function testApiKeyHeaderIsAbsentForSigV4Credentials() returns error? {
     // With SigV4 credentials there is no api key to send — the signature alone must
     // authenticate. Emitting the secret access key here would leak it in a header.
-    Route route = check mantleRoute("anthropic.claude-opus-5", "/anthropic/v1/messages");
+    Route route = mantleRoute("anthropic.claude-opus-5", "/anthropic/v1", MESSAGES);
     test:assertFalse(buildRouteHeaders(route, (), TEST_CREDS).hasKey("x-api-key"));
 }
 
@@ -222,7 +222,7 @@ function testAnthropicVersionIsAHeaderOnMessagesAndABodyFieldOnInvoke() returns 
             "the Messages dialect carries the version in the HEADER, never in the body");
 
     // And the header belongs to the SHAPE, so it is sent on Mantle's Messages path too.
-    Route mantle = check mantleRoute("anthropic.claude-opus-5", "/anthropic/v1/messages");
+    Route mantle = mantleRoute("anthropic.claude-opus-5", "/anthropic/v1", MESSAGES);
     test:assertEquals(buildRouteHeaders(mantle, (), TEST_CREDS)["anthropic-version"], "2023-06-01");
 }
 

@@ -77,10 +77,10 @@ property of its type, so an unreachable combination does not compile:
 | `BedrockCommonModelProvider` | — (Converse only) |
 
 `CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that shape for DeepSeek, Gemma 3, Mistral,
-Qwen3 and others. Mantle classes take an optional `api` that **asserts** rather than selects: the path comes from the
-model's routing-table row, and passing a value only turns a mismatch into a construction error. Note
-that a few models (`openai.gpt-5.5`, `openai.gpt-oss-120b`) are published on two Mantle shapes and this
-module reaches only the one its table records.
+Qwen3 and others. Mantle classes take an optional `api` that selects among the shapes the model is published on —
+`openai.gpt-oss-120b` serves both Responses and Chat Completions, so either is reachable. Leave it
+unset to take the model's default. Asking for a shape it does not serve is a construction error naming
+the ones it does.
 
 Per-model gaps remain and are left for AWS to report — GPT OSS serves Chat Completions, Converse and
 Invoke on `bedrock-runtime` but not Responses, for example.
@@ -301,10 +301,25 @@ the `AnthropicRuntimeModel` constants carry a `us.` prefix. A bare Claude id her
 | a CRIS-prefixed id | **construction error** — cross-region inference is runtime-only |
 | any ARN | **construction error** — ARNs name `bedrock-runtime` resources |
 
-A Mantle request path is per-model data, not derivable from the id: `google.gemma-3-*` speaks Chat
-Completions on `/v1/chat/completions` while `google.gemma-4-*` speaks Responses on
-`/openai/v1/responses` — one vendor prefix, two paths. That is why a Mantle-only model AWS ships after
-a release needs a module update, and why an id absent from the table is refused rather than guessed at.
+### Why Mantle needs a routing table and `bedrock-runtime` does not
+
+On `bedrock-runtime` the request path is a pure function of the **shape** —
+`/model/{id}/converse`, `/openai/v1/responses` and the rest never vary by model — so the module derives
+it and needs no data at all. Any id you pass just goes on the wire.
+
+On `bedrock-mantle` the **base path is a per-model fact**, and AWS says so on each model card because it
+is irregular. Two of its own notes contradict each other across models of the same vendor:
+
+> **gpt-oss-120b** — "On `bedrock-mantle`, both APIs use the `/v1` base path, not `/openai/v1`."
+> **GPT-5.6 Sol** — "On `bedrock-mantle`, both APIs use the `/openai/v1` base path, not `/v1`."
+
+`google.gemma-3-*` (`/v1`) versus `google.gemma-4-*` (`/openai/v1`) is the same story. So the base path
+follows neither the vendor prefix nor the shape, and something has to record it — that is the entire
+job of `MANTLE_CAPABLE`, and the only per-model datum in it. The path suffix, the dialect, the
+converter and the auth-header style are all derived from the shape.
+
+The cost is that a Mantle model AWS ships after a release is unreachable until the table carries it.
+An id absent from the table is refused by name rather than sent to a guessed URL.
 
 ### Escape hatches
 

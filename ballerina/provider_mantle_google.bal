@@ -68,9 +68,9 @@ public isolated distinct client class BedrockMantleGoogleModelProvider {
     #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
     #                 source, or a `BearerToken` for a Bedrock API key
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + api - Asserts the wire shape, and does not select it: the path comes from the
-    #         model's routing-table row. Leave unset unless you want a construction
-    #         error when the model is not served on the shape you expected
+    # + api - The wire shape, chosen from the ones this model is published on. Leave
+    #         unset to take its default; asking for one it does not serve is a
+    #         construction error naming the shapes it does
     # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
     #              The host is derived from the region when this is `()`, which is correct
     #              in every partition — set it only for PrivateLink without private DNS,

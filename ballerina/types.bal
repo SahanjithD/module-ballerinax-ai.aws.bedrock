@@ -69,18 +69,10 @@ public type CoreRuntimeApi CONVERSE|INVOKE;
 
 # The shapes `bedrock-mantle` serves.
 #
-# This is an ASSERTION, not a selector. Which shape a model takes is decided entirely
-# by its `MANTLE_CAPABLE` row, because that row holds the one request path this module
-# has verified for it. Passing a value here does not change the path — it only states
-# what you expect, and turns a mismatch into a construction error instead of a
-# surprise at call time. Leave it unset unless you want that check.
-#
-# KNOWN LIMITATION: some models really are published on two shapes — AWS's cards show
-# both Responses and Chat Completions for `openai.gpt-5.5` and `openai.gpt-oss-120b` —
-# and this module reaches only the one its table records. Selecting the other would
-# require `MantleEntry` to hold a shape-to-path map, with each additional path
-# verified per model card.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+# Selects among the shapes the model is published on, which its `MANTLE_CAPABLE` row
+# lists — gpt-oss serves both Responses and Chat Completions on `/v1`, so either is
+# reachable. Leave it unset to take the first shape listed. Asking for one the model
+# does not serve is a construction error naming the ones it does.
 public type MantleApi MESSAGES|CHAT_COMPLETIONS|RESPONSES;
 
 # Which Bedrock endpoint a route targets. Module-private: the endpoint is chosen by
@@ -257,35 +249,40 @@ enum GuardrailAction {
 
 # A single Mantle model's wire contract. Module-private routing-table data.
 #
-# The PATH is the only per-model fact here. Converter and auth-header style used to be
-# stored alongside it and are now DERIVED from the path (see `mantleShapeForPath`
-# and `usesApiKeyHeader`), because path → dialect is 1:1 across every model AWS
-# serves on Mantle. They are not derivable from the VENDOR prefix, which is the
-# mistake this shape invites: `google.gemma-3-*` speaks Chat Completions on `/v1`
-# while `google.gemma-4-*` speaks Responses on `/openai/v1` — one prefix, two
-# dialects. Keying off the path keeps that distinction intact with no extra fields.
+# WHY THIS TABLE EXISTS AT ALL, since `bedrock-runtime` needs no equivalent:
+#
+#   On bedrock-runtime the request path is a pure function of the SHAPE —
+#   `/model/{id}/converse`, `/openai/v1/responses` and so on never vary by model, so
+#   `runtimePath` derives it and no data is needed.
+#
+#   On bedrock-mantle the BASE PATH is a per-MODEL fact. AWS states it as an explicit
+#   per-card Note because it is irregular, and the two notes contradict each other
+#   across models of the same vendor:
+#     gpt-oss-120b  "On bedrock-mantle, both APIs use the `/v1` base path, not
+#                    `/openai/v1`."
+#     GPT-5.6 Sol   "On bedrock-mantle, both APIs use the `/openai/v1` base path, not
+#                    `/v1`."
+#   Same vendor, same APIs, different base path. `google.gemma-3-*` (`/v1`) versus
+#   `google.gemma-4-*` (`/openai/v1`) is the same story. So the base path is derivable
+#   from neither the vendor prefix nor the shape, and something has to record it.
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
 type MantleEntry record {|
-    # Request path on the `bedrock-mantle` host, e.g. `/anthropic/v1/messages`.
-    string path;
+    # The base path — the ONE per-model fact here. `/v1`, `/openai/v1` or
+    # `/anthropic/v1`. The full request path is this plus the shape's own suffix,
+    # which IS derivable (see `mantlePathFor`).
+    string basePath;
 
-    # Whether this model is ALSO served on `bedrock-runtime`.
-    #
-    # DOCUMENTATION, not behaviour: nothing reads this field. It stopped driving
-    # routing when the endpoint became a property of the provider class, and it is
-    # retained only because it records a per-model fact the table would otherwise
-    # lose — which of these models have a `BedrockRuntime*` alternative (all but
-    # GPT-5.4/5.5 and Gemma 4). Delete it, or wire it into the "use the runtime class
-    # instead" error messages; do not let it drift.
-    # Verified per model against AWS's API-compatibility matrix.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
-    boolean onRuntime = false;
+    # The shapes this model serves on that base path. More than one is normal —
+    # gpt-oss serves both Responses and Chat Completions on `/v1` — and the `api`
+    # argument selects among them. The first entry is the default.
+    ApiShape[] shapes;
 
     # The id to put on the wire when it DIFFERS from the `bedrock-runtime` id.
     #
-    # For most models the two endpoints share an id, and this is omitted. But some
-    # models are published under different ids per endpoint — gpt-oss is
-    # `openai.gpt-oss-120b-1:0` on `bedrock-runtime` and `openai.gpt-oss-120b` on
-    # `bedrock-mantle`. Without this, forcing Mantle sends the runtime id and fails.
+    # Some models are published under different ids per endpoint — gpt-oss is
+    # `openai.gpt-oss-120b-1:0` on bedrock-runtime and `openai.gpt-oss-120b` on
+    # bedrock-mantle. Without this, a Mantle call sends the runtime id and fails.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     string modelId?;
 |};

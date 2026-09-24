@@ -96,7 +96,7 @@ function testMantleOnlyModelResolvesToItsPublishedPath() returns error? {
     test:assertEquals(r.shape, RESPONSES);
     test:assertEquals(r.effectiveModelId, "openai.gpt-5.4", "Mantle takes the bare id on the wire");
     MantleEntry entry = check r.mantleEntry.ensureType();
-    test:assertEquals(entry.path, "/openai/v1/responses");
+    test:assertEquals(check mantlePathFor(entry.basePath, r.shape), "/openai/v1/responses");
     test:assertFalse(usesApiKeyHeader(r.shape));
     test:assertEquals(NATIVE_RESPONSES_CONVERTER.toolChoice, RESPONSES_TOOL_CHOICE);
 }
@@ -107,7 +107,7 @@ function testMantleAnthropicModelResolvesToTheMessagesPath() returns error? {
     test:assertEquals(r.endpoint, MANTLE);
     test:assertEquals(r.shape, MESSAGES);
     MantleEntry entry = check r.mantleEntry.ensureType();
-    test:assertEquals(entry.path, "/anthropic/v1/messages");
+    test:assertEquals(check mantlePathFor(entry.basePath, r.shape), "/anthropic/v1/messages");
     test:assertTrue(usesApiKeyHeader(r.shape));
     test:assertEquals(NATIVE_MESSAGES_CONVERTER.toolChoice, ANTHROPIC_TOOL_CHOICE);
 }
@@ -205,19 +205,6 @@ function testAMantleRouteNeverCarriesAGeoPrefix() returns error? {
     test:assertEquals(r.geoPrefix, (), "cross-region inference is a bedrock-runtime concept");
 }
 
-@test:Config {}
-function testAnAgreeingShapeOverrideIsAcceptedAndADisagreeingOneIsRefused() returns error? {
-    // The `api` argument on a Mantle class asserts an expectation; it cannot pick a
-    // path, because the table holds the one path this module has verified.
-    Route r = check resolveMantleRoute("anthropic.claude-opus-5", REGION, MESSAGES);
-    test:assertEquals(r.shape, MESSAGES);
-
-    Route|error wrong = resolveMantleRoute("anthropic.claude-opus-5", REGION, CHAT_COMPLETIONS);
-    test:assertTrue(wrong is error);
-    if wrong is error {
-        test:assertTrue(wrong.message().includes("/anthropic/v1/messages"), wrong.message());
-    }
-}
 
 @test:Config {}
 function testMantleUsesItsOwnModelIdWhenTheEndpointsDisagree() returns error? {
@@ -237,38 +224,81 @@ function testMantleUsesItsOwnModelIdWhenTheEndpointsDisagree() returns error? {
 // ---- Mantle path -> wire dialect ----
 
 @test:Config {}
-function testMantleShapeIsDerivedFromThePathNotTheVendorPrefix() returns error? {
-    // `google.gemma-3-*` speaks Chat Completions on `/v1` while `google.gemma-4-*`
-    // speaks Responses on `/openai/v1` — one prefix, two dialects. The path tells
-    // them apart; the prefix cannot.
-    test:assertEquals(check mantleShapeForPath("/anthropic/v1/messages"), MESSAGES);
-    test:assertEquals(check mantleShapeForPath("/openai/v1/responses"), RESPONSES);
-    test:assertEquals(check mantleShapeForPath("/v1/responses"), RESPONSES);
-    test:assertEquals(check mantleShapeForPath("/openai/v1/chat/completions"), CHAT_COMPLETIONS);
-    test:assertEquals(check mantleShapeForPath("/v1/chat/completions"), CHAT_COMPLETIONS);
+function testTheBasePathIsPerModelAndNotDerivableFromTheVendor() returns error? {
+    // The single fact that forces this table to exist. `google.gemma-3-*` sits on
+    // `/v1` while `google.gemma-4-*` sits on `/openai/v1` — one vendor prefix, two
+    // base paths — and AWS's own cards say the same of gpt-oss (`/v1`) versus
+    // GPT-5.6 (`/openai/v1`). No rule over the id or the shape produces this.
+    MantleEntry gemma3 = check MANTLE_CAPABLE["google.gemma-3-27b-it"].ensureType();
+    MantleEntry gemma4 = check MANTLE_CAPABLE["google.gemma-4-31b"].ensureType();
+    test:assertEquals(gemma3.basePath, "/v1");
+    test:assertEquals(gemma4.basePath, "/openai/v1");
+
+    MantleEntry oss = check MANTLE_CAPABLE["openai.gpt-oss-120b-1:0"].ensureType();
+    MantleEntry gpt56 = check MANTLE_CAPABLE["openai.gpt-5.6-sol"].ensureType();
+    test:assertEquals(oss.basePath, "/v1");
+    test:assertEquals(gpt56.basePath, "/openai/v1");
 }
 
 @test:Config {}
-function testAnUnknownMantlePathHasNoDialectAndSaysSo() {
-    ApiShape|error shape = mantleShapeForPath("/v1/embeddings");
-    test:assertTrue(shape is error);
-    if shape is error {
-        test:assertTrue(shape.message().includes("/v1/embeddings"), shape.message());
+function testThePathSuffixIsDerivedFromTheShape() returns error? {
+    // Only the base path is data; the suffix is a pure function of the shape and is
+    // the same on both endpoints.
+    test:assertEquals(check mantlePathFor("/anthropic/v1", MESSAGES), "/anthropic/v1/messages");
+    test:assertEquals(check mantlePathFor("/openai/v1", RESPONSES), "/openai/v1/responses");
+    test:assertEquals(check mantlePathFor("/v1", RESPONSES), "/v1/responses");
+    test:assertEquals(check mantlePathFor("/openai/v1", CHAT_COMPLETIONS), "/openai/v1/chat/completions");
+    test:assertEquals(check mantlePathFor("/v1", CHAT_COMPLETIONS), "/v1/chat/completions");
+}
+
+@test:Config {}
+function testMantleServesNeitherConverseNorInvoke() {
+    ApiShape[] runtimeOnly = [CONVERSE, INVOKE];
+    foreach ApiShape shape in runtimeOnly {
+        string|error path = mantlePathFor("/v1", shape);
+        test:assertTrue(path is error, shape);
+    }
+}
+
+@test:Config {}
+function testApiSelectsAmongTheShapesAModelServes() returns error? {
+    // gpt-oss is published on BOTH Responses and Chat Completions on `/v1`, so `api`
+    // genuinely selects here rather than merely asserting.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    Route chat = check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION, CHAT_COMPLETIONS);
+    Route responses = check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION, RESPONSES);
+    test:assertEquals(chat.shape, CHAT_COMPLETIONS);
+    test:assertEquals(responses.shape, RESPONSES);
+    test:assertEquals((check buildEndpoint(chat)).path, "/v1/chat/completions");
+    test:assertEquals((check buildEndpoint(responses)).path, "/v1/responses");
+    // Unset takes the first shape the table lists.
+    test:assertEquals((check resolveMantleRoute("openai.gpt-oss-120b-1:0", REGION)).shape,
+            CHAT_COMPLETIONS);
+}
+
+@test:Config {}
+function testAShapeAModelDoesNotServeIsRefusedNamingWhatItDoesServe() {
+    Route|error r = resolveMantleRoute("anthropic.claude-opus-5", REGION, RESPONSES);
+    test:assertTrue(r is error);
+    if r is error {
+        test:assertTrue(r.message().includes("anthropic.claude-opus-5"), r.message());
+        test:assertTrue(r.message().includes("MESSAGES"), r.message());
     }
 }
 
 @test:Config {}
 function testEveryMantleTableEntryHasAResolvableDialect() returns error? {
-    // The table stores only the path; everything else is derived from it. An entry
-    // whose path no derivation understands would fail at construction with an
+    // The table stores only a base path and a shape list; everything else is derived.
+    // An entry no derivation understands would fail at construction with an
     // internal-sounding message, so assert the whole table up front.
     foreach [string, MantleEntry] [id, entry] in MANTLE_CAPABLE.entries() {
-        ApiShape shape = check mantleShapeForPath(entry.path);
+        test:assertTrue(entry.shapes.length() > 0, id);
         Route r = check resolveMantleRoute(id, REGION);
-        test:assertEquals(r.shape, shape, id);
+        test:assertEquals(r.shape, entry.shapes[0], id);
+        string _ = check mantlePathFor(entry.basePath, r.shape);
         readonly & ModelConverter _ = check selectConverter(r);
         Endpoint ep = check buildEndpoint(r);
-        test:assertEquals(ep.path, entry.path, id);
+        test:assertEquals(ep.path, check mantlePathFor(entry.basePath, r.shape), id);
         test:assertEquals(ep.signingService, SIGNING_BEDROCK_MANTLE, id);
     }
 }
