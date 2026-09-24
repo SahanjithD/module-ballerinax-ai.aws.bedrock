@@ -87,8 +87,14 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     private static final String AI_MODULE_NAME = "ai";
     private static final String BALLERINA_ORG_NAME = "ballerina";
     private static final String BEDROCK_MODULE_NAME = "ai.aws.bedrock";
-    private static final String BEDROCK_MODULE_VERSION = "0";
-    private static final String BEDROCK_MODULE_ORG = "ballerinax";
+    // These three must match Ballerina.toml exactly, and the module coordinates in
+    // native/.../Generator.java, or `getTypeByName` below resolves nothing, no call
+    // site receives an `@ai:JsonSchema` annotation, and `generate()` loses type
+    // binding at runtime with no compile error anywhere. The org was `ballerinax`
+    // while the package published as `dasunorg`, which is exactly that silent failure.
+    // The version is the MAJOR component of the package version.
+    private static final String BEDROCK_MODULE_VERSION = "1";
+    private static final String BEDROCK_MODULE_ORG = "dasunorg";
 
     /**
      * Every `*ai:ModelProvider` class this package exports. Keep in sync with the
