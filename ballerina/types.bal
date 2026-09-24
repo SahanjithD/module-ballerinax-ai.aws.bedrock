@@ -67,13 +67,6 @@ public type ChatRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 # dialects only — no vendor-compatible path carries them.
 public type CoreRuntimeApi CONVERSE|INVOKE;
 
-# The shapes `bedrock-mantle` serves.
-#
-# Selects among the shapes the model is published on, which its `MANTLE_CAPABLE` row
-# lists — gpt-oss serves both Responses and Chat Completions on `/v1`, so either is
-# reachable. Leave it unset to take the first shape listed. Asking for one the model
-# does not serve is a construction error naming the ones it does.
-public type MantleApi MESSAGES|CHAT_COMPLETIONS|RESPONSES;
 
 # Which Bedrock endpoint a route targets. Module-private: the endpoint is chosen by
 # the provider CLASS, never by a config field, so this never appears in public API.

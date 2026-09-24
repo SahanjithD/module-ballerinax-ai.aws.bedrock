@@ -56,7 +56,7 @@ isolated function resolveRuntimeRoute(string model, string region, ApiShape shap
 // derivable from an id, so an id absent from `MANTLE_CAPABLE` has no URL to build and
 // is refused by name rather than guessed at.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
-isolated function resolveMantleRoute(string model, string region, MantleApi? shape = ()) returns Route|error {
+isolated function resolveMantleRoute(string model, string region) returns Route|error {
     // An ARN names a `bedrock-runtime` resource — a provisioned model, an inference
     // profile, a custom-model deployment. None of those exist on Mantle, and an ARN
     // is not a key into `MANTLE_CAPABLE`, so there is nothing to look up.
@@ -81,18 +81,15 @@ isolated function resolveMantleRoute(string model, string region, MantleApi? sha
     }
 
     MantleEntry entry = check mantleEntryForBare(bareId);
-    // `api` SELECTS among the shapes this model serves; unset takes the first. A
-    // model published on two shapes (gpt-oss serves Responses and Chat Completions
-    // on `/v1`) is reachable on either.
+    // The shape is the MODEL's, not the caller's. Every Mantle model has exactly one
+    // route this module takes, so there is no shape argument on the Mantle classes and
+    // no way to ask for one the model is not published on.
+    //
+    // `shapes` stays a list because the underlying fact is a list — gpt-oss really is
+    // published on both Responses and Chat Completions on `/v1` — so recording it
+    // truthfully means a selector can be reintroduced later with no data change.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     ApiShape resolvedShape = entry.shapes[0];
-    if shape is MantleApi {
-        if entry.shapes.indexOf(shape) is () {
-            return error(string `model '${bareId}' is not served as ${shape} on bedrock-mantle. ` +
-                string `It is served as ${string:'join(" or ", ...entry.shapes)}; drop the 'api' ` +
-                string `argument to use ${entry.shapes[0]}.`);
-        }
-        resolvedShape = shape;
-    }
 
     return {
         endpoint: MANTLE,
