@@ -22,25 +22,23 @@ public type BedrockCommonConfig record {|
     *CommonRuntimeConfig;
 |};
 
+// CONVERSE-ONLY, and deliberately so. Converse is the one model-agnostic surface —
+// a single request shape serves every vendor — so it is the only API this class can
+// offer without knowing whose model it is holding. The alternatives all need that
+// knowledge: InvokeModel's body is the model's own and is selected by vendor prefix,
+// and the vendor-native shapes are specific protocols served for specific model sets.
+// Offering those here would mean guessing a dialect from an id this module has never
+// seen, and a wrong guess is a confusing 400 rather than an honest refusal.
+//
+// An unknown id is NOT an error: it goes on the wire as-is and AWS answers for it,
+// which is what keeps a model AWS ships tomorrow usable without a module release.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
+
 # Any Bedrock model, on the `bedrock-runtime` Converse API.
 #
-# This is the vendor-agnostic provider: it takes a model id as a plain `string` and
-# reaches every model Bedrock serves on Converse — 15 of AWS's 17 providers, including
-# the ten with no dedicated class in this module (Meta, Cohere, AI21, MiniMax,
-# Moonshot, NVIDIA, Writer, xAI, Z.AI, Stability).
-# https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
-#
-# CONVERSE-ONLY, and deliberately so. Converse is the one model-agnostic surface —
-# a single request shape serves every vendor — so it is the only API this class can
-# offer without knowing whose model it is holding. The alternatives all need that
-# knowledge: InvokeModel's body is the model's own and is selected by vendor prefix,
-# and the vendor-native shapes are specific protocols served for specific model sets.
-# Offering those here would mean guessing a dialect from an id this module has never
-# seen, and a wrong guess is a confusing 400 rather than an honest refusal. Use the
-# matching `BedrockRuntime<Vendor>ModelProvider` when you need one of them.
-#
-# An unknown id is NOT an error: it goes on the wire as-is and AWS answers for it,
-# which is what keeps a model AWS ships tomorrow usable without a module release.
+# Vendor-agnostic: takes a model id as a plain `string` and reaches every model
+# Bedrock serves on Converse, including vendors with no dedicated class here. Use a
+# `BedrockRuntime<Vendor>ModelProvider` for the other API families.
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
 public isolated distinct client class BedrockCommonModelProvider {
@@ -54,22 +52,12 @@ public isolated distinct client class BedrockCommonModelProvider {
     private final map<string> & readonly extraHeaders;
     private final StructuredOutputStyle structuredOutput;
 
-    # + model - Any Bedrock model id served on Converse — bare, cross-region-prefixed
-    #           (`us.`, `eu.`, `apac.`, `global.`, ...), or an ARN for a provisioned
-    #           model, inference profile or custom-model deployment
-    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
-    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
-    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
-    # + region - AWS region, e.g. `aws:US_EAST_1`. An ARN `model`'s region segment
-    #            overrides it
-    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
-    #              The host is derived from the region when this is `()`, which is correct
-    #              in every partition — set it only for PrivateLink without private DNS,
-    #              an egress gateway, or a local mock
+    # + model - A model model id, or any id string the endpoint serves
+    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
+    # + region - AWS region, e.g. `aws:US_EAST_1`
+    # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature. Leave unset (the default) to use the
-    #                 model's own default — several current models reject it outright
+    # + temperature - Sampling temperature. Unset uses the model's own default
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(

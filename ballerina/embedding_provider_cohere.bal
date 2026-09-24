@@ -21,19 +21,9 @@ const string COHERE_EMBED_PREFIX = "cohere.embed";
 
 # Cohere Embed on AWS Bedrock (InvokeModel only).
 #
-# **`inputType` is the retrieval-quality landmine.** Cohere requires `input_type`
-# on every request, and the `ai:EmbeddingProvider` contract has nowhere to express
-# it per call — so it is fixed at construction. Embed your corpus with
-# `SEARCH_DOCUMENT` and your queries with `SEARCH_QUERY`, constructing one provider
-# per role. Getting it backwards degrades retrieval **silently** — no error, just
-# worse results.
-#
-# ```ballerina
-# final ai:EmbeddingProvider ingest = check new CohereEmbeddingProvider(
-#     creds, COHERE_EMBED_ENGLISH_V3, "us-east-1", inputType = SEARCH_DOCUMENT);
-# final ai:EmbeddingProvider query = check new CohereEmbeddingProvider(
-#     creds, COHERE_EMBED_ENGLISH_V3, "us-east-1", inputType = SEARCH_QUERY);
-# ```
+# **`inputType` is fixed at construction and matters.** Embed your corpus with
+# `SEARCH_DOCUMENT` and your queries with `SEARCH_QUERY`, using one provider per
+# role — getting it backwards degrades retrieval silently, with no error.
 public distinct isolated client class CohereEmbeddingProvider {
     *ai:EmbeddingProvider;
 
