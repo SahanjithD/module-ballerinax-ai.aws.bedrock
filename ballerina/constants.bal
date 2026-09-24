@@ -33,12 +33,13 @@
 // module bug, not a config problem. 4096 leaves room for a thinking pass plus an
 // answer while staying under the tightest per-model output cap in the supported set
 // (Nova Pro/Lite/Micro are capped at 5K output tokens, so 8192 would be rejected
-// outright on AmazonModelProvider).
+// outright on BedrockRuntimeAmazonModelProvider).
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html
 const int DEFAULT_MAX_TOKEN_COUNT = 4096;
 
-// Cross-region-inference geo prefixes, stripped for lookup then re-applied per
-// family on the wire. List copied from LiteLLM's cross-region
+// Cross-region-inference geo prefixes, stripped for lookup then re-applied on the
+// wire. bedrock-runtime only: bedrock-mantle has no cross-region inference, and
+// `resolveMantleRoute` refuses a prefixed id rather than silently stripping it. List copied from LiteLLM's cross-region
 // inference regions helper — includes `us-gov`, which a hand-rolled list would miss.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html
 // Anthropic's documented floor for a manual thinking budget.
@@ -47,16 +48,18 @@ const int MIN_THINKING_BUDGET_TOKENS = 1024;
 
 final readonly & string[] CRIS_PREFIXES = ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
 
-// WHAT a model needs to speak Mantle — every Mantle-capable model, dual-endpoint
-// or not. This is now THE table that drives AUTO routing: the preference order is
-// MANTLE → CONVERSE → INVOKE, so membership here
-// means a bare id resolves to Mantle by default (as well as when forced). Because
-// membership requires a verified path/auth/converter, an unknown model is still absent
-// and sinks to Converse — never Mantle by elimination.
-// The PATH is the per-model datum; deriving it from the `openai.` prefix would
-// break the moment AWS ships an `openai.*` model on a different path. Converter and
-// auth-header style are DERIVED from the path (`mantleConverterForPath` /
-// `usesApiKeyHeader`) because path → dialect is 1:1.
+// WHAT a model needs to speak Mantle — the registry the `BedrockMantle*ModelProvider`
+// classes resolve against. Membership means we hold a verified request path for the
+// model; absence is a clean "not available on Mantle" construction error.
+//
+// This is NO LONGER a routing-preference table. The provider class fixes the
+// endpoint, so there is no resolver ladder that could prefer one endpoint over the
+// other and no way for an unknown id to reach Mantle by elimination.
+//
+// The PATH is the per-model datum; deriving it from the `openai.` prefix would break
+// the moment AWS ships an `openai.*` model on a different path. Converter and
+// auth-header style are DERIVED from it (`mantleShapeForPath` / `usesApiKeyHeader`)
+// because path -> dialect is 1:1.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // GPT-5.x use `/openai/v1/responses`, distinct from the `/v1/responses` other
@@ -72,22 +75,16 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     "openai.gpt-5.6-terra": {path: "/openai/v1/responses"},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html
     "openai.gpt-5.6-luna": {path: "/openai/v1/responses"},
-    // Anthropic Messages on Mantle: `anthropic-version: 2023-06-01` header.
-    // Default auth header X_API_KEY per AWS's documented curl.
-    "anthropic.claude-mythos-preview": {path: "/anthropic/v1/messages"},
-    // Mantle-only, Messages API (Converse/Invoke/Responses all NO).
-    // NOTE: this card's sample uses the Anthropic SDK with AWS_BEARER_TOKEN_BEDROCK,
-    // which does not settle the wire header — so it keeps X_API_KEY for consistency
-    // with mythos-preview above. Still unresolved; one live call settles it for both.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html
-    "anthropic.claude-mythos-5": {path: "/anthropic/v1/messages"},
+    // Anthropic Messages on Mantle: `anthropic-version: 2023-06-01` header, and
+    // X_API_KEY per AWS's documented curl.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
     "anthropic.claude-haiku-4-5": {onRuntime: true, path: "/anthropic/v1/messages"},
     "zai.glm-5": {onRuntime: true, path: "/v1/chat/completions"},
     // --- Dual-endpoint models (bedrock-runtime YES + bedrock-mantle YES). ---
-    // These DEFAULT to Mantle under AUTO (preference MANTLE →
-    // CONVERSE → INVOKE); pass `apiFamily = CONVERSE` (or a `converse/` prefix) to use
-    // the runtime surface instead — which `generate()` with a typed target requires,
-    // since Mantle has no structured output.
+    // Reachable from EITHER a `BedrockRuntime*` or a `BedrockMantle*` class. Prefer
+    // the runtime class unless you need something only Mantle has: guardrails,
+    // cross-region inference and structured output are all runtime-only.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
     //
     // Card: bedrock-runtime YES + bedrock-mantle YES; Messages API YES,
     // Responses/Chat Completions NO; Mantle URL `/anthropic/v1/messages`.
@@ -101,9 +98,7 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
     "anthropic.claude-opus-5": {onRuntime: true, path: "/anthropic/v1/messages"},
     // Sonnet 5 is dual-homed like opus-4-8: bedrock-runtime YES + bedrock-mantle YES,
-    // Messages API on `/anthropic/v1/messages`. Like every entry in this block it
-    // resolves to Mantle under AUTO; pass `apiFamily = CONVERSE` for
-    // the runtime surface.
+    // Messages API on `/anthropic/v1/messages`.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
     "anthropic.claude-sonnet-5": {onRuntime: true, path: "/anthropic/v1/messages"},
     // gpt-oss is published under DIFFERENT IDS PER ENDPOINT — `-1:0` on
@@ -172,10 +167,7 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     "google.gemma-3-4b-it": {onRuntime: true, path: "/v1/chat/completions"}
 };
 
-// NOTE: there is no separate `MANTLE_DEFAULT` list. It
-// once held only the Mantle-ONLY models, because dual-endpoint models defaulted to
-// Converse. That default is now flipped — any Mantle-CAPABLE model prefers Mantle
-// under AUTO — so `MANTLE_CAPABLE` membership alone now decides the default, and a
-// second list would only drift out of sync. There is likewise no `CONVERSE_MODELS`
-// allowlist: everything absent from `MANTLE_CAPABLE` (and every geo-prefixed id)
-// sinks to Converse, so an unknown id can never reach Mantle by elimination.
+// NOTE: there is deliberately no `CONVERSE_MODELS` allowlist to mirror this one.
+// Converse is model-agnostic — one converter serves every vendor — so a runtime
+// class accepts any id and an unknown one simply goes on the wire. Mantle needs a
+// table only because a Mantle request path is not derivable from a model id.

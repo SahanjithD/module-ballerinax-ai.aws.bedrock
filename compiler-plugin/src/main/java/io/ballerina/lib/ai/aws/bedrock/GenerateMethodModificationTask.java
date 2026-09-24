@@ -95,14 +95,24 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
      * `provider_*.bal` files: a class missing here silently loses type binding on
      * `generate()`, with no compile error at the call site.
      */
+    // Every provider class in the package. A class MISSING from this list silently
+    // loses generate() type binding at every call site, with no compile error — so
+    // this must be updated in lockstep whenever a provider class is added or renamed.
     private static final String[] MODEL_PROVIDER_CLASS_NAMES = {
-            "AnthropicModelProvider",
-            "OpenAIModelProvider",
-            "AmazonModelProvider",
-            "MistralModelProvider",
-            "QwenModelProvider",
-            "GoogleModelProvider",
-            "DeepSeekModelProvider"
+            "BedrockCommonModelProvider",
+            "BedrockRuntimeAnthropicModelProvider",
+            "BedrockRuntimeOpenAIModelProvider",
+            "BedrockRuntimeAmazonModelProvider",
+            "BedrockRuntimeMistralModelProvider",
+            "BedrockRuntimeQwenModelProvider",
+            "BedrockRuntimeGoogleModelProvider",
+            "BedrockRuntimeDeepSeekModelProvider",
+            "BedrockMantleAnthropicModelProvider",
+            "BedrockMantleOpenAIModelProvider",
+            "BedrockMantleMistralModelProvider",
+            "BedrockMantleQwenModelProvider",
+            "BedrockMantleGoogleModelProvider",
+            "BedrockMantleDeepSeekModelProvider"
     };
 
     private final AiAwsBedrockCodeModifier.AnalysisData analysisData;

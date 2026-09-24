@@ -13,8 +13,9 @@
 // limitations under the License.
 
 // Converter registry + selection. `selectConverter` runs once at
-// construction (L1/L2). The Anthropic vertical slice ships three converters;
-// the other Invoke/Mantle dialects error clearly until their vendor phase lands.
+// construction (L1/L2). Ten converters ship. The three vendor-native ones are shared
+// by both endpoints: bedrock-runtime and bedrock-mantle serve the same Messages,
+// Responses and Chat Completions dialects and differ only in host, path and signing.
 
 // Converse — model-agnostic, so one converter serves every Converse model.
 final readonly & ModelConverter CONVERSE_CONVERTER = {
@@ -36,35 +37,45 @@ final readonly & ModelConverter INVOKE_ANTHROPIC_CONVERTER = {
     supports: {stopSequences: true, thinking: true, effort: true, reasoningEffort: false}
 };
 
-// Mantle Messages — `anthropic-version: 2023-06-01` header (added by transport).
-final readonly & ModelConverter MANTLE_MESSAGES_CONVERTER = {
+// Anthropic Messages, native path — `anthropic-version: 2023-06-01` HEADER and no
+// body version field, the mirror image of INVOKE_ANTHROPIC_CONVERTER above. Serves
+// `/anthropic/v1/messages` on BOTH endpoints; AWS documents the same header rule for
+// each.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+final readonly & ModelConverter NATIVE_MESSAGES_CONVERTER = {
     encode: encodeMantleMessages,
     decode: decodeAnthropicMessages,
     toolChoice: ANTHROPIC_TOOL_CHOICE,
     supportsStreaming: false,
-    dialect: "Anthropic Messages (bedrock-mantle)",
+    dialect: "Anthropic Messages",
     supports: {stopSequences: true, thinking: true, effort: true, reasoningEffort: false}
 };
 
-// Mantle Responses — OpenAI Responses API (GPT-5.x on `/openai/v1/responses`).
-final readonly & ModelConverter MANTLE_RESPONSES_CONVERTER = {
+// OpenAI Responses. `/openai/v1/responses` on bedrock-runtime; `/v1/responses` or
+// `/openai/v1/responses` on bedrock-mantle, per model.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+final readonly & ModelConverter NATIVE_RESPONSES_CONVERTER = {
     encode: encodeResponses,
     decode: decodeResponses,
     // Responses forces tools with a FLAT `tool_choice`, unlike the Chat Completions
     // converters below — same vendor, different dialect.
     toolChoice: RESPONSES_TOOL_CHOICE,
     supportsStreaming: false,
-    dialect: "OpenAI Responses (bedrock-mantle)",
+    dialect: "OpenAI Responses",
     supports: {stopSequences: false, thinking: false, effort: false, reasoningEffort: true}
 };
 
-// Mantle Chat Completions — OpenAI chat shape (GLM on `/v1/chat/completions`).
-final readonly & ModelConverter MANTLE_CHAT_CONVERTER = {
+// OpenAI Chat Completions. `/openai/v1/chat/completions` on bedrock-runtime;
+// `/v1/chat/completions` or `/openai/v1/chat/completions` on bedrock-mantle. Reaches
+// far past OpenAI: AWS lists DeepSeek, Gemma 3, Mistral, Qwen3, MiniMax, Moonshot,
+// NVIDIA, Writer, xAI and Z.AI on this shape.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+final readonly & ModelConverter NATIVE_CHAT_CONVERTER = {
     encode: encodeOpenAIChat,
     decode: decodeOpenAIChat,
     toolChoice: OPENAI_CHAT_TOOL_CHOICE,
     supportsStreaming: false,
-    dialect: "OpenAI Chat Completions (bedrock-mantle)",
+    dialect: "OpenAI Chat Completions",
     supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: true}
 };
 
@@ -123,45 +134,61 @@ final readonly & ModelConverter INVOKE_MISTRAL_TEXT_CONVERTER = {
 };
 
 // Selects the converter for a resolved route. Runs at construction.
-// Fails cleanly for wire dialects / vendors not yet supported.
+//
+// Dispatches on the resolved SHAPE, not the endpoint: the same three vendor-native
+// dialects are served on both hosts, so `bedrock-runtime` and `bedrock-mantle` share
+// these converters and differ only in host, path and signing name.
 isolated function selectConverter(Route route) returns readonly & ModelConverter|error {
-    if route.family == CONVERSE {
-        return CONVERSE_CONVERTER; // model-agnostic — serves every vendor
+    match route.shape {
+        CONVERSE => {
+            return CONVERSE_CONVERTER; // model-agnostic — serves every vendor
+        }
+        MESSAGES => {
+            return NATIVE_MESSAGES_CONVERTER;
+        }
+        RESPONSES => {
+            return NATIVE_RESPONSES_CONVERTER;
+        }
+        CHAT_COMPLETIONS => {
+            return NATIVE_CHAT_CONVERTER;
+        }
     }
-    if route.family == MANTLE {
-        MantleEntry entry = check route.mantleEntry.ensureType();
-        return mantleConverterForPath(entry.path);
-    }
-    // INVOKE — keyed by the bare id's vendor prefix.
+    // INVOKE — the one shape whose body is the model's own, so it is keyed by the
+    // bare id's vendor prefix.
     return selectInvokeConverter(route.bareModelId);
 }
 
-// Mantle dialect from the request PATH. Path → dialect is 1:1 across every model
-// AWS serves on Mantle, so the converter need not be stored per model.
+// The wire shape a Mantle request path implies. Path -> dialect is 1:1 across every
+// model AWS serves on Mantle, which is why `MANTLE_CAPABLE` stores only the path.
 //
-// Deriving it from the VENDOR prefix instead would be wrong: `google.gemma-3-*`
-// speaks Chat Completions on `/v1/chat/completions` while `google.gemma-4-*` speaks
-// Responses on `/openai/v1/responses` — one prefix, two dialects. The path tells
-// them apart; the prefix cannot.
-isolated function mantleConverterForPath(string path) returns readonly & ModelConverter|error {
+// Deriving the dialect from the VENDOR prefix instead would be wrong:
+// `google.gemma-3-*` speaks Chat Completions on `/v1` while `google.gemma-4-*` speaks
+// Responses on `/openai/v1` — one prefix, two dialects. The path tells them apart.
+isolated function mantleShapeForPath(string path) returns ApiShape|error {
     if path.endsWith("/messages") {
-        return MANTLE_MESSAGES_CONVERTER;
+        return MESSAGES;
     }
     if path.endsWith("/responses") {
-        return MANTLE_RESPONSES_CONVERTER;
+        return RESPONSES;
     }
     if path.endsWith("/chat/completions") {
-        return MANTLE_CHAT_CONVERTER;
+        return CHAT_COMPLETIONS;
     }
-    return error(string `no Mantle converter for path '${path}'`);
+    return error(string `no known wire dialect for Mantle path '${path}'`);
 }
 
-// Whether a Mantle path authenticates with `x-api-key` rather than
-// `Authorization: Bearer`. Like the converter, this tracks the PATH: the Anthropic
-// Messages surface is the one AWS documents with `x-api-key`; the OpenAI-compatible
-// Responses and Chat Completions paths both use Bearer.
+// Whether a route authenticates with `x-api-key` rather than `Authorization: Bearer`.
+//
+// Follows the SHAPE, and holds on both endpoints: AWS's documented curl for the
+// Anthropic Messages path sends `-H "x-api-key: $AWS_BEARER_TOKEN_BEDROCK"` on
+// bedrock-runtime and on bedrock-mantle alike, while the OpenAI-compatible Responses
+// and Chat Completions paths both use Bearer.
+//
+// UNRESOLVED: `api-keys.html` documents only `Authorization: Bearer` generically and
+// never mentions `x-api-key`, so whether Bearer is ALSO accepted on the Messages path
+// is unverified. We send what AWS's own Messages examples send.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
-isolated function usesApiKeyHeader(string path) returns boolean => path.endsWith("/messages");
+isolated function usesApiKeyHeader(ApiShape shape) returns boolean => shape == MESSAGES;
 
 // Picks the InvokeModel converter from the bare id's vendor prefix.
 isolated function selectInvokeConverter(string bareModelId) returns readonly & ModelConverter|error {
@@ -184,11 +211,16 @@ isolated function selectInvokeConverter(string bareModelId) returns readonly & M
         // R1 is text completion; V3.x is OpenAI-shaped chat — see converter_deepseek.bal.
         return usesDeepSeekTextDialect(bareModelId) ? INVOKE_DEEPSEEK_CONVERTER : INVOKE_OPENAI_CHAT_CONVERTER;
     }
+    // `google.` is here on the card's own evidence, not by analogy: Gemma 3's
+    // Programmatic Access section marks Invoke supported on bedrock-runtime and its
+    // Invoke sample posts an OpenAI-shaped body — `{"messages": [...], "max_tokens": N}` —
+    // which is exactly this converter's dialect.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
     if bareModelId.startsWith("openai.") || bareModelId.startsWith("qwen.") ||
-        bareModelId.startsWith("zai.") {
+        bareModelId.startsWith("zai.") || bareModelId.startsWith("google.") {
         return INVOKE_OPENAI_CHAT_CONVERTER;
     }
-    return error(string `no InvokeModel converter for '${bareModelId}'; use 'apiFamily = CONVERSE'`);
+    return error(string `no InvokeModel converter for '${bareModelId}'; use 'api = CONVERSE'`);
 }
 
 // Mistral ids that speak the `prompt`/`outputs` TEXT-completion dialect on
@@ -198,7 +230,7 @@ isolated function selectInvokeConverter(string bareModelId) returns readonly & M
 // two are told apart only by exact id — `mistral-large-2402` is text-completion
 // while `mistral-large-2407` is chat-completion, same family, four months apart.
 // New ids therefore default to chat, and a wrong guess surfaces as a Bedrock
-// `ValidationException` the caller can act on; `apiFamily = CONVERSE` is the escape
+// `ValidationException` the caller can act on; `api = CONVERSE` is the escape
 // hatch, since Converse is model-agnostic and sidesteps the dialect split entirely.
 //
 // text:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
@@ -233,3 +265,44 @@ isolated function usesMistralTextDialect(string bareModelId) returns boolean =>
 // R1:    https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html
 isolated function usesDeepSeekTextDialect(string bareModelId) returns boolean =>
     bareModelId.startsWith("deepseek.r1");
+
+// How `generate()` should obtain a typed result on a resolved route. Decided once at
+// construction from the endpoint, the shape and the dialect's tool-choice style.
+//
+// The answer is NOT a property of the endpoint alone, which is what the old
+// `family != MANTLE` flag assumed. AWS's evidence cuts both ways:
+//
+//  - Anthropic Messages on bedrock-mantle: the NATIVE mechanism is documented as
+//    unavailable — `output_config.format` is rejected with a 400.
+//    https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-structured-outputs.html
+//
+//    Whether TOOL FORCING also fails there is UNVERIFIED, and the honest answer is
+//    that it probably works: the Messages API forces a tool with `tool_choice`, which
+//    this module emits and which AWS lists as a supported Mantle feature ("client-side
+//    tool calling"). A previously cited counter-example — `strict: true` being
+//    rejected on opus-4-7 — does NOT apply, because this module never sends `strict`
+//    on any dialect. POLICY CHOICE, recorded so it can be overruled: refuse, matching
+//    the documented native restriction, rather than ship a path no AWS page confirms.
+//    One live call against `/anthropic/v1/messages` on bedrock-mantle settles it, and
+//    relaxing this to TOOL_FORCING is then a one-line change.
+//  - The OpenAI-compatible shapes on bedrock-mantle DO have it for at least some
+//    models: Grok 4.3's card marks structured outputs supported on bedrock-mantle, so
+//    a blanket "Mantle has no structured output" is wrong in that direction too.
+//    https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-3.html
+//
+// Per-model variation beyond this is left for AWS to reject: a model that refuses a
+// forced tool answers with its own diagnosis, which is more use than a stale table.
+isolated function structuredOutputStyleFor(BedrockEndpoint endpoint, ApiShape shape,
+        ToolChoiceStyle toolChoice) returns StructuredOutputStyle {
+    // A dialect with no tool-calling at all (Mistral text completion) can do neither.
+    if toolChoice == NO_TOOL_CHOICE {
+        return NO_STRUCTURED_OUTPUT;
+    }
+    if endpoint == MANTLE && shape == MESSAGES {
+        return NO_STRUCTURED_OUTPUT;
+    }
+    // Converse is where the native member lives; see StructuredOutputStyle for why it
+    // is not yet selected. Flip this one return to NATIVE_OUTPUT_CONFIG once a live
+    // call confirms `outputConfig.textFormat` is honoured.
+    return TOOL_FORCING;
+}

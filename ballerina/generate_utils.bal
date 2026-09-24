@@ -14,12 +14,11 @@
 
 import ballerina/ai;
 
-// generate() — tool-forcing on Converse/Invoke (structured output supported);
-// Mantle has NO structured-output path: a non-string target type is a
-// clean error, a string target returns text. The external `Generator` shim passes
-// the typedesc and the per-model `supportsStructuredOutput` flag in here; the JSON
-// schema is derived on this side by `to_json_schema.bal`, as in the reference
-// provider modules.
+// generate() — obtains a typed result by whichever mechanism the resolved route
+// supports (see `StructuredOutputStyle` / `structuredOutputStyleFor`). The external
+// `Generator` shim passes the typedesc and the provider's resolved state in here;
+// the JSON schema is derived on this side by `to_json_schema.bal`, as in the
+// reference provider modules.
 
 const RESULT_TOOL = "respond_with_result";
 
@@ -27,17 +26,15 @@ const RESULT_TOOL = "respond_with_result";
 // Regular (non-dependent) function returning `anydata`; the Java boundary coerces
 // the result to the caller's `td`. Reads the provider's resolved state as
 // parameters.
-isolated function generateLlmResponse(boolean supportsStructuredOutput, ApiFamily family,
+isolated function generateLlmResponse(StructuredOutputStyle structuredOutput, ApiShape shape,
         readonly & ModelConverter converter, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
         typedesc<anydata> td) returns anydata|ai:Error
-    => structuredGenerate(supportsStructuredOutput, family, converter, transport, wireModelId,
+    => structuredGenerate(structuredOutput, shape, converter, transport, wireModelId,
         extraHeaders, params, prompt, td);
 
-// Dispatches generate(). Converse/Invoke → tool-forcing. Mantle
-// (`supportsStructuredOutput == false`) → text only; a typed target is an error,
-// reversible per-model once a card shows Mantle structured-output support.
-isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily family,
+// Dispatches generate() on the route's structured-output style.
+isolated function structuredGenerate(StructuredOutputStyle structuredOutput, ApiShape shape,
         readonly & ModelConverter converter, BedrockTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
         typedesc<anydata> td) returns anydata|ai:Error {
@@ -47,24 +44,23 @@ isolated function structuredGenerate(boolean supportsStructuredOutput, ApiFamily
     // `toolSpec.inputSchema.json.type` to be `object`, so a string-target generate()
     // on Converse died with a ValidationException. Verified live 2026-08-10 on Nova.
     if td is typedesc<string> {
-        return plainTextResponse(family, converter, transport, wireModelId, extraHeaders, params, prompt);
+        return plainTextResponse(shape, converter, transport, wireModelId, extraHeaders, params, prompt);
     }
-    if !supportsStructuredOutput {
-        return error ai:LlmInvalidGenerationError(
-            string `Structured output is not supported on the bedrock-mantle route for model ` +
-            string `'${wireModelId}'; the target type must be 'string'. Use a Converse/Invoke model ` +
-            string `for typed generation.`);
+    match structuredOutput {
+        NATIVE_OUTPUT_CONFIG => {
+            return generateByOutputConfig(shape, converter, transport, wireModelId, extraHeaders,
+                    params, prompt, td);
+        }
+        TOOL_FORCING => {
+            return generateByToolForcing(shape, converter, transport, wireModelId, extraHeaders,
+                    params, prompt, td);
+        }
     }
-    if converter.toolChoice == NO_TOOL_CHOICE {
-        // A dialect with no tool-calling at all (Mistral text completion). Same
-        // shape as the Mantle guard, and reversible the same way. The `string` case
-        // is already handled above, so only a typed target reaches here.
-        return error ai:LlmInvalidGenerationError(
-            string `Structured output is not supported for model '${wireModelId}': its InvokeModel ` +
-            string `dialect (Mistral text completion) has no tool-calling, so the target type must be ` +
-            string `'string'. Use the Converse route (the module default) for typed generation.`);
-    }
-    return generateByToolForcing(converter, transport, wireModelId, extraHeaders, params, prompt, td);
+    return error ai:LlmInvalidGenerationError(
+        string `Structured output is not available for model '${wireModelId}' on the ` +
+        string `${converter.dialect} route${shape == MESSAGES ? " on bedrock-mantle" : ""}, so the ` +
+        string `target type must be 'string'. Use a BedrockRuntime*ModelProvider with the CONVERSE ` +
+        string `shape for typed generation.`);
 }
 
 // Derives the expected type's JSON schema (`to_json_schema.bal`). A target type
@@ -79,9 +75,9 @@ isolated function schemaFor(typedesc<anydata> td) returns map<json>|ai:Error {
     return generateJsonSchemaForTypedescAsJson(td);
 }
 
-// Plain-text generation for the Mantle route when the target type is `string`.
+// Plain-text generation when the target type is `string`. Serves every route.
 // Runs one chat turn and returns the assistant text.
-isolated function plainTextResponse(ApiFamily family, readonly & ModelConverter converter, BedrockTransport transport,
+isolated function plainTextResponse(ApiShape shape, readonly & ModelConverter converter, BedrockTransport transport,
         string wireModelId, map<string> & readonly extraHeaders, readonly & InferenceParams params,
         ai:Prompt prompt) returns anydata|ai:Error {
     // Resolve the prompt the same way chat() does — a generate() prompt can carry an
@@ -92,11 +88,11 @@ isolated function plainTextResponse(ApiFamily family, readonly & ModelConverter 
     if encoded is ai:Error {
         return encoded;
     }
-    // Only Mantle carries the model id in the body; Converse and Invoke carry it in
-    // the URL path. This function also serves the NO_TOOL_CHOICE Mistral InvokeModel
-    // path, which would otherwise get a stray `model` field. Same gate as
-    // `runChat` in provider_common.bal.
-    json body = family == MANTLE ? injectModel(encoded, wireModelId) : encoded;
+    // Converse and InvokeModel carry the model id in the URL path; the three
+    // vendor-native shapes carry it in the body. This function also serves the
+    // NO_TOOL_CHOICE Mistral InvokeModel path, which would otherwise get a stray
+    // `model` field. Same gate as `runChat` in provider_common.bal.
+    json body = isPathAddressed(shape) ? encoded : injectModel(encoded, wireModelId);
     TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
     if response is ai:Error {
         return response;
@@ -111,7 +107,7 @@ isolated function plainTextResponse(ApiFamily family, readonly & ModelConverter 
 
 // Tier 1 — force a single tool whose schema is the expected type; parse the
 // tool-call arguments back into the record.
-isolated function generateByToolForcing(readonly & ModelConverter converter,
+isolated function generateByToolForcing(ApiShape shape, readonly & ModelConverter converter,
         BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td)
         returns anydata|ai:Error {
@@ -126,7 +122,11 @@ isolated function generateByToolForcing(readonly & ModelConverter converter,
     if encoded is ai:Error {
         return encoded;
     }
-    json body = applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL);
+    json forced = applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL);
+    // The three vendor-native shapes name the model in the BODY. Without this a typed
+    // generate() on MESSAGES/CHAT_COMPLETIONS/RESPONSES sent no `model` at all and was
+    // rejected, even though chat() on the same provider worked. Same gate as `runChat`.
+    json body = isPathAddressed(shape) ? forced : injectModel(forced, wireModelId);
     TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
     if response is ai:Error {
         return response;
@@ -153,8 +153,8 @@ isolated function generateByToolForcing(readonly & ModelConverter converter,
 }
 
 // Forces the single result tool on the encoded body. Keyed on the
-// CONVERTER's dialect, not the route family: Nova on InvokeModel is Converse-shaped,
-// and Mistral chat forces with a bare string. Deriving this from `ApiFamily` sends
+// CONVERTER's dialect, not the route shape: Nova on InvokeModel is Converse-shaped,
+// and Mistral chat forces with a bare string. Deriving this from `ApiShape` sends
 // Anthropic's `tool_choice` to every non-Converse dialect, which they ignore —
 // the model then answers in prose and `generate()` fails with "no tool call".
 isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolName) returns json {
@@ -239,4 +239,67 @@ isolated function extractJson(string content) returns json|error {
         }
     }
     return error("no JSON value found in model output");
+}
+
+// Native Converse structured output — `outputConfig.textFormat` carrying the derived
+// JSON schema, which AWS validates the response against.
+//
+// WIRE SHAPE, from botocore's bedrock-runtime service model rather than the
+// userguide's elided example, because the two differ in a way guessing gets wrong:
+// `OutputFormatStructure.jsonSchema.schema` is a **String** (the schema SERIALISED to
+// JSON), whereas the sibling `ToolSpecification.inputSchema.json` is a Document (a
+// JSON object). `OutputFormatType` has exactly one member, `json_schema`.
+// https://github.com/boto/botocore/blob/develop/botocore/data/bedrock-runtime/2023-09-30/service-2.json
+//
+// Not reachable until `structuredOutputStyleFor` returns NATIVE_OUTPUT_CONFIG; see
+// `StructuredOutputStyle` for the live-evidence conflict that gates it.
+isolated function generateByOutputConfig(ApiShape shape, readonly & ModelConverter converter,
+        BedrockTransport transport, string wireModelId, map<string> & readonly extraHeaders,
+        readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td)
+        returns anydata|ai:Error {
+    map<json> schema = check schemaFor(td);
+    ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
+    RequestEncoder encode = converter.encode;
+    json|ai:Error encoded = encode((), [userMsg], [], (), params);
+    if encoded is ai:Error {
+        return encoded;
+    }
+    if encoded !is map<json> {
+        return error ai:LlmInvalidGenerationError("Encoded request body is not a JSON object");
+    }
+    map<json> body = encoded.clone();
+    body["outputConfig"] = {
+        "textFormat": {
+            "type": "json_schema",
+            "structure": {
+                "jsonSchema": {
+                    "schema": schema.toJsonString(),
+                    "name": RESULT_TOOL,
+                    "description": "The structure the response must adhere to."
+                }
+            }
+        }
+    };
+    json sent = isPathAddressed(shape) ? body : injectModel(body, wireModelId);
+    TransportResponse|ai:Error response = transport.execute(sent, extraHeaders);
+    if response is ai:Error {
+        return response;
+    }
+    ResponseDecoder decode = converter.decode;
+    DecodedResponse|ai:Error decoded = decode(response.body);
+    if decoded is ai:Error {
+        return decoded;
+    }
+    string? content = decoded.message.content;
+    if content is () {
+        return error ai:LlmInvalidGenerationError(
+            string `Model '${wireModelId}' returned no text content for structured output`);
+    }
+    json|error parsed = extractJson(content);
+    if parsed is error {
+        return error ai:LlmInvalidGenerationError(
+            string `Model '${wireModelId}' returned text that is not valid JSON despite a ` +
+            string `schema-constrained request`, parsed);
+    }
+    return bindJson(parsed, td);
 }

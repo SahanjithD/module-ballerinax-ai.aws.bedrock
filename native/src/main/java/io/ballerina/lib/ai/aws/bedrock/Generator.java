@@ -43,16 +43,19 @@ public final class Generator {
                                   BObject prompt, BTypedesc expectedResponseTypedesc) {
         return env.getRuntime().callFunction(
                 new Module("dasunorg", "ai.aws.bedrock", "1"), "generateLlmResponse", null,
-                modelProvider.get(StringUtils.fromString("supportsStructuredOutput")),
-                modelProvider.get(StringUtils.fromString("genFamily")),
                 // NOTE: these are looked up by NAME at runtime, so renaming a provider
-                // field here is a silent break — the compiler cannot see it. Any change
-                // to a `private final` field on the seven provider classes must be
-                // mirrored below.
-                modelProvider.get(StringUtils.fromString("genConverter")),
-                modelProvider.get(StringUtils.fromString("genTransport")),
-                modelProvider.get(StringUtils.fromString("genModelId")),
-                modelProvider.get(StringUtils.fromString("genHeaders")),
+                // field is a silent break the compiler cannot see. Any change to a
+                // `private final` field on the provider classes must be mirrored here.
+                //
+                // There is ONE spine per provider now: the endpoint is fixed by the
+                // class, so chat() and generate() share a route, converter and
+                // transport. The former gen* duplicates are gone.
+                modelProvider.get(StringUtils.fromString("structuredOutput")),
+                modelProvider.get(StringUtils.fromString("shape")),
+                modelProvider.get(StringUtils.fromString("converter")),
+                modelProvider.get(StringUtils.fromString("transport")),
+                modelProvider.get(StringUtils.fromString("wireModelId")),
+                modelProvider.get(StringUtils.fromString("extraHeaders")),
                 modelProvider.get(StringUtils.fromString("params")),
                 prompt, expectedResponseTypedesc);
     }
