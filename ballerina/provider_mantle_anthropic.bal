@@ -48,9 +48,8 @@ public type AnthropicMantleConfig record {|
 # Anthropic models on the AWS Bedrock `bedrock-mantle` endpoint.
 #
 # Signs as `bedrock-mantle` and authorizes with `bedrock-mantle:CreateInference` — a
-# SEPARATE IAM namespace, so credentials that work against `bedrock-runtime` can
-# still return AccessDenied here. Guardrails, cross-region inference and structured
-# output are not available on this endpoint.
+# SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
+# No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 public isolated distinct client class BedrockMantleAnthropicModelProvider {
     *ai:ModelProvider;
@@ -63,21 +62,12 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
     private final map<string> & readonly extraHeaders;
     private final StructuredOutputStyle structuredOutput;
 
-    # + model - A Anthropic model id. Any id the endpoint serves may be passed as a `string`
-    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
-    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
-    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + model - An Anthropic model id, or any id string the endpoint serves
+    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
-    #              The host is derived from the region when this is `()`, which is correct
-    #              in every partition — set it only for PrivateLink without private DNS,
-    #              an egress gateway, or a local mock. A `customEndpoint` is a GLOBAL
-    #              override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`,
-    #              and it skips the host-shape guards
+    # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + maxTokens - Maximum tokens to generate
-    # + temperature - Sampling temperature. Leave unset (the default) to use the
-    #                 model's own default — several current models reject it outright
+    # + temperature - Sampling temperature. Unset uses the model's own default
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(

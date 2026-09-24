@@ -80,19 +80,17 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
         self.rerankingConfiguration = reranking is VectorRerankingConfig ? reranking.cloneReadOnly() : ();
     }
 
+    // Bedrock upserts by document id, derived from `ai:Metadata.id` when the caller
+    // sets one. A document this module chunks into more than one piece submits its
+    // chunks as `<id>#0`, `<id>#1`, ...; one that does not fan out keeps `<id>`.
+    // Two documents in one call resolving to the SAME id are rejected rather than
+    // silently overwriting each other.
+
     # Ingests documents into the `CUSTOM` data source, chunking client-side first
-    # when the data source's `chunkingStrategy` is `NONE` (detected at construction —
-    # see `VectorKnowledgeBaseConfig.chunker`).
+    # when the data source's `chunkingStrategy` is `NONE`.
     #
     # Blocks until every document reaches a terminal status or `ingestTimeout`
     # elapses, so a `retrieve()` immediately afterward sees them.
-    #
-    # Bedrock upserts by document id, and this module derives that id from
-    # `ai:Metadata.id` when the caller sets one. A document that this module chunks
-    # into more than one piece therefore submits its chunks as `<id>#0`, `<id>#1`,
-    # ...; a document that does not fan out keeps `<id>` unchanged. Two documents in
-    # one call that resolve to the SAME id are rejected rather than silently
-    # overwriting each other.
     #
     # + documents - The documents or chunks to index; only text content is supported
     # + return - An `ai:Error` if any document fails to submit or to index; `nil` otherwise
@@ -201,39 +199,32 @@ public distinct isolated client class BedrockVectorKnowledgeBase {
         return matches;
     }
 
+    // Bedrock has no metadata-based delete, so this enumerates every document on every
+    // data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO PAGED
+    // `Retrieve` enumerations — filtered by `filters`, then unfiltered — to classify each
+    // candidate as a confirmed match, genuinely excluded, or indeterminate. See
+    // `resolveDataSourceDeletes` (knowledgebase_common.bal) for the algorithm (A17).
+    //
+    // Cost: two paged `Retrieve` enumerations PER DATA SOURCE (at most
+    // `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results), not one to two round trips
+    // per document. A maintenance operation, not something to put on a request path.
+    //
+    // `filters` must contain at least one leaf predicate: a filter set that constrains
+    // nothing matches every document, so "delete everything" has to be explicit.
+    //
+    // Parameterised here by the self-managed reserved metadata key
+    // (`VECTOR_SOURCE_URI_METADATA_KEY`, NOT the managed `_source_uri`) and the
+    // `vectorSearchConfiguration` branch (`vectorDeleteRetrieve`).
     # Deletes documents matching `filters`.
     #
-    # Bedrock has no metadata-based delete, so this enumerates every document on
-    # every data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO
-    # PAGED `Retrieve` enumerations — filtered by `filters`, then unfiltered — to
-    # classify every candidate as a confirmed match, genuinely excluded, or
-    # indeterminate. See `resolveDataSourceDeletes` (knowledgebase_common.bal) for the
-    # algorithm (A17) — the same implementation `BedrockManagedKnowledgeBase` uses,
-    # parameterised here by the self-managed reserved metadata key
-    # (`VECTOR_SOURCE_URI_METADATA_KEY`, NOT the managed `_source_uri`) and the
-    # `vectorSearchConfiguration` branch (`vectorDeleteRetrieve`).
+    # Only `CUSTOM` and `S3` data sources support deletion; anything else is named in the
+    # returned error rather than silently skipped, and deletes that can be made still
+    # happen when some documents cannot be reached.
     #
-    # **Cost: two paged `Retrieve` enumerations PER DATA SOURCE** (a small, bounded
-    # number of round trips regardless of how many documents the data source holds —
-    # `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results each, at most), not one
-    # to two round trips per document. A maintenance operation, not something to put
-    # on a request path, but no longer scales with the knowledge base's size.
-    #
-    # `filters` must contain at least one leaf predicate: a filter set that
-    # constrains nothing matches every document, and "delete everything" has to be
-    # explicit rather than a degenerate case of an empty collection.
-    #
-    # Only `CUSTOM`/`S3` data sources support
-    # deletion; documents on other data source types are named in the returned error
-    # rather than silently skipped, and deletes that can be made still happen even
-    # when some documents or data sources cannot be reached.
-    #
-    # + filters - The metadata filters used to identify which documents to delete;
-    #             must contain at least one leaf predicate
-    # + return - An `ai:Error` naming indeterminate documents, documents the service
-    #            did not confirm deleted, undeletable data sources, or data sources
-    #            refused outright (enumeration truncation, or a store that does not
-    #            appear to honour metadata filters); `nil` otherwise
+    # + filters - Metadata filters identifying the documents to delete. Must contain at
+    #             least one leaf predicate
+    # + return - An `ai:Error` naming what could not be deleted or confirmed; `nil`
+    #            otherwise
     public isolated function deleteByFilter(ai:MetadataFilters filters) returns ai:Error? {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
         check guardDeleteFilter(userFilter, filters);

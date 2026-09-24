@@ -194,36 +194,28 @@ public distinct isolated client class BedrockManagedKnowledgeBase {
         return matches;
     }
 
+    // Bedrock has no metadata-based delete, so this enumerates every document on every
+    // data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO PAGED
+    // `Retrieve` enumerations — filtered by `filters`, then unfiltered — to classify each
+    // candidate as a confirmed match, genuinely excluded, or indeterminate. See
+    // `resolveDataSourceDeletes` (knowledgebase_common.bal) for the algorithm (A17).
+    //
+    // Cost: two paged `Retrieve` enumerations PER DATA SOURCE (at most
+    // `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results), not one to two round trips
+    // per document. A maintenance operation, not something to put on a request path.
+    //
+    // `filters` must contain at least one leaf predicate: a filter set that constrains
+    // nothing matches every document, so "delete everything" has to be explicit.
     # Deletes documents matching `filters`.
     #
-    # Bedrock has no metadata-based delete, so this enumerates every document on
-    # every data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO
-    # PAGED `Retrieve` enumerations — filtered by `filters`, then unfiltered — to
-    # classify every candidate as a confirmed match, genuinely excluded, or
-    # indeterminate. See `resolveDataSourceDeletes` (knowledgebase_common.bal) for the
-    # algorithm (A17).
-    #
-    # **Cost: two paged `Retrieve` enumerations PER DATA SOURCE** (a small, bounded
-    # number of round trips regardless of how many documents the data source holds —
-    # `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results each, at most), not one
-    # to two round trips per document. A maintenance operation, not something to put
-    # on a request path, but no longer scales with the knowledge base's size.
-    #
-    # `filters` must contain at least one leaf predicate: a filter set that
-    # constrains nothing matches every document, and "delete everything" has to be
-    # explicit rather than a degenerate case of an empty collection.
-    #
-    # Only `CUSTOM`/`S3` data sources support deletion; documents on other data
-    # source types (SharePoint, Confluence, Drive, Web, ...) are named in the
+    # Only `CUSTOM` and `S3` data sources support deletion; anything else is named in the
     # returned error rather than silently skipped, and deletes that can be made still
-    # happen even when some documents or data sources cannot be reached.
+    # happen when some documents cannot be reached.
     #
-    # + filters - The metadata filters used to identify which documents to delete;
-    #             must contain at least one leaf predicate
-    # + return - An `ai:Error` naming indeterminate documents, documents the service
-    #            did not confirm deleted, undeletable data sources, or data sources
-    #            refused outright (enumeration truncation, or a store that does not
-    #            appear to honour metadata filters); `nil` otherwise
+    # + filters - Metadata filters identifying the documents to delete. Must contain at
+    #             least one leaf predicate
+    # + return - An `ai:Error` naming what could not be deleted or confirmed; `nil`
+    #            otherwise
     public isolated function deleteByFilter(ai:MetadataFilters filters) returns ai:Error? {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
         check guardDeleteFilter(userFilter, filters);
