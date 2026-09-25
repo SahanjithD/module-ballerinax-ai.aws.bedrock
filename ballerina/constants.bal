@@ -67,6 +67,15 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // off the MESSAGES shape rather than stored here.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
     "anthropic.claude-haiku-4-5": {basePath: "/anthropic/v1", apis: [MESSAGES]},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+    "anthropic.claude-opus-5-5": {basePath: "/anthropic/v1", apis: [MESSAGES]},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+    "anthropic.claude-opus-4-7": {basePath: "/anthropic/v1", apis: [MESSAGES]},
+    // Both Fable ids need an account-level data-retention opt-in (`aws_review`).
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    "anthropic.claude-fable-5": {basePath: "/anthropic/v1", apis: [MESSAGES]},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    "anthropic.claude-fable-5-1": {basePath: "/anthropic/v1", apis: [MESSAGES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
     "anthropic.claude-opus-4-8": {basePath: "/anthropic/v1", apis: [MESSAGES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
@@ -80,6 +89,16 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // --- Programmatic Access row records; adding CHAT_COMPLETIONS needs the same
     // --- per-card check rather than an inference from the base path.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+    // The GPT-6 family lists BOTH OpenAI shapes on this endpoint, with Responses
+    // first: each card's note reads "For Responses, use `/openai/v1/responses`. For
+    // Chat Completions, use `/openai/v1/chat/completions`." Mantle regions differ per
+    // model — Astra is us-west-2 only, Sol and Luna are us-east-1.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    "openai.gpt-6-astra": {basePath: "/openai/v1", apis: [RESPONSES, CHAT_COMPLETIONS]},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    "openai.gpt-6-sol": {basePath: "/openai/v1", apis: [RESPONSES, CHAT_COMPLETIONS]},
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+    "openai.gpt-6-luna": {basePath: "/openai/v1", apis: [RESPONSES, CHAT_COMPLETIONS]},
     "openai.gpt-5.5": {basePath: "/openai/v1", apis: [RESPONSES]},
     "openai.gpt-5.4": {basePath: "/openai/v1", apis: [RESPONSES]},
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
