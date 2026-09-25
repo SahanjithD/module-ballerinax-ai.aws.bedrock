@@ -59,7 +59,7 @@ function testARecordTargetTypeIsSentUnwrapped() returns error? {
 
 @test:Config {}
 function testTheWrapperIsTakenBackOffBeforeBinding() returns error? {
-    anydata bound = check bindResult({"result": 42}, true, IntTarget);
+    anydata bound = check bindResult({"result": 42}, true, IntTarget, TEST_BIND_ORIGIN);
     test:assertEquals(bound, 42, "the caller asked for an int, not the wrapper object");
 }
 
@@ -67,7 +67,7 @@ function testTheWrapperIsTakenBackOffBeforeBinding() returns error? {
 function testBindingStillWorksWhenTheModelDropsTheWrapper() returns error? {
     // The wrapper is this module's device, not something the caller asked for, so a
     // model that answers with the bare value must still bind.
-    anydata bound = check bindResult(42, true, IntTarget);
+    anydata bound = check bindResult(42, true, IntTarget, TEST_BIND_ORIGIN);
     test:assertEquals(bound, 42);
 }
 

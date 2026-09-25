@@ -30,6 +30,11 @@ type Review record {|
     int score;
 |};
 
+// Stands in for the "where did this JSON come from" label the real call sites pass.
+// Tests that exercise binding mechanics do not care which one; the test that asserts
+// the label reaches the message names its own.
+const TEST_BIND_ORIGIN = "the model response";
+
 final map<json> REVIEW_SCHEMA = {
     "type": "object",
     "properties": {"sentiment": {"type": "string"}, "score": {"type": "integer"}},
@@ -140,7 +145,7 @@ function testToolForcingParsesToolCallArgsBackIntoRecordOnConverse() returns err
     };
     DecodedResponse decoded = check decodeConverse(canned);
     ai:FunctionCall[] toolCalls = check decoded.message.toolCalls.ensureType();
-    Review review = check bindJson(toolCalls[0].arguments ?: {}, Review).ensureType();
+    Review review = check bindJson(toolCalls[0].arguments ?: {}, Review, TEST_BIND_ORIGIN).ensureType();
     test:assertEquals(review, {sentiment: "positive", score: 9});
 }
 
@@ -163,13 +168,13 @@ function testToolForcingParsesToolCallArgsBackIntoRecordOnMistralChat() returns 
     };
     DecodedResponse decoded = check decodeMistralChat(canned);
     ai:FunctionCall[] toolCalls = check decoded.message.toolCalls.ensureType();
-    Review review = check bindJson(toolCalls[0].arguments ?: {}, Review).ensureType();
+    Review review = check bindJson(toolCalls[0].arguments ?: {}, Review, TEST_BIND_ORIGIN).ensureType();
     test:assertEquals(review, {sentiment: "negative", score: 2});
 }
 
 @test:Config {}
 function testBindJsonRejectsAMismatchedShape() {
-    anydata|ai:Error bound = bindJson({"sentiment": "positive"}, Review); // `score` missing
+    anydata|ai:Error bound = bindJson({"sentiment": "positive"}, Review, TEST_BIND_ORIGIN); // `score` missing
     test:assertTrue(bound is ai:LlmInvalidGenerationError,
             "a response that does not fit the expected type must be a clean ai:Error");
 }
@@ -178,7 +183,7 @@ function testBindJsonRejectsAMismatchedShape() {
 function testExtractJsonRecoversFencedJsonFromText() returns error? {
     // Fallback for models that answer with the JSON in prose instead of a tool call.
     json parsed = check extractJson("Sure!\n```json\n{\"sentiment\": \"ok\", \"score\": 5}\n```");
-    Review review = check bindJson(parsed, Review).ensureType();
+    Review review = check bindJson(parsed, Review, TEST_BIND_ORIGIN).ensureType();
     test:assertEquals(review, {sentiment: "ok", score: 5});
 }
 
@@ -303,4 +308,91 @@ function testMistralTextDialectRejectsToolsRatherThanDroppingThem() {
     json|ai:Error encoded = encodeMistralText((), [userText("Hi")], [RESULT_TOOL_DEF], (),
             GEN_PARAMS);
     test:assertTrue(encoded is ai:Error, "tools on a dialect with no tool support must fail loudly");
+}
+
+// ---- M1: models that refuse a forced tool choice are named, not relayed ----
+
+@test:Config {}
+function testForcedToolRefusalIsKeyedOnTheBareIdAcrossBothEndpoints() {
+    // Anthropic states the restriction for Claude Opus 5.5 and Claude Fable 5.1. It
+    // must match whether the caller passed the CRIS-prefixed runtime id or the bare
+    // Mantle one — the same model either way.
+    // https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5
+    foreach string id in ["anthropic.claude-opus-5-5", "us.anthropic.claude-opus-5-5",
+            "global.anthropic.claude-opus-5-5", "anthropic.claude-fable-5-1",
+            "us.anthropic.claude-fable-5-1"] {
+        test:assertTrue(refusesForcedToolChoice(id), id + " refuses a forced tool choice");
+    }
+    // The siblings that DO accept one must not be swept up with them.
+    foreach string id in ["anthropic.claude-opus-5", "us.anthropic.claude-opus-5",
+            "anthropic.claude-fable-5", "anthropic.claude-sonnet-5", "anthropic.claude-opus-4-8"] {
+        test:assertFalse(refusesForcedToolChoice(id), id + " accepts a forced tool choice");
+    }
+}
+
+@test:Config {}
+function testOpus55RefusesTypedGenerateBeforeAnyIo() returns error? {
+    // The route resolves to TOOL_FORCING like any other Converse model; the refusal
+    // is the MODEL's, so it has to fire here rather than as a 400 about `toolChoice`.
+    BedrockTransport transport = check mantleTransport();
+    anydata|ai:Error result = structuredGenerate(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER,
+            transport, "us.anthropic.claude-opus-5-5", {}, GEN_PARAMS, `Rate this`, Review);
+    test:assertTrue(result is ai:Error, "a typed target on a model that refuses forced tools must error");
+    if result is ai:Error {
+        string message = result.message();
+        test:assertTrue(message.includes("us.anthropic.claude-opus-5-5"),
+                "the error must name the model; got: " + message);
+        test:assertTrue(message.includes("forced tool"),
+                "the error must name the cause; got: " + message);
+    }
+}
+
+@test:Config {}
+function testOpus55StillAnswersAStringTarget() returns error? {
+    // `string` needs no tool at all, so the guard must not fire. Reaching the
+    // transport proves the refusal did not happen locally.
+    BedrockTransport transport = check mantleTransport();
+    anydata|ai:Error result = structuredGenerate(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER,
+            transport, "us.anthropic.claude-opus-5-5", {}, GEN_PARAMS, `Say OK`, string);
+    if result is ai:Error {
+        test:assertFalse(result.message().includes("forced tool"),
+                "a string target must not hit the forced-tool guard: " + result.message());
+    }
+}
+
+// ---- N8: a bind failure says what came back and where it came from ----
+
+@test:Config {}
+function testABindFailureCarriesTheOffendingJsonAndItsOrigin() {
+    anydata|ai:Error bound = bindJson({"sentiment": "positive"}, Review,
+            string `the arguments of the '${RESULT_TOOL}' tool call`);
+    test:assertTrue(bound is ai:Error);
+    if bound is ai:Error {
+        string message = bound.message();
+        test:assertTrue(message.includes(RESULT_TOOL),
+                "the message must say which path produced the JSON; got: " + message);
+        test:assertTrue(message.includes("\"sentiment\":\"positive\""),
+                "the message must carry the offending JSON; got: " + message);
+        test:assertTrue(message.includes("Review"),
+                "the message must name the expected type; got: " + message);
+    }
+}
+
+@test:Config {}
+function testALongBindFailureTruncatesTheJson() {
+    string filler = "";
+    int i = 0;
+    while i < 200 {
+        filler += "abcdef";
+        i += 1;
+    }
+    anydata|ai:Error bound = bindJson({"sentiment": filler}, Review, "the model response");
+    test:assertTrue(bound is ai:Error);
+    if bound is ai:Error {
+        string message = bound.message();
+        test:assertTrue(message.includes("(truncated)"),
+                "an oversized payload must be cut, not pasted whole; got length " +
+                message.length().toString());
+        test:assertTrue(message.length() < 800, "the message must stay bounded");
+    }
 }
