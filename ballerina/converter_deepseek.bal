@@ -48,10 +48,8 @@ isolated function encodeDeepSeekInvoke(string? system, ResolvedMessage[] message
             "Use the Converse route (the module default), which does.");
     }
 
-    map<json> body = {
-        "prompt": deepSeekPrompt(system, messages),
-        "max_tokens": params.maxTokens
-    };
+    map<json> body = {"prompt": deepSeekPrompt(system, messages)};
+    setMaxTokens(body, params, "max_tokens");
     setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {

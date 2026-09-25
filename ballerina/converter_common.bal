@@ -41,6 +41,27 @@ isolated function setTemperature(map<json> body, InferenceParams params, string 
     }
 }
 
+// Sets the output-token cap on a request body ONLY when the caller supplied one.
+//
+// `key` differs per dialect — `maxTokens` inside Converse's `inferenceConfig`,
+// `max_tokens` on the Anthropic/OpenAI-chat/Mistral/DeepSeek bodies,
+// `max_output_tokens` on the Responses API — so it is a parameter rather than a
+// constant here.
+//
+// Omittable for the same reason `temperature` is. OpenAI's own schema marks Chat
+// Completions' `max_tokens` deprecated ("now deprecated in favor of
+// `max_completion_tokens`, and is not compatible with o-series models"), and GPT-6
+// rejects it, so a module that always emits it cannot call those models at all. The
+// `init` default is unchanged: this only takes effect when a caller passes
+// `maxTokens = ()` deliberately.
+// https://github.com/openai/openai-openapi/blob/master/openapi.yaml
+isolated function setMaxTokens(map<json> body, InferenceParams params, string key) {
+    int? maxTokens = params?.maxTokens;
+    if maxTokens is int {
+        body[key] = maxTokens;
+    }
+}
+
 // ---- typed JSON field accessors (decode helpers) ----
 
 isolated function strField(map<json> m, string k) returns string? {

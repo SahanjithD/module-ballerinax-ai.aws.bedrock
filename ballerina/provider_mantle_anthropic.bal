@@ -66,7 +66,7 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
     # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
-    # + maxTokens - Maximum tokens to generate
+    # + maxTokens - Maximum tokens to generate. Pass `()` to omit the field entirely
     # + temperature - Sampling temperature. Unset uses the model's own default
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
@@ -93,7 +93,7 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         ThinkingConfig? thinking = config?.thinking;
         if thinking is ThinkingConfig {
-            check validateThinking(thinking, maxTokens ?: DEFAULT_MAX_TOKEN_COUNT);
+            check validateThinking(thinking, maxTokens);
         }
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (),

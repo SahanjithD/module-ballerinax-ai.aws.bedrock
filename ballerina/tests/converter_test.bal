@@ -520,7 +520,10 @@ function testTemperatureIsStillEmittedWhenTheCallerSetsIt() returns error? {
 function testBuildInferenceParamsDoesNotInventATemperature() {
     InferenceParams none = buildInferenceParams((), (), (), (), (), (), ());
     test:assertEquals(none?.temperature, (), "an unset temperature must stay unset");
-    test:assertEquals(none.maxTokens, DEFAULT_MAX_TOKEN_COUNT, "maxTokens still defaults");
+    // `maxTokens` no longer defaults HERE. The default lives on the `init` parameter,
+    // so a `()` arriving at this function is a caller who asked for the field to be
+    // omitted — see `setMaxTokens`.
+    test:assertEquals(none?.maxTokens, (), "an explicitly unset maxTokens must stay unset");
 
     InferenceParams set = buildInferenceParams((), 0.9d, (), (), (), (), ());
     test:assertEquals(set?.temperature, 0.9d);

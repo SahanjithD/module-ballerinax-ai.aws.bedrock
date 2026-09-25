@@ -26,7 +26,8 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
         wire.push(converseMessage(m));
     }
 
-    map<json> inferenceConfig = {"maxTokens": params.maxTokens};
+    map<json> inferenceConfig = {};
+    setMaxTokens(inferenceConfig, params, "maxTokens");
     setTemperature(inferenceConfig, params);
     // Per-call `stop` overrides configured stopSequences outright.
     string[]? stops = params.stopSequences;

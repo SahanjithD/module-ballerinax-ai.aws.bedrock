@@ -315,3 +315,73 @@ function testThinkingBudgetRulesAlsoFireOnTheMantleClass() {
         test:assertTrue(provider.message().includes("budgetTokens"), provider.message());
     }
 }
+
+// ---- MU5: `maxTokens = ()` omits the field on EVERY dialect ----
+//
+// OpenAI deprecated Chat Completions' `max_tokens` in favour of
+// `max_completion_tokens` and marks it incompatible with reasoning models; GPT-6
+// rejects it outright. Before this, `buildInferenceParams` coerced an explicit `()`
+// back to `DEFAULT_MAX_TOKEN_COUNT`, so the field could not be suppressed at all and
+// those models were unreachable through this module.
+// https://github.com/openai/openai-openapi/blob/master/openapi.yaml
+
+@test:Config {}
+function testAnExplicitNilMaxTokensSurvivesBuildInferenceParams() {
+    readonly & InferenceParams omitted = buildInferenceParams((), (), (), (), (), (), ());
+    test:assertEquals(omitted?.maxTokens, (), "an explicit () must not be coerced back to the default");
+
+    readonly & InferenceParams supplied = buildInferenceParams(1234, (), (), (), (), (), ());
+    test:assertEquals(supplied?.maxTokens, 1234);
+}
+
+@test:Config {}
+function testEveryDialectOmitsTheTokenCapWhenItIsUnset() returns error? {
+    readonly & InferenceParams params = {};
+    ResolvedMessage[] msgs = [userText("hi")];
+
+    map<json> converse = <map<json>>check encodeConverse((), msgs, [], (), params);
+    map<json> inferenceConfig = check converse["inferenceConfig"].ensureType();
+    test:assertFalse(inferenceConfig.hasKey("maxTokens"), "Converse");
+
+    map<json> nova = <map<json>>check encodeNovaInvoke((), msgs, [], (), params);
+    map<json> novaConfig = check nova["inferenceConfig"].ensureType();
+    test:assertFalse(novaConfig.hasKey("maxTokens"), "Nova");
+
+    test:assertFalse((<map<json>>check encodeOpenAIChat((), msgs, [], (), params)).hasKey("max_tokens"),
+            "OpenAI chat completions — the dialect this finding is about");
+    test:assertFalse((<map<json>>check encodeInvokeAnthropic((), msgs, [], (), params)).hasKey("max_tokens"),
+            "Invoke-Anthropic");
+    test:assertFalse((<map<json>>check encodeMantleMessages((), msgs, [], (), params)).hasKey("max_tokens"),
+            "Anthropic Messages");
+    test:assertFalse((<map<json>>check encodeMistralChat((), msgs, [], (), params)).hasKey("max_tokens"),
+            "Mistral chat");
+    test:assertFalse((<map<json>>check encodeMistralText((), msgs, [], (), params)).hasKey("max_tokens"),
+            "Mistral text");
+    test:assertFalse((<map<json>>check encodeDeepSeekInvoke((), msgs, [], (), params)).hasKey("max_tokens"),
+            "DeepSeek");
+    test:assertFalse((<map<json>>check encodeResponses((), msgs, [], (), params)).hasKey("max_output_tokens"),
+            "Responses");
+}
+
+@test:Config {}
+function testEveryDialectStillEmitsTheTokenCapWhenItIsSet() returns error? {
+    readonly & InferenceParams params = {maxTokens: 777};
+    ResolvedMessage[] msgs = [userText("hi")];
+
+    map<json> converse = <map<json>>check encodeConverse((), msgs, [], (), params);
+    test:assertEquals((<map<json>>check converse["inferenceConfig"].ensureType())["maxTokens"], 777);
+    test:assertEquals((<map<json>>check encodeOpenAIChat((), msgs, [], (), params))["max_tokens"], 777);
+    test:assertEquals((<map<json>>check encodeInvokeAnthropic((), msgs, [], (), params))["max_tokens"], 777);
+    test:assertEquals((<map<json>>check encodeResponses((), msgs, [], (), params))["max_output_tokens"], 777);
+}
+
+@test:Config {}
+function testSuppressingMaxTokensLeavesTheThinkingBudgetToTheModel() {
+    // With no ceiling on this side there is nothing to compare the budget against, so
+    // the "budgetTokens must be less than maxTokens" check has to stand down rather
+    // than measure against a default the caller declined.
+    test:assertTrue(anthropicParams((), (), {thinking: {mode: ENABLED, budgetTokens: 40000}})
+            is InferenceParams);
+    // The floor still applies — that one is absolute.
+    test:assertTrue(anthropicParams((), (), {thinking: {mode: ENABLED, budgetTokens: 512}}) is ai:Error);
+}

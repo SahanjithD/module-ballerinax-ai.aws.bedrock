@@ -129,7 +129,18 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
         boolean? latencyOptimized, GuardrailConfig? guardrail,
         ThinkingConfig? thinking = (), Effort? effort = (), ReasoningEffort? reasoningEffort = ())
         returns readonly & InferenceParams {
-    InferenceParams params = {maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT};
+    InferenceParams params = {};
+    // `?:` here was a trap: `maxTokens` DEFAULTS to `DEFAULT_MAX_TOKEN_COUNT` on every
+    // `init`, so the only way a caller could ask for it to be omitted was to pass `()`
+    // explicitly — and this line coerced that straight back to the default, making the
+    // field impossible to suppress. That is a hard 400 on models that reject it:
+    // OpenAI deprecated Chat Completions' `max_tokens` in favour of
+    // `max_completion_tokens` and marks it "not compatible with o-series models", and
+    // GPT-6 refuses it outright. Same reasoning as `temperature` below.
+    // https://github.com/openai/openai-openapi/blob/master/openapi.yaml (CreateChatCompletionRequest.max_tokens)
+    if maxTokens is int {
+        params.maxTokens = maxTokens;
+    }
     // No default: an unset temperature stays unset all the way to the wire, so the
     // model applies its own. `?:` here would make it impossible for a caller to
     // OMIT the field, which is a hard 400 on every sampling-deprecated model — see
@@ -527,7 +538,10 @@ isolated function messagesForSpan(string? system, ResolvedMessage[] messages) re
 // the message names the actual mistake instead of surfacing as an opaque
 // ValidationException.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
-isolated function validateThinking(ThinkingConfig thinking, int maxTokens) returns ai:Error? {
+// `maxTokens` is `()` when the caller suppressed the field; there is then no ceiling
+// on this side to compare the budget against, so that one check is skipped and the
+// model enforces its own.
+isolated function validateThinking(ThinkingConfig thinking, int? maxTokens) returns ai:Error? {
     int? budget = thinking?.budgetTokens;
     if thinking.mode != ENABLED {
         if budget is int {
@@ -544,7 +558,7 @@ isolated function validateThinking(ThinkingConfig thinking, int maxTokens) retur
         return error ai:Error(string `'budgetTokens' must be at least ` +
             string `${MIN_THINKING_BUDGET_TOKENS}; got ${budget}.`);
     }
-    if budget >= maxTokens {
+    if maxTokens is int && budget >= maxTokens {
         return error ai:Error(string `'budgetTokens' (${budget}) must be less than 'maxTokens' ` +
             string `(${maxTokens}) — the thinking budget is drawn from the same ceiling.`);
     }

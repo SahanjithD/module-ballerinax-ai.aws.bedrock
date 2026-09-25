@@ -66,7 +66,7 @@ public isolated distinct client class BedrockRuntimeOpenAIModelProvider {
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + api - The API family to call. Defaults to `CONVERSE`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
-    # + maxTokens - Maximum tokens to generate
+    # + maxTokens - Maximum tokens to generate. Pass `()` to omit the field entirely
     # + temperature - Sampling temperature. Unset uses the model's own default
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`

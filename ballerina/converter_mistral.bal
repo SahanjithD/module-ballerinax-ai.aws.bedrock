@@ -52,10 +52,8 @@ isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
         wire.push(mistralChatMessage(m));
     }
 
-    map<json> body = {
-        "messages": wire,
-        "max_tokens": params.maxTokens
-    };
+    map<json> body = {"messages": wire};
+    setMaxTokens(body, params, "max_tokens");
     setTemperature(body, params);
     // AWS's own page is internally inconsistent here: `stop` is absent from the
     // chat-completion parameter list, yet the `stop_reason` description refers to
@@ -202,10 +200,8 @@ isolated function encodeMistralText(string? system, ResolvedMessage[] messages,
             "(the module default) or a chat-completion model such as 'mistral.mistral-large-2407-v1:0'.");
     }
 
-    map<json> body = {
-        "prompt": mistralInstructPrompt(system, messages),
-        "max_tokens": params.maxTokens
-    };
+    map<json> body = {"prompt": mistralInstructPrompt(system, messages)};
+    setMaxTokens(body, params, "max_tokens");
     setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {
