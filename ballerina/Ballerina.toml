@@ -2,7 +2,7 @@
 org = "dasunorg"
 name = "ai.aws.bedrock"
 version = "1.0.0"
-distribution = "2201.13.5"
+distribution = "2201.13.6"
 authors = ["Ballerina"]
 keywords = ["ai", "aws", "bedrock", "llm", "embeddings", "converse", "mantle", "Area/AI & Machine Learning", "Type/Model Provider", "Type/Embedding Provider", "Type/Connector", "Vendor/AWS"]
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.aws.bedrock"
