@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import ballerina/ai;
 import ballerina/test;
 
 // Regressions for defects the live suite found against module 1.0.0 (N1, N2, N3, N9
@@ -153,4 +154,29 @@ function testHaikuCarriesTheDatedRuntimeProfileId() {
     // The model card's Programmatic Access table gives `N/A` as the runtime Model ID
     // and names only the dated ids; the undated one is "model identifier is invalid".
     test:assertEquals(CLAUDE_HAIKU_4_5, "us.anthropic.claude-haiku-4-5-20251001-v1:0");
+}
+
+// --- §3/P45: a connection failure names the host it could not reach ---------------
+
+@test:Config {}
+function testAConnectionFailureNamesTheHostItDialled() returns error? {
+    // A mistyped `customEndpoint` parses fine and then points nowhere, so it surfaces
+    // as a connection error like any other. The HOST is the one fact that tells a
+    // typo apart from a VPCE without private DNS, a dualstack flag on a service with
+    // no dualstack record, and a genuine outage — so it has to be in the message.
+    // `localhost:1` refuses immediately; `maxRetries: 0` keeps the backoff out of it.
+    Endpoint ep = {
+        baseUrl: "http://nowhere.invalid.example:1",
+        host: "nowhere.invalid.example",
+        path: "/model/x/converse",
+        signingService: SIGNING_BEDROCK
+    };
+    BedrockTransport transport = check new (check resolveCredentials(TEST_CREDS), "us-east-1", ep,
+            (), {maxRetries: 0});
+    TransportResponse|ai:Error result = transport.execute({});
+    test:assertTrue(result is ai:Error, "an unreachable host must be an error");
+    if result is ai:Error {
+        test:assertTrue(result.message().includes("nowhere.invalid.example"),
+                "the error must name the host it dialled; got: " + result.message());
+    }
 }
