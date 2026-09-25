@@ -178,3 +178,96 @@ function testTheRuntimeClassIsTheDocumentedWayOutOfThatRefusal() returns error? 
             TOOL_FORCING);
     BedrockRuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION, CONVERSE);
 }
+
+// ---- Models the live suite could only reach as raw id strings ----
+//
+// Each of these worked on `bedrock-runtime` by passing the id as a `string`, but the
+// Mantle classes refused them: a Mantle path is table data, so a missing row is a
+// construction error rather than a wire failure.
+
+@test:Config {}
+function testOpus55AndOpus47AreReachableOnBothEndpoints() returns error? {
+    // Both cards mark bedrock-runtime AND bedrock-mantle supported, with In-Region
+    // unsupported on the runtime side — hence `us.` there and bare here — and the same
+    // id on both endpoints, so neither half rewrites it.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+    map<string> pairs = {
+        [CLAUDE_OPUS_5_5]: MANTLE_CLAUDE_OPUS_5_5,
+        [CLAUDE_OPUS_4_7]: MANTLE_CLAUDE_OPUS_4_7
+    };
+    foreach [string, string] [runtimeId, mantleId] in pairs.entries() {
+        Route runtime = check resolveRuntimeRoute(runtimeId, "us-east-1", CONVERSE);
+        test:assertEquals(runtime.geoPrefix, "us", runtimeId + " needs a CRIS profile on bedrock-runtime");
+        test:assertEquals(runtime.effectiveModelId, runtimeId, "the prefix must survive onto the wire");
+
+        Route mantle = check resolveMantleRoute(mantleId, "us-east-1");
+        test:assertEquals(mantle.api, MESSAGES, mantleId);
+        test:assertEquals(mantle.effectiveModelId, mantleId, "the card lists no separate Mantle id");
+        MantleEntry entry = check mantle.mantleEntry.ensureType();
+        test:assertEquals(check mantlePathFor(entry.basePath, mantle.api), "/anthropic/v1/messages");
+    }
+}
+
+@test:Config {}
+function testBothFableIdsAreReachableOnBothEndpoints() returns error? {
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    map<string> pairs = {
+        [CLAUDE_FABLE_5]: MANTLE_CLAUDE_FABLE_5,
+        [CLAUDE_FABLE_5_1]: MANTLE_CLAUDE_FABLE_5_1
+    };
+    foreach [string, string] [runtimeId, mantleId] in pairs.entries() {
+        Route runtime = check resolveRuntimeRoute(runtimeId, "us-east-1", CONVERSE);
+        test:assertEquals(runtime.geoPrefix, "us", runtimeId);
+        Route mantle = check resolveMantleRoute(mantleId, "us-east-1");
+        test:assertEquals(mantle.api, MESSAGES, mantleId);
+        test:assertEquals(mantle.effectiveModelId, mantleId, mantleId);
+    }
+}
+
+@test:Config {}
+function testOnlyFable51InheritsOpus55sForcedToolRefusal() {
+    // Anthropic scopes the restriction to Opus 5.5 and Fable 5.1 ("The first three
+    // also apply on Claude Fable 5.1"). Fable 5 is NOT in that set, so it must not be
+    // swept up with its own successor.
+    // https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5
+    test:assertTrue(refusesForcedToolChoice(CLAUDE_OPUS_5_5));
+    test:assertTrue(refusesForcedToolChoice(MANTLE_CLAUDE_OPUS_5_5));
+    test:assertTrue(refusesForcedToolChoice(CLAUDE_FABLE_5_1));
+    test:assertFalse(refusesForcedToolChoice(CLAUDE_FABLE_5));
+    test:assertFalse(refusesForcedToolChoice(CLAUDE_OPUS_4_7));
+}
+
+@test:Config {}
+function testTheGpt6FamilyIsCrisPrefixedOnRuntimeAndBareOnMantle() returns error? {
+    // "You cannot use the base model ID for in-Region calls on this endpoint" —
+    // the runtime ids MUST carry a profile prefix, and Mantle takes none.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    map<string> pairs = {
+        [GPT_6_ASTRA]: MANTLE_GPT_6_ASTRA,
+        [GPT_6_SOL]: MANTLE_GPT_6_SOL,
+        [GPT_6_LUNA]: MANTLE_GPT_6_LUNA
+    };
+    foreach [string, string] [runtimeId, mantleId] in pairs.entries() {
+        Route runtime = check resolveRuntimeRoute(runtimeId, "us-east-1", RESPONSES);
+        test:assertEquals(runtime.geoPrefix, "us", runtimeId);
+        test:assertEquals(runtime.effectiveModelId, runtimeId);
+
+        Route mantle = check resolveMantleRoute(mantleId, "us-east-1");
+        test:assertEquals(mantle.effectiveModelId, mantleId, "the id is the same on both endpoints");
+        MantleEntry entry = check mantle.mantleEntry.ensureType();
+        // `/openai/v1`, not `/v1` — the cards say so outright, and gpt-oss next door
+        // says the opposite, which is why this is table data at all.
+        test:assertEquals(entry.basePath, "/openai/v1", mantleId);
+        test:assertEquals(mantle.api, RESPONSES, "Responses is the card's first-listed API");
+        test:assertEquals(check mantlePathFor(entry.basePath, mantle.api), "/openai/v1/responses");
+    }
+}
+
+@test:Config {}
+function testTheGpt6RuntimeIdsAreRefusedOnTheMantleClass() {
+    // The runtime ids carry `us.`, and Mantle has no cross-region inference at all.
+    test:assertTrue(resolveMantleRoute(GPT_6_SOL, "us-east-1") is error);
+    test:assertTrue(resolveMantleRoute(CLAUDE_OPUS_5_5, "us-east-1") is error);
+}

@@ -31,9 +31,17 @@ import ballerinax/aws;
 # matches the error users actually hit.)
 # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
 public enum AnthropicRuntimeModel {
+    # Claude Opus 5.5 — 1M context, adaptive thinking always on. Refuses a FORCED
+    # tool choice, so `generate()` can only return `string` on it.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+    CLAUDE_OPUS_5_5 = "us.anthropic.claude-opus-5-5",
     # Claude Opus 5 — 1M context, adaptive thinking on by default.
     CLAUDE_OPUS_5 = "us.anthropic.claude-opus-5",
     CLAUDE_OPUS_4_8 = "us.anthropic.claude-opus-4-8",
+    # Adaptive-only: `thinking.type = "enabled"` with a manual budget is a 400, and
+    # `temperature`/`top_p`/`top_k` are not supported from this model onwards.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+    CLAUDE_OPUS_4_7 = "us.anthropic.claude-opus-4-7",
     # Claude Sonnet 5 — 1M context, adaptive thinking always on.
     CLAUDE_SONNET_5 = "us.anthropic.claude-sonnet-5",
     CLAUDE_SONNET_4_6 = "us.anthropic.claude-sonnet-4-6",
@@ -42,7 +50,17 @@ public enum AnthropicRuntimeModel {
     # `us.|eu.|au.|jp.|global.anthropic.claude-haiku-4-5-20251001-v1:0`; the undated
     # id is refused with "The provided model identifier is invalid".
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
-    CLAUDE_HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    CLAUDE_HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    # Mythos-class. REQUIRES an account-level opt-in: the card says you must set the
+    # data retention mode to `aws_review` via the Data Retention API before any call
+    # succeeds.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    CLAUDE_FABLE_5 = "us.anthropic.claude-fable-5",
+    # Same opt-in as Fable 5, and it inherits Opus 5.5's restrictions: thinking cannot
+    # be disabled, and a FORCED tool choice is refused — so `generate()` can only
+    # return `string` on it.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    CLAUDE_FABLE_5_1 = "us.anthropic.claude-fable-5-1"
 }
 
 # Configuration for `BedrockRuntimeAnthropicModelProvider`.

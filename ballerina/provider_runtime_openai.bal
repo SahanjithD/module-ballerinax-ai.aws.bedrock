@@ -32,7 +32,21 @@ public enum OpenAIRuntimeModel {
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html
-    GPT_OSS_20B = "openai.gpt-oss-20b-1:0"
+    GPT_OSS_20B = "openai.gpt-oss-20b-1:0",
+    # The GPT-6 family. CRIS-PREFIXED, unlike the GPT OSS ids above: each card's
+    # Programmatic Access table gives "Not supported" for the In-Region endpoint URL
+    # and says in as many words "You cannot use the base model ID for in-Region calls
+    # on this endpoint", listing `us.`/`global.` as the way in. These serve Responses,
+    # Chat Completions and Converse here — but NOT Invoke.
+    #
+    # They also refuse the Chat Completions `max_tokens` parameter, which this module
+    # emits by default: pass `maxTokens = ()` to omit it.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    GPT_6_ASTRA = "us.openai.gpt-6-astra",
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    GPT_6_SOL = "us.openai.gpt-6-sol",
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+    GPT_6_LUNA = "us.openai.gpt-6-luna"
 }
 
 # Configuration for `BedrockRuntimeOpenAIModelProvider`.

@@ -20,16 +20,26 @@ import ballerinax/aws;
 # Claude model ids for `bedrock-mantle`, in their BARE form — Mantle takes no
 # cross-region prefix, because it has no cross-region inference.
 #
-# All four are dual-homed (also on `bedrock-runtime`). Prefer the runtime class
+# All of them are dual-homed (also on `bedrock-runtime`). Prefer the runtime class
 # unless you need something only Mantle has: guardrails, cross-region inference and
 # structured output are all runtime-only, and `generate()` with a typed target
 # returns an error here.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
 public enum AnthropicMantleModel {
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+    MANTLE_CLAUDE_OPUS_5_5 = "anthropic.claude-opus-5-5",
     MANTLE_CLAUDE_OPUS_5 = "anthropic.claude-opus-5",
     MANTLE_CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+    MANTLE_CLAUDE_OPUS_4_7 = "anthropic.claude-opus-4-7",
     MANTLE_CLAUDE_SONNET_5 = "anthropic.claude-sonnet-5",
-    MANTLE_CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5"
+    MANTLE_CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
+    # Both Fable ids need an account-level data-retention opt-in (`aws_review`) before
+    # any call succeeds — see the model cards.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    MANTLE_CLAUDE_FABLE_5 = "anthropic.claude-fable-5",
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    MANTLE_CLAUDE_FABLE_5_1 = "anthropic.claude-fable-5-1"
 }
 
 # Configuration for `BedrockMantleAnthropicModelProvider`.

@@ -226,6 +226,17 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 > tool-calling at all. That only bites when you pass `api = INVOKE` for those ids — the default Converse
 > shape supports typed generation for every Mistral model.
 
+> **Two models refuse a forced tool choice, so `generate()` can only return `string` on them.**
+> `CLAUDE_OPUS_5_5` and `CLAUDE_FABLE_5_1` (and their `MANTLE_` twins) reject `tool_choice` of type
+> `tool` or `any` with a 400 — Anthropic documents it as a breaking change — and forcing a single result
+> tool is exactly how this module obtains a typed value. The module detects those ids before any network
+> call and returns an `ai:Error` naming the model and the cause, rather than relaying a 400 about
+> `toolChoice` that says nothing about the `generate()` you actually wrote. `chat()` with tools is
+> unaffected: the tools are still offered, just not forced. Use `CLAUDE_OPUS_5` or `CLAUDE_SONNET_5` for
+> typed generation, or call `chat()` and parse the reply yourself.
+> Detection is by model id, so it cannot fire for a provisioned-model or inference-profile ARN, which
+> hides the id — AWS answers for those.
+
 ### Step 5: Generate embeddings
 
 ```ballerina
