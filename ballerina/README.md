@@ -950,6 +950,30 @@ everything.
 > so expect `deleteByFilter` to under-delete and report rather than to complete silently.
 
 
+### `httpConfig.timeout` does not bound connection setup
+
+`http:ClientConfiguration.timeout` is a *response* deadline — Ballerina documents it as "Maximum time
+(in seconds) to wait for a response before the request times out" — and it is armed only once the
+request has been written. DNS resolution, the TCP connect and the TLS handshake all happen before that,
+bounded instead by `httpConfig.socketConfig.connectTimeOut`, which defaults to **15 seconds**. So a very
+small `timeout` will not fire quickly on a cold connection; it fires quickly on a warm one.
+
+Measured against `bedrock-runtime.us-east-1.amazonaws.com` with `timeout: 0.001`:
+
+| Setup | Time to the error |
+| --- | --- |
+| Cold pool, `maxRetries: 0` | ~1.3 s (DNS + TCP + TLS, none of it under `timeout`) |
+| Cold pool, module-default retries | ~7.1 s — the 1 + 2 + 4 s backoff, not the deadline |
+| Cold pool, `socketConfig: {connectTimeOut: 0.001}` as well | ~8 ms |
+| Warm pool, connection reused | ~4 ms |
+
+Two consequences worth knowing. **Set `connectTimeOut` too** if you want a tight overall deadline — the
+response timeout alone cannot give you one. And **a timeout is retryable**: it is a transport failure,
+so this module's `retryConfig` retries it with exponential backoff, which multiplies the wall-clock
+wait. Set `retryConfig = {maxRetries: 0}` when you are measuring the deadline itself. Credential
+resolution adds its own one-off cost to the *first* provider you construct (~0.7 s while the AWS
+credential chain is walked), which is charged to `init`, not to the call.
+
 ## Guardrails
 
 | Route | Mechanism |
