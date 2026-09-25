@@ -35,10 +35,8 @@ isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
         wire.push(openAIMessage(m));
     }
 
-    map<json> body = {
-        "messages": wire,
-        "max_tokens": params.maxTokens
-    };
+    map<json> body = {"messages": wire};
+    setMaxTokens(body, params, "max_tokens");
     setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {

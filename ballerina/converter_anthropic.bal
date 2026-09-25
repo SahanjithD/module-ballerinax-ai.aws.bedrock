@@ -41,10 +41,8 @@ isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] mess
     foreach ResolvedMessage m in messages {
         wire.push(anthropicMessage(m));
     }
-    map<json> body = {
-        "max_tokens": params.maxTokens,
-        "messages": wire
-    };
+    map<json> body = {"messages": wire};
+    setMaxTokens(body, params, "max_tokens");
     setTemperature(body, params);
     if bedrockInvoke {
         // REQUIRED for Invoke-Anthropic; LiteLLM injects the same default.

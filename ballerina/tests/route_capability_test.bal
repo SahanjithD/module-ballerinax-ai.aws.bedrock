@@ -31,7 +31,7 @@ function openAIParams(int maxTokens, decimal? temperature, OpenAIRuntimeConfig c
             config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
             config?.guardrail, (), (), config?.reasoningEffort);
 
-function anthropicParams(int maxTokens, decimal? temperature, AnthropicRuntimeConfig config)
+function anthropicParams(int? maxTokens, decimal? temperature, AnthropicRuntimeConfig config)
         returns readonly & InferenceParams|ai:Error {
     ThinkingConfig? thinking = config?.thinking;
     if thinking is ThinkingConfig {

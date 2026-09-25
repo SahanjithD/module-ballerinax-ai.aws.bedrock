@@ -147,8 +147,10 @@ type InferenceParams record {|
     # Sampling temperature. OPTIONAL: when unset the field is omitted from the
     # request body entirely and the model's own default applies.
     decimal temperature?;
-    # Maximum tokens to generate.
-    int maxTokens;
+    # Maximum tokens to generate. OPTIONAL, exactly like `temperature` above: when
+    # unset the field is omitted from the request body entirely and the model's own
+    # cap applies.
+    int maxTokens?;
     # Provider-level stop sequences; a per-call `stop` overrides these.
     string[] stopSequences?;
     # Converse `additionalModelRequestFields` passthrough.

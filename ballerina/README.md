@@ -500,6 +500,14 @@ Worth knowing before you upgrade:
 tokens — and on adaptive-thinking models the thinking pass is billed against the same ceiling, so raise
 it for long reasoning tasks.
 
+> **Pass `maxTokens = ()` to drop the field entirely.** Some models reject a token cap rather than
+> honouring it: OpenAI deprecated the Chat Completions `max_tokens` parameter in favour of
+> `max_completion_tokens` and marks it *"not compatible with o-series models"*, and the GPT-6 models
+> refuse it. An explicit `()` now means *omit it*, on every dialect, the same way an unset `temperature`
+> does — before this it was silently coerced back to 4096, which made those models unreachable. If you
+> still want a cap on such a model, send the parameter it does accept through the passthrough:
+> `additionalModelRequestFields = {"max_completion_tokens": 4096}`.
+
 ## Vendor dialects
 
 ### Mistral speaks two InvokeModel dialects

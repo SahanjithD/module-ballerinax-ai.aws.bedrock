@@ -46,7 +46,8 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
             "Converse/Invoke model.");
     }
 
-    map<json> body = {"input": input, "max_output_tokens": params.maxTokens};
+    map<json> body = {"input": input};
+    setMaxTokens(body, params, "max_output_tokens");
     setTemperature(body, params);
     if system is string {
         body["instructions"] = system; // system → instructions
