@@ -142,3 +142,36 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
 // Converse is model-agnostic — one converter serves every vendor — so a runtime
 // class accepts any id and an unknown one simply goes on the wire. Mantle needs a
 // table only because a Mantle request path is not derivable from a model id.
+
+// Models that REFUSE a forced tool choice. `generate()` obtains a typed result by
+// forcing a single result tool (`generateByToolForcing`), so on these models that
+// mechanism is a hard 400 and the module reports it up front instead of relaying
+// whatever AWS says about `toolChoice`.
+//
+// Anthropic states it for Claude Opus 5.5 and, in the same breath, for Claude Fable
+// 5.1 ("The first three also apply on Claude Fable 5.1"):
+//
+//   Claude Opus 5.5 doesn't support forced tool use. `tool_choice` set to
+//   {"type": "any"} or {"type": "tool", "name": "..."} returns a 400
+//   invalid_request_error: tool_choice: type "tool" and "any" are not supported for
+//   this model.
+//
+// It binds every dialect this module speaks for those models, not just the native
+// Messages one: Converse's `toolConfig.toolChoice` and the OpenAI-compatible
+// `tool_choice` both land on the same validator.
+// https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5
+//
+// Keyed on the BARE id (no CRIS prefix), which is the form both endpoints agree on.
+// An opaque ARN — a provisioned model or an inference profile — hides the model id,
+// so those cannot be matched here and AWS answers for them instead.
+final readonly & string[] FORCED_TOOL_UNSUPPORTED = [
+    "anthropic.claude-opus-5-5",
+    "anthropic.claude-fable-5-1"
+];
+
+// Whether a model refuses a forced tool choice. Takes the wire id, so a CRIS-prefixed
+// `us.anthropic.claude-opus-5-5` is recognised as readily as the bare Mantle id.
+isolated function refusesForcedToolChoice(string wireModelId) returns boolean {
+    [string, string?] [bareId, _] = normalizeModelId(wireModelId);
+    return FORCED_TOOL_UNSUPPORTED.indexOf(bareId) is int;
+}

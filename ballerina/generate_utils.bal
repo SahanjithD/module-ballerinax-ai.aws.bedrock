@@ -51,6 +51,18 @@ isolated function structuredGenerate(StructuredOutputStyle structuredOutput, Api
             return generateByOutputConfig(api, converter, transport, wireModelId, extraHeaders,
                     params, prompt, td);
         }
+        TOOL_FORCING if refusesForcedToolChoice(wireModelId) => {
+            // Named up front rather than relayed as a raw 400. Tool forcing is the
+            // mechanism, not the goal, so "toolChoice is invalid" tells the caller
+            // nothing about the generate() call they actually made — see
+            // `FORCED_TOOL_UNSUPPORTED` for the models and the source.
+            return error ai:LlmInvalidGenerationError(
+                string `Model '${wireModelId}' does not support forced tool use, which is how ` +
+                string `this module obtains a typed result, so generate() can only return ` +
+                string `'string' on it. Use a model that accepts a forced tool choice — ` +
+                string `Claude Opus 5 and Claude Sonnet 5 both do — or call chat() and parse ` +
+                string `the reply yourself.`);
+        }
         TOOL_FORCING => {
             return generateByToolForcing(api, converter, transport, wireModelId, extraHeaders,
                     params, prompt, td);
@@ -106,11 +118,12 @@ isolated function wireSchemaFor(typedesc<anydata> td) returns [map<json>, boolea
 // Binds the model's JSON to the target type, unwrapping the synthetic object first.
 // A model that ignores the wrapper and answers with the bare value still binds — the
 // wrapper is this module's device, not something the caller asked for.
-isolated function bindResult(json data, boolean wrapped, typedesc<anydata> td) returns anydata|ai:Error {
+isolated function bindResult(json data, boolean wrapped, typedesc<anydata> td, string origin)
+        returns anydata|ai:Error {
     if wrapped && data is map<json> && data.hasKey(RESULT_WRAPPER_KEY) {
-        return bindJson(data[RESULT_WRAPPER_KEY], td);
+        return bindJson(data[RESULT_WRAPPER_KEY], td, origin);
     }
-    return bindJson(data, td);
+    return bindJson(data, td, origin);
 }
 
 // Plain-text generation when the target type is `string`. Serves every route.
@@ -177,14 +190,17 @@ isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter
     }
     ai:FunctionCall[]? toolCalls = decoded.message.toolCalls;
     if toolCalls is ai:FunctionCall[] && toolCalls.length() > 0 {
-        return bindResult(toolCalls[0].arguments ?: {}, wrapped, td);
+        return bindResult(toolCalls[0].arguments ?: {}, wrapped, td,
+                string `the arguments of the '${RESULT_TOOL}' tool call`);
     }
     // Fallback: some models emit the JSON in the text content instead.
     string? content = decoded.message.content;
     if content is string {
         json|error parsed = extractJson(content);
         if parsed !is error {
-            return bindResult(parsed, wrapped, td);
+            return bindResult(parsed, wrapped, td,
+                    string `the JSON found in the reply text (the model answered in text instead ` +
+                    string `of calling the '${RESULT_TOOL}' tool)`);
         }
     }
     return error ai:LlmInvalidGenerationError(
@@ -229,14 +245,33 @@ isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolN
 }
 
 // Binds a JSON value to the expected type.
-isolated function bindJson(json data, typedesc<anydata> td) returns anydata|ai:Error {
+//
+// `origin` names WHERE the JSON came from, and the message carries the JSON itself.
+// Both are load-bearing: this failure has three sources that look identical from the
+// outside — a forced tool call whose arguments do not match the schema, a model that
+// ignored the tool and put JSON in its text, and a schema-constrained response the
+// model answered off-schema anyway — and the bare "failed to bind" told the caller
+// none of that. The `fromJsonWithType` cause names the offending FIELD; only the
+// value shows what the model actually sent.
+isolated function bindJson(json data, typedesc<anydata> td, string origin) returns anydata|ai:Error {
     anydata|error bound = data.fromJsonWithType(td);
     if bound is error {
         return error ai:LlmInvalidGenerationError(
-            "Failed to bind the model response to the expected type", bound);
+            string `Failed to bind ${origin} to the expected type '${td.toString()}': ` +
+            string `${truncateForMessage(data.toJsonString())}`, bound);
     }
     return bound;
 }
+
+// Bound on how much model output an error message carries. Long enough to show the
+// shape that failed to bind, short enough not to paste a whole response into a log.
+const int MAX_ERROR_JSON_LENGTH = 512;
+
+// Truncates a value for inclusion in an error message, marking that it was cut.
+isolated function truncateForMessage(string value) returns string
+    => value.length() <= MAX_ERROR_JSON_LENGTH
+        ? value
+        : value.substring(0, MAX_ERROR_JSON_LENGTH) + "… (truncated)";
 
 // Best-effort JSON extraction from model text (handles code fences and prose).
 // Returns an `error` sentinel when no JSON is found (`()` cannot signal absence —
@@ -340,5 +375,5 @@ isolated function generateByOutputConfig(ApiFamily api, readonly & ModelConverte
             string `Model '${wireModelId}' returned text that is not valid JSON despite a ` +
             string `schema-constrained request`, parsed);
     }
-    return bindResult(parsed, wrapped, td);
+    return bindResult(parsed, wrapped, td, "the schema-constrained response text");
 }
