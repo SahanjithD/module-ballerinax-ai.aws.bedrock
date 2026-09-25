@@ -537,6 +537,19 @@ the split entirely.
 
 **Converse (the default) hides all of this** — the split only matters when you pass `api = INVOKE`.
 
+> **`MISTRAL_LARGE_2407` is `us-west-2` only.** It is the one id in these enums whose availability is a
+> single region: AWS's
+> [regional-availability page](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html)
+> lists exactly one row for it, `us-west-2` In-Region, with no Geo or Global profile. Anywhere else the
+> endpoint answers `The provided model identifier is invalid`, which reads like a wrong id rather than a
+> wrong region. `MISTRAL_LARGE_3` is available far more widely.
+
+> **`The provided model identifier is invalid` is not always about the id.** AWS uses that message for
+> a model your account has not been granted access to as well as for one that does not exist in the
+> region. If a documented id fails in a region its model card lists — `QWEN3_CODER_480B` in `us-east-1`,
+> say — check **Model access** in the Bedrock console before suspecting the id. Access is per endpoint,
+> so the Mantle class can work while the runtime class does not.
+
 ### DeepSeek does too
 
 Same story, split by generation rather than by date:
