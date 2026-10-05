@@ -28,7 +28,8 @@ import ballerinax/aws;
 # and `bedrock:IngestKnowledgeBaseDocuments` on the caller's credentials, and the
 # knowledge base's own `roleArn` needs permissions on the vector store itself.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
-public distinct isolated client class BedrockVectorKnowledgeBase {
+@display {label: "Bedrock Vector Knowledge Base"}
+public distinct isolated client class VectorKnowledgeBase {
     *ai:KnowledgeBase;
 
     private final BedrockTransport controlTransport;

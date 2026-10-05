@@ -139,7 +139,7 @@ function testIngestBatchesInGroupsOfTenAndSucceedsWhenAllIndex() returns error? 
     check mockListener.attach(new IngestRetrieveMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase kb = check new (
+    ManagedKnowledgeBase kb = check new (
         ING_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = ING_DS_ID);
@@ -166,7 +166,7 @@ function testIngestReportsAFailedDocumentByIdAndReason() returns error? {
     check mockListener.attach(new IngestRetrieveMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase kb = check new (
+    ManagedKnowledgeBase kb = check new (
         ING_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = ING_DS_ID);
@@ -192,7 +192,7 @@ function testRetrievePaginatesAndMapsResultsInOrder() returns error? {
     check mockListener.attach(new IngestRetrieveMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase kb = check new (
+    ManagedKnowledgeBase kb = check new (
         ING_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = ING_DS_ID,

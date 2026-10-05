@@ -16,7 +16,7 @@ import ballerina/ai;
 import ballerina/http;
 import ballerinax/aws.auth;
 
-// Public surface for `BedrockManagedKnowledgeBase`: configuration, the
+// Public surface for `ManagedKnowledgeBase`: configuration, the
 // find-or-create definition, and the chunking-strategy enum. See
 // knowledgebase_common.bal for the resolution spine and knowledgebase_managed.bal
 // for the public class.
@@ -104,7 +104,7 @@ public type KnowledgeBaseDefinition record {|
     decimal readyTimeout = 300;
 |};
 
-# Configuration for `BedrockManagedKnowledgeBase`.
+# Configuration for `ManagedKnowledgeBase`.
 public type ManagedKnowledgeBaseConfig record {|
     # The `CUSTOM` data source to ingest into / delete from. Resolved automatically
     # when omitted, which requires exactly one `CUSTOM` data source on the knowledge

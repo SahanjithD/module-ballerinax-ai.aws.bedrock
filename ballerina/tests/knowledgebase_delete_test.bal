@@ -237,7 +237,7 @@ function testDeleteByFilterDeletesMatchesAndReportsEveryUnconfirmedCandidate() r
     check mockListener.attach(new DeleteTestMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase kb = check new (
+    ManagedKnowledgeBase kb = check new (
         DEL_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`},
         dataSourceId = DEL_DS_CUSTOM);

@@ -53,8 +53,8 @@ class because AWS serves no Amazon model on that endpoint.
 
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider` (InvokeModel on `bedrock-runtime`).
 
-**Knowledge base** — `BedrockManagedKnowledgeBase` (Bedrock owns the vector store) and
-`BedrockVectorKnowledgeBase` (you own it), both implementing `ai:KnowledgeBase`. See
+**Knowledge base** — `ManagedKnowledgeBase` (Bedrock owns the vector store) and
+`VectorKnowledgeBase` (you own it), both implementing `ai:KnowledgeBase`. See
 [Knowledge bases](#knowledge-bases) and [Self-managed knowledge bases](#self-managed-knowledge-bases).
 
 A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Every
@@ -188,7 +188,7 @@ final ai:ModelProvider claude =
 > **Knowledge bases do NOT accept Bedrock API keys.** AWS states API keys "are limited to Amazon
 > Bedrock and Amazon Bedrock Runtime actions" and cannot be used with *"Agents for Amazon Bedrock or
 > Agents for Amazon Bedrock Runtime API operations"* — and both knowledge base planes
-> (`bedrock-agent`, `bedrock-agent-runtime`) are exactly those. `BedrockManagedKnowledgeBase`
+> (`bedrock-agent`, `bedrock-agent-runtime`) are exactly those. `ManagedKnowledgeBase`
 > therefore takes `KnowledgeBaseCredentials` (SigV4 only), so a bearer token is rejected at
 > **compile time** rather than becoming an opaque runtime 403.
 
@@ -564,14 +564,14 @@ pass `api = INVOKE` — Converse and the vendor-native shapes are unaffected.
 
 ## Knowledge bases
 
-`BedrockManagedKnowledgeBase` implements `ai:KnowledgeBase` against a Bedrock **managed** knowledge
+`ManagedKnowledgeBase` implements `ai:KnowledgeBase` against a Bedrock **managed** knowledge
 base (`KnowledgeBaseConfiguration.type = MANAGED` — Bedrock owns the vector store; there is nothing
 to provision). It spans two additional endpoints beyond the chat/embedding surface —
 `bedrock-agent.{region}.amazonaws.com` (control: create/list/get/ingest/delete) and
 `bedrock-agent-runtime.{region}.amazonaws.com` (data: retrieve) — both signing as SigV4 service
 `bedrock`, same as Converse/InvokeModel.
 
-`BedrockVectorKnowledgeBase` implements the same interface against a **self-managed** knowledge base
+`VectorKnowledgeBase` implements the same interface against a **self-managed** knowledge base
 (`KnowledgeBaseConfiguration.type = VECTOR` — a vector store you provision and own), which is the
 console's *Self-managed KB → Unstructured Vector Store KB*. Both classes use the same two endpoints
 and the same signing scope; see [Self-managed knowledge bases](#self-managed-knowledge-bases) below
@@ -584,7 +584,7 @@ own native connectors (S3, SharePoint, Confluence, Google Drive, OneDrive, Web C
 sync schedule:
 
 ```ballerina
-ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase("GKICZMNWRG", creds, "us-east-1");
+ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase("GKICZMNWRG", creds, "us-east-1");
 ai:QueryMatch[] matches = check kb->retrieve("What is our refund policy?", 5);
 ```
 
@@ -597,7 +597,7 @@ find-or-create path below.
 base and a `CUSTOM` data source, and every document flows through `ingest()`:
 
 ```ballerina
-ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase(
+ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase(
     {
         name: "support-docs",
         roleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb-execution-role"
@@ -668,7 +668,7 @@ when this class creates one) means Bedrock chunks server-side — pass `chunking
 `KnowledgeBaseDefinition.dataSource` to chunk client-side with an `ai:Chunker` instead:
 
 ```ballerina
-ai:KnowledgeBase kb = check new bedrock:BedrockManagedKnowledgeBase(
+ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase(
     {
         name: "support-docs",
         roleArn: "arn:...:role/service-role/bedrock-kb-execution-role",
@@ -827,7 +827,7 @@ AWS documents this directly: *"This API cannot be used with managed knowledge ba
 
 ## Self-managed knowledge bases
 
-`BedrockVectorKnowledgeBase` is the sibling of `BedrockManagedKnowledgeBase` for
+`VectorKnowledgeBase` is the sibling of `ManagedKnowledgeBase` for
 `KnowledgeBaseConfiguration.type = VECTOR`. Same three methods, same two endpoints, same SigV4 scope.
 Use it when you want control over indexing and ranking; use the managed class when you do not want to
 run a vector store.
@@ -836,13 +836,13 @@ run a vector store.
 import ballerinax/ai.aws.bedrock;
 
 // Attach to a knowledge base that already exists.
-final bedrock:BedrockVectorKnowledgeBase kb = check new ("KB1234ABCD");
+final bedrock:VectorKnowledgeBase kb = check new ("KB1234ABCD");
 ```
 
 ```ballerina
 // Or create the knowledge base and its CUSTOM data source from Ballerina.
 // The VECTOR STORE ITSELF MUST ALREADY EXIST — see the callout below.
-final bedrock:BedrockVectorKnowledgeBase kb = check new ({
+final bedrock:VectorKnowledgeBase kb = check new ({
     name: "support-articles",
     roleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
     embeddingModelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
@@ -873,7 +873,7 @@ Eight backends are supported, one record each: `OpenSearchServerlessStorage`,
 
 ### What differs from the managed class
 
-| | `BedrockManagedKnowledgeBase` | `BedrockVectorKnowledgeBase` |
+| | `ManagedKnowledgeBase` | `VectorKnowledgeBase` |
 |---|---|---|
 | Vector store | Bedrock's, nothing to provision | Yours, must pre-exist |
 | Embedding model | Optional (service-managed by default) | **Required** — `embeddingModelArn` |
