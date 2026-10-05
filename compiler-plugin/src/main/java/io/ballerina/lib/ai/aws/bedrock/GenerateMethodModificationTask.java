@@ -103,20 +103,20 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     // loses generate() type binding at every call site, with no compile error — so
     // this must be updated in lockstep whenever a provider class is added or renamed.
     private static final String[] MODEL_PROVIDER_CLASS_NAMES = {
-            "BedrockCommonModelProvider",
-            "BedrockRuntimeAnthropicModelProvider",
-            "BedrockRuntimeOpenAIModelProvider",
-            "BedrockRuntimeAmazonModelProvider",
-            "BedrockRuntimeMistralModelProvider",
-            "BedrockRuntimeQwenModelProvider",
-            "BedrockRuntimeGoogleModelProvider",
-            "BedrockRuntimeDeepSeekModelProvider",
-            "BedrockMantleAnthropicModelProvider",
-            "BedrockMantleOpenAIModelProvider",
-            "BedrockMantleMistralModelProvider",
-            "BedrockMantleQwenModelProvider",
-            "BedrockMantleGoogleModelProvider",
-            "BedrockMantleDeepSeekModelProvider"
+            "CommonModelProvider",
+            "RuntimeAnthropicModelProvider",
+            "RuntimeOpenAIModelProvider",
+            "RuntimeAmazonModelProvider",
+            "RuntimeMistralModelProvider",
+            "RuntimeQwenModelProvider",
+            "RuntimeGoogleModelProvider",
+            "RuntimeDeepSeekModelProvider",
+            "MantleAnthropicModelProvider",
+            "MantleOpenAIModelProvider",
+            "MantleMistralModelProvider",
+            "MantleQwenModelProvider",
+            "MantleGoogleModelProvider",
+            "MantleDeepSeekModelProvider"
     };
 
     private final AiAwsBedrockCodeModifier.AnalysisData analysisData;

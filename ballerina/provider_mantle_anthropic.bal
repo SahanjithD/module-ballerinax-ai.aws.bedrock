@@ -42,7 +42,7 @@ public enum AnthropicMantleModel {
     MANTLE_CLAUDE_FABLE_5_1 = "anthropic.claude-fable-5-1"
 }
 
-# Configuration for `BedrockMantleAnthropicModelProvider`.
+# Configuration for `MantleAnthropicModelProvider`.
 public type AnthropicMantleConfig record {|
     *CommonMantleConfig;
 
@@ -61,7 +61,8 @@ public type AnthropicMantleConfig record {|
 # SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
 # No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockMantleAnthropicModelProvider {
+@display {label: "Bedrock Mantle Anthropic Model Provider"}
+public isolated distinct client class MantleAnthropicModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -91,7 +92,7 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockMantleAnthropicModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("MantleAnthropicModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
         self.api = route.api;
@@ -108,7 +109,7 @@ public isolated distinct client class BedrockMantleAnthropicModelProvider {
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (),
                 (), thinking, config?.effort);
-        check validateParamsForRoute("BedrockMantleAnthropicModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("MantleAnthropicModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();

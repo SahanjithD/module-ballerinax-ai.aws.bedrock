@@ -179,7 +179,7 @@ function testLatencyOptimizedOnAShapeThatCannotCarryItIsRefusedAtConstruction() 
     // The Anthropic Messages shape has no Bedrock request-option headers and no
     // body field for this. Previously the equivalent route constructed fine,
     // returned an ordinary 200, and did nothing.
-    BedrockRuntimeAnthropicModelProvider|ai:Error provider = new (
+    RuntimeAnthropicModelProvider|ai:Error provider = new (
             "anthropic.claude-opus-5", TEST_CREDS, "us-east-1", MESSAGES, latencyOptimized = true);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -194,7 +194,7 @@ function testServiceTierOnAShapeThatCannotCarryItIsRefusedAtConstruction() {
     // tier to A/B against. It needs no live model: the vendor-native shapes have no
     // mechanism at all, and their own `service_tier` field uses the VENDOR's value
     // vocabulary rather than Bedrock's — a mapping this module will not guess.
-    BedrockRuntimeOpenAIModelProvider|ai:Error provider = new (
+    RuntimeOpenAIModelProvider|ai:Error provider = new (
             GPT_OSS_120B, TEST_CREDS, "us-east-1", CHAT_COMPLETIONS, serviceTier = TIER_FLEX);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -210,10 +210,10 @@ function testServiceTierOnAShapeThatCannotCarryItIsRefusedAtConstruction() {
 function testTheSameFieldsAreAcceptedOnAShapeThatCarriesThem() returns error? {
     // The refusal is about the SHAPE, not the field, so naming a shape that carries
     // it must lift it — otherwise the guard is just a smaller cage.
-    BedrockRuntimeAnthropicModelProvider _ = check new (
+    RuntimeAnthropicModelProvider _ = check new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,
             serviceTier = TIER_FLEX, latencyOptimized = true);
-    BedrockRuntimeAnthropicModelProvider _ = check new (
+    RuntimeAnthropicModelProvider _ = check new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", INVOKE,
             serviceTier = TIER_FLEX, latencyOptimized = true);
 }
@@ -222,7 +222,7 @@ function testTheSameFieldsAreAcceptedOnAShapeThatCarriesThem() returns error? {
 function testExplicitlyDisablingLatencyOptimizationIsNotRefusedAnywhere() returns error? {
     // `false` asks for `standard`, which is what an unset flag already produces on
     // every route. Refusing it would reject a call asking for what it will get.
-    BedrockRuntimeAnthropicModelProvider _ = check new (
+    RuntimeAnthropicModelProvider _ = check new (
             "anthropic.claude-opus-5", TEST_CREDS, "us-east-1", MESSAGES, latencyOptimized = false);
 }
 
@@ -234,7 +234,7 @@ function testExplicitlyDisablingLatencyOptimizationIsNotRefusedAnywhere() return
 function testConfiguredStopSequencesAreRefusedOnTheResponsesDialect() {
     // The Responses API has no stop-sequence parameter. The encoder already refused a
     // per-call `stop`; a CONFIGURED one now fails at construction, before any I/O.
-    BedrockMantleOpenAIModelProvider|ai:Error provider = new (
+    MantleOpenAIModelProvider|ai:Error provider = new (
             MANTLE_GPT_5_6_SOL, TEST_CREDS, "us-east-1", stopSequences = ["END"]);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -243,7 +243,7 @@ function testConfiguredStopSequencesAreRefusedOnTheResponsesDialect() {
     }
     // ...and the same refusal on the runtime endpoint's Responses shape, because it
     // is the DIALECT that lacks the field, not the endpoint.
-    BedrockRuntimeOpenAIModelProvider|ai:Error runtime = new (
+    RuntimeOpenAIModelProvider|ai:Error runtime = new (
             GPT_OSS_120B, TEST_CREDS, "us-east-1", RESPONSES, stopSequences = ["END"]);
     test:assertTrue(runtime is ai:Error);
 }
@@ -310,7 +310,7 @@ function testDualstackIsRefusedOnTheRuntimeHostFamily() {
     // DNS-verified: `bedrock-runtime.{region}.api.aws` has no record in any region
     // tried. Without the guard this built the host happily and died at call time as
     // a bare connection error after a full retry cycle.
-    BedrockRuntimeAnthropicModelProvider|ai:Error provider = new (
+    RuntimeAnthropicModelProvider|ai:Error provider = new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,
             endpoint = {dualstack: true});
     test:assertTrue(provider is ai:Error);
@@ -356,7 +356,7 @@ function testDualstackIsRefusedOnBothKnowledgeBaseAgentPlanes() returns error? {
 function testDualstackIsStillHonouredWhereItExists() returns error? {
     // Mantle is the one host family that HAS a dualstack host, and the module forces
     // it there. The guard must not touch that.
-    BedrockMantleAnthropicModelProvider _ = check new (
+    MantleAnthropicModelProvider _ = check new (
             MANTLE_CLAUDE_OPUS_5, TEST_CREDS, "us-east-1", endpoint = {dualstack: true});
 }
 
@@ -365,7 +365,7 @@ function testACustomEndpointStillOutranksTheDualstackGuard() returns error? {
     // A concrete origin means there is no derived host to validate — the same
     // doctrine the China-partition and Mantle+FIPS guards follow. It is also the
     // escape hatch if AWS publishes a dualstack host this guard does not know about.
-    BedrockRuntimeAnthropicModelProvider _ = check new (
+    RuntimeAnthropicModelProvider _ = check new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,
             endpoint = {dualstack: true, customEndpoint: "https://bedrock.internal.example.com"});
 }

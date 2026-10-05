@@ -544,7 +544,7 @@ function testTheRuntimeEndpointIsServedOnAPartitionThatHasNoMantle() returns err
 
 @test:Config {}
 function testMantleFailsOnAPartitionThatDoesNotServeIt() returns error? {
-    // Constructing a BedrockMantle*ModelProvider in such a region is the caller
+    // Constructing a Mantle*ModelProvider in such a region is the caller
     // naming a destination that does not exist there. Name it, rather than building
     // a host that cannot answer.
     Route r = check resolveMantleRoute("anthropic.claude-opus-4-8", "us-iso-east-1");
@@ -553,7 +553,7 @@ function testMantleFailsOnAPartitionThatDoesNotServeIt() returns error? {
     test:assertTrue(ep is error);
     if ep is error {
         test:assertTrue(ep.message().includes("aws-iso"), ep.message());
-        test:assertTrue(ep.message().includes("BedrockRuntime"),
+        test:assertTrue(ep.message().includes("Runtime*ModelProvider"),
                 "the refusal must point at the class that works there; got: " + ep.message());
     }
 }

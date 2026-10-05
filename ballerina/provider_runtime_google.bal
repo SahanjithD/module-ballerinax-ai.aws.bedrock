@@ -26,7 +26,7 @@ public enum GoogleRuntimeModel {
     GEMMA_3_27B_IT = "google.gemma-3-27b-it"
 }
 
-# Configuration for `BedrockRuntimeGoogleModelProvider`.
+# Configuration for `RuntimeGoogleModelProvider`.
 public type GoogleRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
@@ -36,7 +36,8 @@ public type GoogleRuntimeConfig record {|
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockRuntimeGoogleModelProvider {
+@display {label: "Bedrock Runtime Google Model Provider"}
+public isolated distinct client class RuntimeGoogleModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -68,7 +69,7 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveRuntimeRoute(model, region, api);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockRuntimeGoogleModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("RuntimeGoogleModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.api = route.api;
@@ -80,7 +81,7 @@ public isolated distinct client class BedrockRuntimeGoogleModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("BedrockRuntimeGoogleModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("RuntimeGoogleModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();

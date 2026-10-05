@@ -79,7 +79,7 @@ function testATrailingSpaceInTheRegionIsRefusedAtConstruction() {
     // Without this the space is percent-encoded into the hostname and the caller sees
     // a connection error against `bedrock-runtime.us-east-1%20.amazonaws.com`, which
     // reads as a network fault rather than a typo.
-    BedrockRuntimeAmazonModelProvider|error provider =
+    RuntimeAmazonModelProvider|error provider =
         new ("amazon.nova-pro-v1:0", TEST_CREDS, "us-east-1 ");
     test:assertTrue(provider is error, "a region with a trailing space must not construct");
     if provider is error {
@@ -92,7 +92,7 @@ function testATrailingSpaceInTheRegionIsRefusedAtConstruction() {
 function testAnUppercaseRegionIsRefusedAtConstruction() {
     // This one reaches SigV4 intact and returns 403 "Credential should be scoped to a
     // valid region" — indistinguishable from a broken login.
-    BedrockRuntimeAmazonModelProvider|error provider =
+    RuntimeAmazonModelProvider|error provider =
         new ("amazon.nova-pro-v1:0", TEST_CREDS, "US-EAST-1");
     test:assertTrue(provider is error, "an uppercase region must not construct");
     if provider is error {
@@ -104,7 +104,7 @@ function testAnUppercaseRegionIsRefusedAtConstruction() {
 function testAnUnknownButWellShapedRegionStillConstructs() returns error? {
     // The guard is a SHAPE check, not an allowlist: AWS adds regions faster than this
     // module ships, so a region it has never heard of must still go through.
-    BedrockRuntimeAmazonModelProvider _ =
+    RuntimeAmazonModelProvider _ =
         check new ("amazon.nova-pro-v1:0", TEST_CREDS, "ap-southeast-9");
 }
 

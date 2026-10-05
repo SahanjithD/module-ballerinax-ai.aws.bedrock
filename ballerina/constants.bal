@@ -33,7 +33,7 @@
 // module bug, not a config problem. 4096 leaves room for a thinking pass plus an
 // answer while staying under the tightest per-model output cap in the supported set
 // (Nova Pro/Lite/Micro are capped at 5K output tokens, so 8192 would be rejected
-// outright on BedrockRuntimeAmazonModelProvider).
+// outright on RuntimeAmazonModelProvider).
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html
 const int DEFAULT_MAX_TOKEN_COUNT = 4096;
 
@@ -48,7 +48,7 @@ const int MIN_THINKING_BUDGET_TOKENS = 1024;
 
 final readonly & string[] CRIS_PREFIXES = ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
 
-// WHAT a model needs to speak Mantle — the registry the `BedrockMantle*ModelProvider`
+// WHAT a model needs to speak Mantle — the registry the `Mantle*ModelProvider`
 // classes resolve against. Membership means we hold a verified request path for the
 // model; absence is a clean "not available on Mantle" construction error.
 //

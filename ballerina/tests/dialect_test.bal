@@ -307,7 +307,7 @@ function testThinkingBudgetRulesFailAtConstruction() {
 @test:Config {}
 function testThinkingBudgetRulesAlsoFireOnTheMantleClass() {
     // The validation moved into the shared spine, so it must hold on both endpoints.
-    BedrockMantleAnthropicModelProvider|ai:Error provider = new (
+    MantleAnthropicModelProvider|ai:Error provider = new (
             MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION, (), 2000,
             thinking = {mode: ENABLED, budgetTokens: 4000});
     test:assertTrue(provider is ai:Error);

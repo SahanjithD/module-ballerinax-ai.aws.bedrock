@@ -103,7 +103,7 @@ function testNoGuardrailIsNeverRefusedAnywhere() {
 function testGuardrailOnARefusingRuntimeShapeFailsAtConstruction() returns error? {
     // End to end through a real class: the Anthropic runtime class CAN carry a
     // guardrail (it is on `CommonRuntimeConfig`), but not on the MESSAGES shape.
-    BedrockRuntimeAnthropicModelProvider|ai:Error provider = new (
+    RuntimeAnthropicModelProvider|ai:Error provider = new (
             "anthropic.claude-opus-5", TEST_CREDS, "us-east-1", MESSAGES,
             guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"});
     test:assertTrue(provider is ai:Error);
@@ -111,7 +111,7 @@ function testGuardrailOnARefusingRuntimeShapeFailsAtConstruction() returns error
         test:assertTrue(provider.message().includes("ApplyGuardrail"), provider.message());
     }
     // ...and the same class on CONVERSE accepts it.
-    BedrockRuntimeAnthropicModelProvider _ = check new (
+    RuntimeAnthropicModelProvider _ = check new (
             "anthropic.claude-opus-5", TEST_CREDS, "us-east-1", CONVERSE,
             guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"});
 }
@@ -124,7 +124,7 @@ function testGuardrailOnARefusingRuntimeShapeFailsAtConstruction() returns error
 function testMantleOnChinaPartitionFailsAtConstruction() {
     // Mantle's `api.aws` host is not partition-templated, and Bedrock is not offered
     // in `aws-cn` on any endpoint at all.
-    BedrockMantleAnthropicModelProvider|ai:Error provider = new (
+    MantleAnthropicModelProvider|ai:Error provider = new (
             MANTLE_CLAUDE_OPUS_5, TEST_CREDS, "cn-north-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -136,7 +136,7 @@ function testMantleOnChinaPartitionFailsAtConstruction() {
 @test:Config {}
 function testImportedModelArnIsRefusedAtConstruction() {
     // Custom Model Import is out of scope — refused by name, before any I/O.
-    BedrockRuntimeAnthropicModelProvider|ai:Error provider = new (
+    RuntimeAnthropicModelProvider|ai:Error provider = new (
             "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123", TEST_CREDS, "us-east-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -148,26 +148,26 @@ function testImportedModelArnIsRefusedAtConstruction() {
 function testConverseHappyPathConstructsWithoutError() returns error? {
     // A valid Converse model constructs (no I/O until chat()). The class fixes the
     // endpoint, so there is no routing ladder that could send this elsewhere.
-    BedrockRuntimeAnthropicModelProvider provider =
+    RuntimeAnthropicModelProvider provider =
         check new ("anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1");
-    test:assertTrue(provider is BedrockRuntimeAnthropicModelProvider);
+    test:assertTrue(provider is RuntimeAnthropicModelProvider);
 }
 
 @test:Config {}
 function testBearerTokenCredentialsConstruct() returns error? {
     BedrockCredentials bearer = {apiKey: "bedrock-api-key"};
-    BedrockRuntimeAnthropicModelProvider provider =
+    RuntimeAnthropicModelProvider provider =
         check new ("anthropic.claude-sonnet-4-6", bearer, "us-east-1");
-    test:assertTrue(provider is BedrockRuntimeAnthropicModelProvider);
+    test:assertTrue(provider is RuntimeAnthropicModelProvider);
 }
 
 @test:Config {}
 function testTheVendorAgnosticClassConstructsOnAnyId() returns error? {
-    // `BedrockCommonModelProvider` is Converse-only and takes a plain string, so it
+    // `CommonModelProvider` is Converse-only and takes a plain string, so it
     // reaches the ten vendors with no dedicated class in this module.
-    BedrockCommonModelProvider _ = check new ("meta.llama3-70b-instruct-v1:0", TEST_CREDS, "us-east-1");
-    BedrockCommonModelProvider _ = check new ("ai21.jamba-1-5-large-v1:0", TEST_CREDS, "us-east-1");
-    BedrockCommonModelProvider _ = check new ("acme.brand-new-model-v9", TEST_CREDS, "us-east-1");
+    CommonModelProvider _ = check new ("meta.llama3-70b-instruct-v1:0", TEST_CREDS, "us-east-1");
+    CommonModelProvider _ = check new ("ai21.jamba-1-5-large-v1:0", TEST_CREDS, "us-east-1");
+    CommonModelProvider _ = check new ("acme.brand-new-model-v9", TEST_CREDS, "us-east-1");
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ function testAMantleOnlyIdOnARuntimeClassJustGoesOnTheWire() returns error? {
     // of goes on the wire as-is and AWS answers for it, which is what keeps a model
     // AWS ships tomorrow usable today. The old resolver's "unknown id → Mantle by
     // elimination" failure mode is unrepresentable now.
-    BedrockRuntimeOpenAIModelProvider _ = check new ("openai.gpt-5.5", TEST_CREDS, "us-east-1");
+    RuntimeOpenAIModelProvider _ = check new ("openai.gpt-5.5", TEST_CREDS, "us-east-1");
     Route route = check resolveRuntimeRoute("openai.gpt-5.5", "us-east-1", CONVERSE);
     test:assertEquals(route.endpoint, RUNTIME);
     test:assertEquals(route.effectiveModelId, "openai.gpt-5.5");
@@ -194,7 +194,7 @@ function testANonMantleIdOnAMantleClassIsACleanConstructionError() {
     // Sonnet 4.6's card marks bedrock-mantle NO, so there is no path to build and
     // nothing to guess at. The refusal must name the model.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-    BedrockMantleAnthropicModelProvider|ai:Error provider = new (
+    MantleAnthropicModelProvider|ai:Error provider = new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -207,7 +207,7 @@ function testANonMantleIdOnAMantleClassIsACleanConstructionError() {
 function testAnUnknownIdOnAMantleClassIsRefusedRatherThanGuessed() {
     // The table is the only source of a Mantle request path. Absence is a refusal,
     // never a fabricated URL.
-    BedrockMantleOpenAIModelProvider|ai:Error provider = new (
+    MantleOpenAIModelProvider|ai:Error provider = new (
             "acme.totally-new", TEST_CREDS, "us-east-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
@@ -221,7 +221,7 @@ function testAnUnknownIdOnAMantleClassIsRefusedRatherThanGuessed() {
 
 @test:Config {}
 function testMissingRegionFailsAtConstructionWithANamedError() returns error? {
-    BedrockRuntimeAnthropicModelProvider|error provider =
+    RuntimeAnthropicModelProvider|error provider =
         new ("anthropic.claude-sonnet-4-6", TEST_CREDS, "");
     test:assertTrue(provider is error);
     if provider is error {
@@ -234,7 +234,7 @@ function testAnArnCarryingItsOwnRegionNeedsNoRegionArgument() returns error? {
     // The region guard must run on the RESOLVED route, not the argument: an ARN
     // supplies its own region, so this is well-formed with no region and no
     // AWS_REGION in the environment.
-    BedrockRuntimeAnthropicModelProvider|error provider = new (
+    RuntimeAnthropicModelProvider|error provider = new (
             "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-6",
             TEST_CREDS, "");
     test:assertFalse(provider is error, provider is error ? provider.message() : "");

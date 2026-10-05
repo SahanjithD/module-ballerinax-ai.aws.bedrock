@@ -27,7 +27,7 @@ public enum AmazonRuntimeModel {
     NOVA_MICRO = "amazon.nova-micro-v1:0"
 }
 
-# Configuration for `BedrockRuntimeAmazonModelProvider`.
+# Configuration for `RuntimeAmazonModelProvider`.
 public type AmazonRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
@@ -37,7 +37,8 @@ public type AmazonRuntimeConfig record {|
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockRuntimeAmazonModelProvider {
+@display {label: "Bedrock Runtime Amazon Model Provider"}
+public isolated distinct client class RuntimeAmazonModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -69,7 +70,7 @@ public isolated distinct client class BedrockRuntimeAmazonModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveRuntimeRoute(model, region, api);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockRuntimeAmazonModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("RuntimeAmazonModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.api = route.api;
@@ -81,7 +82,7 @@ public isolated distinct client class BedrockRuntimeAmazonModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("BedrockRuntimeAmazonModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("RuntimeAmazonModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();

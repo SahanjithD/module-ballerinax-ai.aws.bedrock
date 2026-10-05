@@ -23,7 +23,7 @@ public enum MistralMantleModel {
     MANTLE_MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct"
 }
 
-# Configuration for `BedrockMantleMistralModelProvider`.
+# Configuration for `MantleMistralModelProvider`.
 public type MistralMantleConfig record {|
     *CommonMantleConfig;
 |};
@@ -34,7 +34,8 @@ public type MistralMantleConfig record {|
 # SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
 # No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockMantleMistralModelProvider {
+@display {label: "Bedrock Mantle Mistral Model Provider"}
+public isolated distinct client class MantleMistralModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -64,7 +65,7 @@ public isolated distinct client class BedrockMantleMistralModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockMantleMistralModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("MantleMistralModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
         self.api = route.api;
@@ -76,7 +77,7 @@ public isolated distinct client class BedrockMantleMistralModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (), ());
-        check validateParamsForRoute("BedrockMantleMistralModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("MantleMistralModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();

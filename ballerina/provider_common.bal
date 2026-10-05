@@ -418,7 +418,7 @@ isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiFamily api,
     // instead of silently sending guardrail headers the endpoint ignores.
     if endpoint == MANTLE {
         return error ai:Error("Guardrails are not supported on the bedrock-mantle endpoint. Use the " +
-            "matching BedrockRuntime*ModelProvider, or apply the standalone ApplyGuardrail API " +
+            "matching Runtime*ModelProvider, or apply the standalone ApplyGuardrail API " +
             "on bedrock-runtime.");
     }
     if api == RESPONSES {

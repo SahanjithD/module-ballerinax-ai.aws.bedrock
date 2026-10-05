@@ -13,14 +13,14 @@ classes so that what an endpoint can and cannot do is visible in the type you co
 | `bedrock-mantle.{region}.api.aws` (compatibility) | Chat Completions, Responses, Messages | `bedrock-mantle` | `bedrock-mantle:CreateInference` |
 
 AWS recommends `bedrock-runtime` for new applications and describes `bedrock-mantle` as the
-compatibility surface. Reach for a `BedrockMantle*` class only when the model or capability you need
+compatibility surface. Reach for a `Mantle*` class only when the model or capability you need
 is not on `bedrock-runtime` — GPT-5.4/5.5 and Gemma 4 are Mantle-only, for instance. Guardrails,
 cross-region inference and structured output are all runtime-only.
 
 ### Key features
 
 - Chat completion through one `ai:ModelProvider` contract, on either endpoint
-- `BedrockCommonModelProvider` reaches **every** model Bedrock serves on Converse — 15 of AWS's 17
+- `CommonModelProvider` reaches **every** model Bedrock serves on Converse — 15 of AWS's 17
   providers, including the ten with no dedicated class here
 - Structured output (`generate()`) by tool-forcing on Converse and InvokeModel
 - Text embeddings through the `ai:EmbeddingProvider` contract, with order-preserving batching
@@ -36,19 +36,19 @@ cross-region inference and structured output are all runtime-only.
 The public surface is split **by endpoint, then by vendor**. Every class is a thin typed facade over one
 shared internal spine (resolver → endpoint builder → converter → SigV4 transport).
 
-**Any vendor, Converse** — `BedrockCommonModelProvider`. Takes a model id as a plain `string` and reaches
+**Any vendor, Converse** — `CommonModelProvider`. Takes a model id as a plain `string` and reaches
 every Converse-capable model, including Meta, Cohere, AI21, MiniMax, Moonshot, NVIDIA, Writer, xAI, Z.AI
 and Stability. Start here unless you need a vendor-specific knob or a non-Converse dialect.
 
-**`bedrock-runtime`, per vendor** — `BedrockRuntimeAnthropicModelProvider`,
-`BedrockRuntimeOpenAIModelProvider`, `BedrockRuntimeAmazonModelProvider` (Nova),
-`BedrockRuntimeMistralModelProvider`, `BedrockRuntimeQwenModelProvider`,
-`BedrockRuntimeGoogleModelProvider` (Gemma), `BedrockRuntimeDeepSeekModelProvider`.
+**`bedrock-runtime`, per vendor** — `RuntimeAnthropicModelProvider`,
+`RuntimeOpenAIModelProvider`, `RuntimeAmazonModelProvider` (Nova),
+`RuntimeMistralModelProvider`, `RuntimeQwenModelProvider`,
+`RuntimeGoogleModelProvider` (Gemma), `RuntimeDeepSeekModelProvider`.
 
 **`bedrock-mantle`, per vendor** — the same six minus Amazon:
-`BedrockMantleAnthropicModelProvider`, `BedrockMantleOpenAIModelProvider`,
-`BedrockMantleMistralModelProvider`, `BedrockMantleQwenModelProvider`,
-`BedrockMantleGoogleModelProvider`, `BedrockMantleDeepSeekModelProvider`. There is no Amazon Mantle
+`MantleAnthropicModelProvider`, `MantleOpenAIModelProvider`,
+`MantleMistralModelProvider`, `MantleQwenModelProvider`,
+`MantleGoogleModelProvider`, `MantleDeepSeekModelProvider`. There is no Amazon Mantle
 class because AWS serves no Amazon model on that endpoint.
 
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider` (InvokeModel on `bedrock-runtime`).
@@ -70,15 +70,15 @@ property of its type, so an unreachable combination does not compile:
 
 | Class | Type of `api` | Accepts |
 | --- | --- | --- |
-| `BedrockRuntimeAnthropicModelProvider` | `AnthropicRuntimeApi` | `CONVERSE`, `INVOKE`, `MESSAGES` |
-| `BedrockRuntimeOpenAIModelProvider` | `OpenAIRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS`, `RESPONSES` |
-| `BedrockRuntimeMistralModelProvider` | `MistralRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
-| `BedrockRuntimeQwenModelProvider` | `QwenRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
-| `BedrockRuntimeGoogleModelProvider` | `GoogleRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
-| `BedrockRuntimeDeepSeekModelProvider` | `DeepSeekRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
-| `BedrockRuntimeAmazonModelProvider` | `AmazonRuntimeApi` | `CONVERSE`, `INVOKE` |
-| `BedrockCommonModelProvider` | — | Converse only |
-| `BedrockMantle*ModelProvider` | — | the model's own family |
+| `RuntimeAnthropicModelProvider` | `AnthropicRuntimeApi` | `CONVERSE`, `INVOKE`, `MESSAGES` |
+| `RuntimeOpenAIModelProvider` | `OpenAIRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS`, `RESPONSES` |
+| `RuntimeMistralModelProvider` | `MistralRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `RuntimeQwenModelProvider` | `QwenRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `RuntimeGoogleModelProvider` | `GoogleRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `RuntimeDeepSeekModelProvider` | `DeepSeekRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
+| `RuntimeAmazonModelProvider` | `AmazonRuntimeApi` | `CONVERSE`, `INVOKE` |
+| `CommonModelProvider` | — | Converse only |
+| `Mantle*ModelProvider` | — | the model's own family |
 
 `CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that family for DeepSeek, Gemma 3, Mistral,
 Qwen3 and others. **Mantle classes take no `api` argument at all.** Each Mantle model has exactly one route this module
@@ -123,7 +123,7 @@ to the AWS credential chain — so on AWS compute this is the whole thing:
 import ballerinax/aws;
 import ballerinax/aws.auth;
 
-final ai:ModelProvider claude = check new bedrock:BedrockRuntimeAnthropicModelProvider(
+final ai:ModelProvider claude = check new bedrock:RuntimeAnthropicModelProvider(
         bedrock:CLAUDE_SONNET_4_6, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 ```
 
@@ -133,15 +133,15 @@ to `CONVERSE`. `api` and `endpoint` sit directly on `init` rather than inside th
 because both are decisions you make at the same moment you pick the model and region:
 
 ```ballerina
-final ai:ModelProvider nova = check new bedrock:BedrockRuntimeAmazonModelProvider(
+final ai:ModelProvider nova = check new bedrock:RuntimeAmazonModelProvider(
         bedrock:NOVA_PRO, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 // GPT-5.4 is Mantle-only, so it takes the Mantle class.
-final ai:ModelProvider gpt = check new bedrock:BedrockMantleOpenAIModelProvider(
+final ai:ModelProvider gpt = check new bedrock:MantleOpenAIModelProvider(
         bedrock:MANTLE_GPT_5_4, auth:DEFAULT_CREDENTIALS, aws:US_EAST_2);
 // Any vendor at all, over Converse.
-final ai:ModelProvider llama = check new bedrock:BedrockCommonModelProvider(
+final ai:ModelProvider llama = check new bedrock:CommonModelProvider(
         "us.meta.llama3-3-70b-instruct-v1:0", auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
-final ai:ModelProvider gemma = check new bedrock:BedrockRuntimeGoogleModelProvider(
+final ai:ModelProvider gemma = check new bedrock:RuntimeGoogleModelProvider(
         bedrock:GEMMA_3_27B_IT, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 ```
 
@@ -182,7 +182,7 @@ bedrock:BedrockCredentials profile = {profileName: "prod"};
 bedrock:BedrockCredentials apiKey = {apiKey: "..."};
 
 final ai:ModelProvider claude =
-    check new bedrock:BedrockRuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, aws:US_EAST_1);
+    check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, aws:US_EAST_1);
 ```
 
 > **Knowledge bases do NOT accept Bedrock API keys.** AWS states API keys "are limited to Amazon
@@ -211,12 +211,12 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 
 > **Typed `generate()` works everywhere except Mantle Messages.** On `bedrock-runtime` and on the
 > OpenAI-shaped Mantle routes (Responses, Chat Completions) a typed target is obtained by forcing a
-> tool. The one exception is `BedrockMantleAnthropicModelProvider`, which resolves to the Anthropic
+> tool. The one exception is `MantleAnthropicModelProvider`, which resolves to the Anthropic
 > Messages API: that route rejects both `output_config.format` and `strict: true` on tools, so it
 > returns an `ai:Error` for any non-`string` target type, naming the model and saying so.
 >
 > There is no silent cross-endpoint fallback — the class you constructed is the endpoint you talk to.
-> Claude is dual-homed, so the fix is `BedrockRuntimeAnthropicModelProvider` instead.
+> Claude is dual-homed, so the fix is `RuntimeAnthropicModelProvider` instead.
 >
 > A `string` target is plain text on every class and never hits this.
 >
@@ -291,7 +291,7 @@ endpoint with no guardrails, no cross-region inference and no structured output,
 authorizes under a *separate* IAM namespace — produced `AccessDenied` for credentials that were
 perfectly valid for Bedrock. The endpoint is now yours to state, and the type system holds you to it.
 
-### On a `BedrockRuntime*` class (or `BedrockCommonModelProvider`)
+### On a `Runtime*` class (or `CommonModelProvider`)
 
 | You pass | Resolves to |
 | --- | --- |
@@ -307,7 +307,7 @@ Current Claude models are served on `bedrock-runtime` through cross-region infer
 the `AnthropicRuntimeModel` constants carry a `us.` prefix. A bare Claude id here fails with
 `on-demand throughput isn't supported`.
 
-### On a `BedrockMantle*` class
+### On a `Mantle*` class
 
 | You pass | Resolves to |
 | --- | --- |
@@ -340,18 +340,18 @@ An id absent from the table is refused by name rather than sent to a guessed URL
 
 ```ballerina
 // 1. Pick the endpoint by picking the class.
-check new bedrock:BedrockMantleAnthropicModelProvider("anthropic.claude-haiku-4-5", creds, "us-east-1");
+check new bedrock:MantleAnthropicModelProvider("anthropic.claude-haiku-4-5", creds, "us-east-1");
 
 // 2. Pick the wire shape with `api`. Only the shapes AWS serves for that vendor compile.
-check new bedrock:BedrockRuntimeAnthropicModelProvider("us.anthropic.claude-haiku-4-5", creds,
+check new bedrock:RuntimeAnthropicModelProvider("us.anthropic.claude-haiku-4-5", creds,
         "us-east-1", api = bedrock:MESSAGES);
 
 // 3. Any raw model id string is always accepted — the model enums are
 //    conveniences, never a gate. A model AWS shipped after this release works today.
-check new bedrock:BedrockRuntimeAmazonModelProvider("amazon.nova-something-new-v1:0", creds, "us-east-1");
+check new bedrock:RuntimeAmazonModelProvider("amazon.nova-something-new-v1:0", creds, "us-east-1");
 
 // 4. A vendor with no class of its own — Converse reaches all of them.
-check new bedrock:BedrockCommonModelProvider("us.writer.palmyra-x5-v1:0", creds, "us-east-1");
+check new bedrock:CommonModelProvider("us.writer.palmyra-x5-v1:0", creds, "us-east-1");
 ```
 
 The `mantle/`, `converse/` and `invoke/` model-id string prefixes are **gone**. They were a way to
@@ -392,12 +392,12 @@ the same record the other `ballerinax/aws.*` connectors take:
 
 ```ballerina
 // FIPS: the host spelling comes from SDK metadata, not from string-building "-fips"
-check new bedrock:BedrockRuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_GOV_WEST_1,
+check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_GOV_WEST_1,
     endpoint = {fips: true});
 // → https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com
 
 // A concrete origin: gateway, LocalStack, or a VPC endpoint
-check new bedrock:BedrockRuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_EAST_1,
+check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, creds, aws:US_EAST_1,
     endpoint = {customEndpoint: "http://localhost:4566"});
 ```
 
@@ -428,10 +428,10 @@ This bites hardest in GovCloud, so read this before deploying there:
 
 - **FIPS is opt-in**, not automatic, matching AWS SDK behaviour. If your posture requires FIPS
   endpoints you must set `endpoint = {fips: true}` yourself.
-- **There is no `bedrock-mantle` FIPS host.** `endpoint = {fips: true}` on any `BedrockMantle*` class
-  is a construction error. Use the matching `BedrockRuntime*` class for a FIPS-compliant call.
+- **There is no `bedrock-mantle` FIPS host.** `endpoint = {fips: true}` on any `Mantle*` class
+  is a construction error. Use the matching `Runtime*` class for a FIPS-compliant call.
 - **`us-gov-west-1` has Mantle; `us-gov-east-1` does not.** We deliberately do not encode region
-  lists — they go stale — so a `BedrockMantle*` class on `us-gov-east-1` builds a Mantle host and gets
+  lists — they go stale — so a `Mantle*` class on `us-gov-east-1` builds a Mantle host and gets
   AWS's own error at call time, which names the real problem better than a stale list could.
 
 ### Partitions
@@ -441,7 +441,7 @@ This bites hardest in GovCloud, so read this before deploying there:
   still happily build a well-formed host (it is a string builder and never fails), so without this
   guard the first call fails with a bare connection error naming nothing.
 - **ISO and EU Sovereign partitions** (`us-iso-`, `us-isob-`, `us-isof-`, `eusc-`) reach
-  `bedrock-runtime` normally. They serve no Mantle host, so constructing any `BedrockMantle*` class
+  `bedrock-runtime` normally. They serve no Mantle host, so constructing any `Mantle*` class
   there is a construction error naming the partition.
 
 ### Inference parameters
@@ -478,9 +478,9 @@ Worth knowing before you upgrade:
 > 'reasoning_effort'`, which is what this used to do.
 
 > **`serviceTier` / `latencyOptimized` do not exist on the Mantle classes at all.** They live on
-> `CommonRuntimeConfig` and not on `CommonMantleConfig`, so setting one on a `BedrockMantle*` class is a
+> `CommonRuntimeConfig` and not on `CommonMantleConfig`, so setting one on a `Mantle*` class is a
 > *compile* error rather than something discovered at construction or, worse, silently dropped on the
-> wire. Use the matching `BedrockRuntime*` class to send them as Bedrock defines them. Mantle's vendor-compatible surfaces do have a `service_tier` body field, but with the
+> wire. Use the matching `Runtime*` class to send them as Bedrock defines them. Mantle's vendor-compatible surfaces do have a `service_tier` body field, but with the
 > **vendor's** value set (`auto|default|flex|fast|priority|ultrafast`) rather than Bedrock's
 > (`default|priority|flex|reserved`) — two first-party sources, one field name, different vocabularies —
 > so this module will not guess a mapping. If you know your model's, send it through
@@ -990,10 +990,10 @@ Construction errors are reserved for what AWS *cannot* diagnose for you:
 
 - an `imported-model/` ARN (AWS applies no default chat template to imported weights)
 - any route in the AWS China partition (`cn-`) — Bedrock is not offered there at all
-- a `BedrockMantle*` class on a model with no known Mantle request path
-- a `BedrockMantle*` class on a partition that serves no Mantle host (ISO, EU Sovereign); GovCloud and
+- a `Mantle*` class on a model with no known Mantle request path
+- a `Mantle*` class on a partition that serves no Mantle host (ISO, EU Sovereign); GovCloud and
   commercial **are** supported
-- a `BedrockMantle*` class given an ARN, or a cross-region-prefixed id
+- a `Mantle*` class given an ARN, or a cross-region-prefixed id
 - `fips` on a Mantle-resolved model (there is no `bedrock-mantle-fips` host)
 - a guardrail on a Mantle route (the error names the standalone `ApplyGuardrail` API)
 - a `custom-model/` ARN (an artifact, not a deployment)
@@ -1067,8 +1067,8 @@ The seven vendor classes were replaced by fourteen endpoint-specific ones. This 
 there are no deprecated aliases.
 
 **1. Pick the class for the endpoint you want.** `<Vendor>ModelProvider` becomes
-`BedrockRuntime<Vendor>ModelProvider` in almost every case — that is where AWS recommends you be, and
-it is what the old `apiFamily = CONVERSE` produced. Use `BedrockMantle<Vendor>ModelProvider` only for a
+`Runtime<Vendor>ModelProvider` in almost every case — that is where AWS recommends you be, and
+it is what the old `apiFamily = CONVERSE` produced. Use `Mantle<Vendor>ModelProvider` only for a
 model or capability that exists only there.
 
 ```ballerina
@@ -1076,7 +1076,7 @@ model or capability that exists only there.
 check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_EAST_1);
 
 // now — and note the id is CRIS-prefixed, which is what bedrock-runtime requires for Claude
-check new bedrock:BedrockRuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_EAST_1);
+check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_EAST_1);
 ```
 
 **2. `apiFamily` became `api`, and lost `AUTO` and `MANTLE`.**
@@ -1085,7 +1085,7 @@ check new bedrock:BedrockRuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_5, 
 apiFamily = bedrock:AUTO       → (removed) pick the class instead
 apiFamily = bedrock:CONVERSE   → api = bedrock:CONVERSE   // now the default
 apiFamily = bedrock:INVOKE     → api = bedrock:INVOKE
-apiFamily = bedrock:MANTLE     → use the BedrockMantle* class
+apiFamily = bedrock:MANTLE     → use the Mantle* class
 "mantle/<id>" / "converse/<id>" / "invoke/<id>"  → (removed) use the class and `api`
 ```
 
@@ -1099,7 +1099,7 @@ which `bedrock-runtime` now serves directly. Which of them a class accepts is pa
   reaches `bedrock-runtime` unless you construct a Mantle class.
 - **`generate()` no longer silently switches endpoints.** It used to resolve a second Converse spine so
   a typed `generate()` worked on a Mantle-routed model — meaning one object needed two IAM permissions.
-  One class, one endpoint now: a typed `generate()` on a `BedrockMantle*` class returns an `ai:Error`.
+  One class, one endpoint now: a typed `generate()` on a `Mantle*` class returns an `ai:Error`.
 - **`guardrail`, `serviceTier` and `latencyOptimized` are gone from the Mantle config records**, so
   setting them there is now a compile error rather than a construction error.
 - **Guardrails are refused on the `RESPONSES` and `MESSAGES` shapes.** AWS states guardrails do not
@@ -1116,7 +1116,7 @@ because Ballerina enum members share one module namespace.
 for it. `anthropic.claude-mythos-5` (bedrock-mantle only) and `anthropic.claude-mythos-5.1`
 (bedrock-runtime only) are real and documented; see the endpoint-availability table.
 
-**6. `BedrockCommonModelProvider` is new.** If you were passing raw id strings to a vendor class just to
+**6. `CommonModelProvider` is new.** If you were passing raw id strings to a vendor class just to
 reach a model that class did not enumerate, this is the better home for it — it takes any Converse-
 capable id from any vendor.
 
