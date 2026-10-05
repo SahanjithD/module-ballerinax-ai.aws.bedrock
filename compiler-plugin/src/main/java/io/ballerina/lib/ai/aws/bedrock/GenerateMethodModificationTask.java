@@ -92,7 +92,7 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     // site receives an `@ai:JsonSchema` annotation, and `generate()` loses type
     // binding at runtime with no compile error anywhere. The org was `ballerinax`
     // while the package published as `dasunorg`, which is exactly that silent failure.
-    private static final String BEDROCK_MODULE_ORG = "dasunorg";
+    private static final String BEDROCK_MODULE_ORG = "ballerinax";
 
     /**
      * Every `*ai:ModelProvider` class this package exports. Keep in sync with the

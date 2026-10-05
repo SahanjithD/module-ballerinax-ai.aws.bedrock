@@ -1,5 +1,5 @@
 [package]
-org = "dasunorg"
+org = "ballerinax"
 name = "ai.aws.bedrock"
 version = "@toml.version@"
 distribution = "2201.13.6"
