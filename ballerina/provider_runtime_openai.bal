@@ -49,7 +49,7 @@ public enum OpenAIRuntimeModel {
     GPT_6_LUNA = "us.openai.gpt-6-luna"
 }
 
-# Configuration for `BedrockRuntimeOpenAIModelProvider`.
+# Configuration for `RuntimeOpenAIModelProvider`.
 public type OpenAIRuntimeConfig record {|
     *CommonRuntimeConfig;
 
@@ -64,7 +64,8 @@ public type OpenAIRuntimeConfig record {|
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockRuntimeOpenAIModelProvider {
+@display {label: "Bedrock Runtime OpenAI Model Provider"}
+public isolated distinct client class RuntimeOpenAIModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -96,7 +97,7 @@ public isolated distinct client class BedrockRuntimeOpenAIModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveRuntimeRoute(model, region, api);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockRuntimeOpenAIModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("RuntimeOpenAIModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.api = route.api;
@@ -109,7 +110,7 @@ public isolated distinct client class BedrockRuntimeOpenAIModelProvider {
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized,
                 config?.guardrail, (), (), config?.reasoningEffort);
-        check validateParamsForRoute("BedrockRuntimeOpenAIModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("RuntimeOpenAIModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();

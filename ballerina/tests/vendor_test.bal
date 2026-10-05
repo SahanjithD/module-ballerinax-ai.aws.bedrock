@@ -15,8 +15,8 @@
 import ballerina/test;
 
 // The vendor facades. The public surface is cut by ENDPOINT: a
-// `BedrockRuntime<V>ModelProvider` can only ever reach `bedrock-runtime` and a
-// `BedrockMantle<V>ModelProvider` only `bedrock-mantle`, so "which endpoint did my
+// `Runtime<V>ModelProvider` can only ever reach `bedrock-runtime` and a
+// `Mantle<V>ModelProvider` only `bedrock-mantle`, so "which endpoint did my
 // model end up on" is answered by the type at the call site rather than by a
 // routing ladder at runtime.
 
@@ -24,26 +24,26 @@ import ballerina/test;
 
 @test:Config {}
 function testEveryRuntimeProviderConstructs() returns error? {
-    BedrockCommonModelProvider _ = check new ("amazon.nova-pro-v1:0", TEST_CREDS, REGION);
-    BedrockRuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_4_6, TEST_CREDS, REGION);
-    BedrockRuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION);
-    BedrockRuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION);
-    BedrockRuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION);
-    BedrockRuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION);
-    BedrockRuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION);
-    BedrockRuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_R1, TEST_CREDS, REGION);
+    CommonModelProvider _ = check new ("amazon.nova-pro-v1:0", TEST_CREDS, REGION);
+    RuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_4_6, TEST_CREDS, REGION);
+    RuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION);
+    RuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION);
+    RuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION);
+    RuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION);
+    RuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION);
+    RuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_R1, TEST_CREDS, REGION);
 }
 
 @test:Config {}
 function testEveryMantleProviderConstructs() returns error? {
     // Six, not seven: Amazon has no model on bedrock-mantle, so there is no
-    // `BedrockMantleAmazonModelProvider` to construct.
-    BedrockMantleAnthropicModelProvider _ = check new (MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION);
-    BedrockMantleOpenAIModelProvider _ = check new (MANTLE_GPT_5_5, TEST_CREDS, REGION);
-    BedrockMantleMistralModelProvider _ = check new (MANTLE_MISTRAL_LARGE_3, TEST_CREDS, REGION);
-    BedrockMantleQwenModelProvider _ = check new (MANTLE_QWEN3_32B, TEST_CREDS, REGION);
-    BedrockMantleGoogleModelProvider _ = check new (MANTLE_GEMMA_4_31B, TEST_CREDS, REGION);
-    BedrockMantleDeepSeekModelProvider _ = check new (MANTLE_DEEPSEEK_V3_2, TEST_CREDS, REGION);
+    // `MantleAmazonModelProvider` to construct.
+    MantleAnthropicModelProvider _ = check new (MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION);
+    MantleOpenAIModelProvider _ = check new (MANTLE_GPT_5_5, TEST_CREDS, REGION);
+    MantleMistralModelProvider _ = check new (MANTLE_MISTRAL_LARGE_3, TEST_CREDS, REGION);
+    MantleQwenModelProvider _ = check new (MANTLE_QWEN3_32B, TEST_CREDS, REGION);
+    MantleGoogleModelProvider _ = check new (MANTLE_GEMMA_4_31B, TEST_CREDS, REGION);
+    MantleDeepSeekModelProvider _ = check new (MANTLE_DEEPSEEK_V3_2, TEST_CREDS, REGION);
 }
 
 @test:Config {}
@@ -54,23 +54,23 @@ function testEveryRuntimeShapeAVendorClassOffersConstructs() returns error? {
     // type the compiler said was fine.
     AnthropicRuntimeApi[] apis = [CONVERSE, INVOKE, MESSAGES];
     foreach AnthropicRuntimeApi api in apis {
-        BedrockRuntimeAnthropicModelProvider _ =
+        RuntimeAnthropicModelProvider _ =
             check new ("anthropic.claude-opus-5", TEST_CREDS, REGION, api);
     }
     OpenAIRuntimeApi[] openAIApis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
     foreach OpenAIRuntimeApi api in openAIApis {
-        BedrockRuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION, api);
+        RuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION, api);
     }
     QwenRuntimeApi[] chatApis = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
     foreach QwenRuntimeApi api in chatApis {
-        BedrockRuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION, api);
-        BedrockRuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION, api);
-        BedrockRuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION, api);
-        BedrockRuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION, api);
+        RuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION, api);
+        RuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION, api);
+        RuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_2407, TEST_CREDS, REGION, api);
+        RuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION, api);
     }
     AmazonRuntimeApi[] coreApis = [CONVERSE, INVOKE];
     foreach AmazonRuntimeApi api in coreApis {
-        BedrockRuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION, api);
+        RuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION, api);
     }
 }
 
@@ -206,7 +206,7 @@ function testGemma3IsAlsoReachableOnTheRuntimeClass() returns error? {
 @test:Config {}
 function testGemma4IsMantleOnlyAndSignsAsMantle() returns error? {
     // The Gemma 4 support matrix marks bedrock-runtime / Converse / Invoke / Messages
-    // all NO, and there is no `BedrockRuntimeGoogleModelProvider` id for it. Signing
+    // all NO, and there is no `RuntimeGoogleModelProvider` id for it. Signing
     // scope `bedrock` against a Mantle-only model is a 403 on every single call.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
     foreach string id in ["google.gemma-4-31b", "google.gemma-4-e2b", "google.gemma-4-26b-a4b"] {

@@ -64,7 +64,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
         return error(string `'${model}' is an ARN, which the bedrock-mantle endpoint does not accept: ` +
             string `provisioned models, inference profiles and custom-model deployments are ` +
             string `bedrock-runtime resources. Pass a bare Mantle model id, or use the matching ` +
-            string `BedrockRuntime*ModelProvider.`);
+            string `Runtime*ModelProvider.`);
     }
 
     [string, string?] [bareId, geoPrefix] = normalizeModelId(model);
@@ -77,7 +77,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
         return error(string `'${model}' carries the cross-region inference prefix '${geoPrefix}.', ` +
             string `which the bedrock-mantle endpoint does not support — cross-region inference is ` +
             string `available on bedrock-runtime only. Pass the bare id '${bareId}' for Mantle, or use ` +
-            string `the matching BedrockRuntime*ModelProvider to keep the prefix.`);
+            string `the matching Runtime*ModelProvider to keep the prefix.`);
     }
 
     [string, MantleEntry] [canonicalId, entry] = check mantleEntryForBare(bareId);
@@ -190,7 +190,7 @@ isolated function mantleEntryForBare(string bareId) returns [string, MantleEntry
         }
     }
     return error(string `model '${bareId}' is not available on bedrock-mantle (no known request ` +
-        string `path). Use the matching BedrockRuntime*ModelProvider, or upgrade the module if AWS ` +
+        string `path). Use the matching Runtime*ModelProvider, or upgrade the module if AWS ` +
         string `has since added it to bedrock-mantle`);
 }
 

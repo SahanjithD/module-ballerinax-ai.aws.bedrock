@@ -136,7 +136,7 @@ isolated function guardDualstack(string serviceName, string region, boolean dual
     return error(string `'dualstack' is not available on '${serviceName}': AWS publishes a dualstack ` +
         string `('.api.aws') host for 'bedrock-mantle' only, so '${serviceName}.${region}.api.aws' does ` +
         string `not resolve and every request would fail as a connection error. Drop 'dualstack' ` +
-        string `(the standard host is reached over IPv4), use a BedrockMantle*ModelProvider if you ` +
+        string `(the standard host is reached over IPv4), use a Mantle*ModelProvider if you ` +
         string `need the dualstack endpoint family, or set 'customEndpoint' to dial a specific origin.`);
 }
 
@@ -171,7 +171,7 @@ isolated function guardBedrockPartition(string partition, string region) returns
 // there.)
 //
 // Reaching the guard in `buildEndpoint` means the caller constructed a
-// `BedrockMantle*ModelProvider` in a region whose partition serves no Mantle host.
+// `Mantle*ModelProvider` in a region whose partition serves no Mantle host.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
 isolated function mantleServedOnPartition(string partition) returns boolean
     => partition == "aws" || partition == "aws-us-gov";
@@ -214,12 +214,12 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
             // `bedrock-runtime-fips` but no `bedrock-mantle-fips`.
             // https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html
             return error("'fips' is not available on the bedrock-mantle endpoint: there is no " +
-                "bedrock-mantle FIPS host. Use a BedrockRuntime*ModelProvider for a " +
+                "bedrock-mantle FIPS host. Use a Runtime*ModelProvider for a " +
                 "FIPS-compliant Bedrock call.");
         }
         if derived && !mantleServedOnPartition(route.partition) {
             return error(string `bedrock-mantle is not available on partition '${route.partition}': no ` +
-                string `bedrock-mantle host is served there. Use a BedrockRuntime*ModelProvider, or a ` +
+                string `bedrock-mantle host is served there. Use a Runtime*ModelProvider, or a ` +
                 string `commercial ('aws') or GovCloud ('aws-us-gov') region.`);
         }
         MantleEntry entry = check route.mantleEntry.ensureType();

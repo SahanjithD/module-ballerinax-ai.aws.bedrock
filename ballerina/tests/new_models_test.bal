@@ -134,14 +134,14 @@ function testClaudeOpus5AcceptsItsGeoAndGlobalProfilesOnTheRuntimeEndpoint() ret
 
 @test:Config {}
 function testNewModelProvidersConstruct() returns error? {
-    BedrockRuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION);
-    BedrockRuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_3, TEST_CREDS, REGION);
-    BedrockRuntimeQwenModelProvider _ = check new (QWEN3_CODER_480B, TEST_CREDS, REGION);
-    BedrockRuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION);
-    BedrockMantleAnthropicModelProvider _ = check new (MANTLE_CLAUDE_SONNET_5, TEST_CREDS, REGION);
-    BedrockMantleMistralModelProvider _ = check new (MANTLE_MISTRAL_LARGE_3, TEST_CREDS, REGION);
-    BedrockMantleQwenModelProvider _ = check new (MANTLE_QWEN3_CODER_480B, TEST_CREDS, REGION);
-    BedrockMantleDeepSeekModelProvider _ = check new (MANTLE_DEEPSEEK_V3_2, TEST_CREDS, REGION);
+    RuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION);
+    RuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_3, TEST_CREDS, REGION);
+    RuntimeQwenModelProvider _ = check new (QWEN3_CODER_480B, TEST_CREDS, REGION);
+    RuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION);
+    MantleAnthropicModelProvider _ = check new (MANTLE_CLAUDE_SONNET_5, TEST_CREDS, REGION);
+    MantleMistralModelProvider _ = check new (MANTLE_MISTRAL_LARGE_3, TEST_CREDS, REGION);
+    MantleQwenModelProvider _ = check new (MANTLE_QWEN3_CODER_480B, TEST_CREDS, REGION);
+    MantleDeepSeekModelProvider _ = check new (MANTLE_DEEPSEEK_V3_2, TEST_CREDS, REGION);
 }
 
 // ---- The sharp edge: typed generate() on the one route that cannot do it ----
@@ -157,7 +157,7 @@ function testTypedGenerateErrorsOnTheMantleMessagesRoute() returns error? {
     // The refusal is local — no call is spent — and it names the model and the way
     // out. The SAME model on the runtime class does typed generation normally.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-structured-outputs.html
-    BedrockMantleAnthropicModelProvider provider =
+    MantleAnthropicModelProvider provider =
         check new (MANTLE_CLAUDE_SONNET_5, TEST_CREDS, REGION);
     FruitShape|ai:Error typed = provider->generate(`Name a fruit.`);
     test:assertTrue(typed is ai:Error, "Mantle Messages cannot do structured output");
@@ -169,14 +169,14 @@ function testTypedGenerateErrorsOnTheMantleMessagesRoute() returns error? {
 
 @test:Config {}
 function testTheRuntimeClassIsTheDocumentedWayOutOfThatRefusal() returns error? {
-    // The refusal points at `BedrockRuntime*ModelProvider` with the CONVERSE shape,
+    // The refusal points at `Runtime*ModelProvider` with the CONVERSE shape,
     // so that combination must actually construct and select tool forcing — otherwise
     // the advice is a dead end.
     Route route = check resolveRuntimeRoute(CLAUDE_SONNET_5, REGION, CONVERSE);
     readonly & ModelConverter converter = check selectConverter(route);
     test:assertEquals(structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice),
             TOOL_FORCING);
-    BedrockRuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION, CONVERSE);
+    RuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION, CONVERSE);
 }
 
 // ---- Models the live suite could only reach as raw id strings ----

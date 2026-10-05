@@ -26,6 +26,7 @@ const string TITAN_EMBED_PREFIX = "amazon.titan-embed";
 # constraint, not ours; for large corpora AWS's own recommendation is an
 # asynchronous batch-inference job, which is outside the `ai:EmbeddingProvider`
 # contract.
+@display {label: "Bedrock Titan Embedding Provider"}
 public distinct isolated client class TitanEmbeddingProvider {
     *ai:EmbeddingProvider;
 

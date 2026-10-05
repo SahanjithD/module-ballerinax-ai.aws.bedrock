@@ -66,7 +66,7 @@ public type RetryConfig record {|
 // ============================================================================
 
 # Everything that is not the model's identity, shared by every
-# `BedrockRuntime*ModelProvider` and by `BedrockCommonModelProvider`.
+# `Runtime*ModelProvider` and by `CommonModelProvider`.
 // NOTE `api` and `endpoint` are NOT here. Both are routing/transport decisions
 // a caller makes at the same moment they choose the model and the region, so they sit
 // directly on `init` alongside those rather than one level down in this record —

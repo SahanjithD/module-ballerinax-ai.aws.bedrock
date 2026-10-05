@@ -39,7 +39,7 @@ public enum GoogleMantleModel {
     MANTLE_GEMMA_4_31B = "google.gemma-4-31b"
 }
 
-# Configuration for `BedrockMantleGoogleModelProvider`.
+# Configuration for `MantleGoogleModelProvider`.
 public type GoogleMantleConfig record {|
     *CommonMantleConfig;
 |};
@@ -50,7 +50,8 @@ public type GoogleMantleConfig record {|
 # SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
 # No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockMantleGoogleModelProvider {
+@display {label: "Bedrock Mantle Google Model Provider"}
+public isolated distinct client class MantleGoogleModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -80,7 +81,7 @@ public isolated distinct client class BedrockMantleGoogleModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockMantleGoogleModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("MantleGoogleModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
         self.api = route.api;
@@ -92,7 +93,7 @@ public isolated distinct client class BedrockMantleGoogleModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (), ());
-        check validateParamsForRoute("BedrockMantleGoogleModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("MantleGoogleModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();

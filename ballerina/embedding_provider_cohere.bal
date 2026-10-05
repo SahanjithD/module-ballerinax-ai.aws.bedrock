@@ -24,6 +24,7 @@ const string COHERE_EMBED_PREFIX = "cohere.embed";
 # **`inputType` is fixed at construction and matters.** Embed your corpus with
 # `SEARCH_DOCUMENT` and your queries with `SEARCH_QUERY`, using one provider per
 # role — getting it backwards degrades retrieval silently, with no error.
+@display {label: "Bedrock Cohere Embedding Provider"}
 public distinct isolated client class CohereEmbeddingProvider {
     *ai:EmbeddingProvider;
 

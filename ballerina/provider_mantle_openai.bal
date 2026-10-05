@@ -43,7 +43,7 @@ public enum OpenAIMantleModel {
     MANTLE_GPT_6_LUNA = "openai.gpt-6-luna"
 }
 
-# Configuration for `BedrockMantleOpenAIModelProvider`.
+# Configuration for `MantleOpenAIModelProvider`.
 public type OpenAIMantleConfig record {|
     *CommonMantleConfig;
 
@@ -59,7 +59,8 @@ public type OpenAIMantleConfig record {|
 # SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
 # No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockMantleOpenAIModelProvider {
+@display {label: "Bedrock Mantle OpenAI Model Provider"}
+public isolated distinct client class MantleOpenAIModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -89,7 +90,7 @@ public isolated distinct client class BedrockMantleOpenAIModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockMantleOpenAIModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("MantleOpenAIModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
         self.api = route.api;
@@ -102,7 +103,7 @@ public isolated distinct client class BedrockMantleOpenAIModelProvider {
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (),
                 (), (), (), config?.reasoningEffort);
-        check validateParamsForRoute("BedrockMantleOpenAIModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("MantleOpenAIModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();

@@ -30,7 +30,7 @@ public enum QwenMantleModel {
     MANTLE_QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
 
-# Configuration for `BedrockMantleQwenModelProvider`.
+# Configuration for `MantleQwenModelProvider`.
 public type QwenMantleConfig record {|
     *CommonMantleConfig;
 
@@ -44,7 +44,8 @@ public type QwenMantleConfig record {|
 # SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
 # No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockMantleQwenModelProvider {
+@display {label: "Bedrock Mantle Qwen Model Provider"}
+public isolated distinct client class MantleQwenModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -74,7 +75,7 @@ public isolated distinct client class BedrockMantleQwenModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockMantleQwenModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("MantleQwenModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
         self.api = route.api;
@@ -94,7 +95,7 @@ public isolated distinct client class BedrockMantleQwenModelProvider {
         }
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, extra, (), (), ());
-        check validateParamsForRoute("BedrockMantleQwenModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("MantleQwenModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();

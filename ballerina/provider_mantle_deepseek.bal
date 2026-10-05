@@ -23,7 +23,7 @@ public enum DeepSeekMantleModel {
     MANTLE_DEEPSEEK_V3_2 = "deepseek.v3.2"
 }
 
-# Configuration for `BedrockMantleDeepSeekModelProvider`.
+# Configuration for `MantleDeepSeekModelProvider`.
 public type DeepSeekMantleConfig record {|
     *CommonMantleConfig;
 |};
@@ -34,7 +34,8 @@ public type DeepSeekMantleConfig record {|
 # SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
 # No guardrails, cross-region inference or native structured output.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockMantleDeepSeekModelProvider {
+@display {label: "Bedrock Mantle DeepSeek Model Provider"}
+public isolated distinct client class MantleDeepSeekModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -64,7 +65,7 @@ public isolated distinct client class BedrockMantleDeepSeekModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveMantleRoute(model, region);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockMantleDeepSeekModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("MantleDeepSeekModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, ());
 
         self.api = route.api;
@@ -76,7 +77,7 @@ public isolated distinct client class BedrockMantleDeepSeekModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, (), (), ());
-        check validateParamsForRoute("BedrockMantleDeepSeekModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("MantleDeepSeekModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, (),
                 credentials, resolvedParams).cloneReadOnly();

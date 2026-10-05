@@ -71,7 +71,7 @@ isolated function structuredGenerate(StructuredOutputStyle structuredOutput, Api
     return error ai:LlmInvalidGenerationError(
         string `Structured output is not available for model '${wireModelId}' on the ` +
         string `${converter.dialect} route${api == MESSAGES ? " on bedrock-mantle" : ""}, so the ` +
-        string `target type must be 'string'. Use a BedrockRuntime*ModelProvider with the CONVERSE ` +
+        string `target type must be 'string'. Use a Runtime*ModelProvider with the CONVERSE ` +
         string `api for typed generation.`);
 }
 

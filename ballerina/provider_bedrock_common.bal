@@ -17,7 +17,7 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Configuration for `BedrockCommonModelProvider`.
+# Configuration for `CommonModelProvider`.
 public type BedrockCommonConfig record {|
     *CommonRuntimeConfig;
 |};
@@ -38,10 +38,11 @@ public type BedrockCommonConfig record {|
 #
 # Vendor-agnostic: takes a model id as a plain `string` and reaches every model
 # Bedrock serves on Converse, including vendors with no dedicated class here. Use a
-# `BedrockRuntime<Vendor>ModelProvider` for the other API families.
+# `Runtime<Vendor>ModelProvider` for the other API families.
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-public isolated distinct client class BedrockCommonModelProvider {
+@display {label: "Bedrock Common Model Provider"}
+public isolated distinct client class CommonModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -70,7 +71,7 @@ public isolated distinct client class BedrockCommonModelProvider {
             @display {label: "Configuration"} *BedrockCommonConfig config)
             returns ai:Error? {
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockCommonModelProvider", credentials,
+            check resolveSpine("CommonModelProvider", credentials,
                 resolveRuntimeRoute(model, region, CONVERSE), endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
@@ -81,7 +82,7 @@ public isolated distinct client class BedrockCommonModelProvider {
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier,
                 config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("BedrockCommonModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("CommonModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();

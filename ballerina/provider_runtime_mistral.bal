@@ -44,7 +44,7 @@ public enum MistralRuntimeModel {
     MISTRAL_7B_INSTRUCT = "mistral.mistral-7b-instruct-v0:2"
 }
 
-# Configuration for `BedrockRuntimeMistralModelProvider`.
+# Configuration for `RuntimeMistralModelProvider`.
 public type MistralRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
@@ -54,7 +54,8 @@ public type MistralRuntimeConfig record {|
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockRuntimeMistralModelProvider {
+@display {label: "Bedrock Runtime Mistral Model Provider"}
+public isolated distinct client class RuntimeMistralModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -86,7 +87,7 @@ public isolated distinct client class BedrockRuntimeMistralModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveRuntimeRoute(model, region, api);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockRuntimeMistralModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("RuntimeMistralModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.api = route.api;
@@ -98,7 +99,7 @@ public isolated distinct client class BedrockRuntimeMistralModelProvider {
         // be able to refuse the ones it cannot carry before any of it is stored.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("BedrockRuntimeMistralModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("RuntimeMistralModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();

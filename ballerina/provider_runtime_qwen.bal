@@ -31,7 +31,7 @@ public enum QwenRuntimeModel {
     QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
 
-# Configuration for `BedrockRuntimeQwenModelProvider`.
+# Configuration for `RuntimeQwenModelProvider`.
 public type QwenRuntimeConfig record {|
     *CommonRuntimeConfig;
 
@@ -44,7 +44,8 @@ public type QwenRuntimeConfig record {|
 #
 # Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-public isolated distinct client class BedrockRuntimeQwenModelProvider {
+@display {label: "Bedrock Runtime Qwen Model Provider"}
+public isolated distinct client class RuntimeQwenModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -76,7 +77,7 @@ public isolated distinct client class BedrockRuntimeQwenModelProvider {
             returns ai:Error? {
         Route|error resolved = resolveRuntimeRoute(model, region, api);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("BedrockRuntimeQwenModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("RuntimeQwenModelProvider", credentials, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.api = route.api;
@@ -96,7 +97,7 @@ public isolated distinct client class BedrockRuntimeQwenModelProvider {
         }
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, extra, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("BedrockRuntimeQwenModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("RuntimeQwenModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 credentials, resolvedParams).cloneReadOnly();
