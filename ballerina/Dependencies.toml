@@ -439,9 +439,9 @@ modules = [
 ]
 
 [[package]]
-org = "dasunorg"
+org = "ballerinax"
 name = "ai.aws.bedrock"
-version = "3.0.0"
+version = "1.0.0"
 dependencies = [
 	{org = "ballerina", name = "ai"},
 	{org = "ballerina", name = "crypto"},
@@ -456,6 +456,6 @@ dependencies = [
 	{org = "ballerinax", name = "aws"}
 ]
 modules = [
-	{org = "dasunorg", packageName = "ai.aws.bedrock", moduleName = "ai.aws.bedrock"}
+	{org = "ballerinax", packageName = "ai.aws.bedrock", moduleName = "ai.aws.bedrock"}
 ]
 
