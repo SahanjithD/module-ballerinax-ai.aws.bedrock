@@ -20,10 +20,10 @@ import ballerina/time;
 import ballerinax/aws;
 import ballerinax/aws.auth;
 
-// The shared spine `BedrockManagedKnowledgeBase` is built over: two agent-plane
+// The shared spine `ManagedKnowledgeBase` is built over: two agent-plane
 // transports, find-or-create, data-source resolution, chunking-strategy detection,
 // and the document/knowledge-base wire calls both `ingest()` and `deleteByFilter()`
-// need. `BedrockVectorKnowledgeBase` (knowledgebase_vector.bal) is built over the
+// need. `VectorKnowledgeBase` (knowledgebase_vector.bal) is built over the
 // same spine, with its own request bodies where the self-managed API family differs.
 
 // Bedrock's `_source_uri` metadata attribute — injected on every retrieval result,
@@ -36,10 +36,10 @@ import ballerinax/aws.auth;
 const string SOURCE_URI_METADATA_KEY = "_source_uri";
 
 // The public class names, threaded into every error message raised from a file both
-// classes share. Without this a `BedrockVectorKnowledgeBase` user gets errors naming
-// `BedrockManagedKnowledgeBase` — a class they are not using.
-const string MANAGED_KB_PROVIDER = "BedrockManagedKnowledgeBase";
-const string VECTOR_KB_PROVIDER = "BedrockVectorKnowledgeBase";
+// classes share. Without this a `VectorKnowledgeBase` user gets errors naming
+// `ManagedKnowledgeBase` — a class they are not using.
+const string MANAGED_KB_PROVIDER = "ManagedKnowledgeBase";
+const string VECTOR_KB_PROVIDER = "VectorKnowledgeBase";
 
 // `deleteByFilter`'s enumeration query text. Its CONTENT is irrelevant and this is
 // not a tuning knob — it exists solely because `Retrieve` REJECTS an empty query:
@@ -152,7 +152,7 @@ const int KB_MAX_RESULTS_PER_CALL = 100;
 // Spine resolution.
 // ============================================================================
 
-# Everything `BedrockManagedKnowledgeBase`'s methods read: two agent-plane
+# Everything `ManagedKnowledgeBase`'s methods read: two agent-plane
 # transports (control on `bedrock-agent`, data on `bedrock-agent-runtime`), the
 # resolved knowledge base / data source ids, and the detected chunking strategy.
 # Module-private — the resolver's output, mirroring `Route`/`Endpoint`.
@@ -320,11 +320,11 @@ isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, s
     // and failing construction over it would be a false positive.
     if kbType != "" && kbType != "MANAGED" {
         return error ai:Error(
-            string `Knowledge base '${kbId}' is of type '${kbType}', but BedrockManagedKnowledgeBase ` +
+            string `Knowledge base '${kbId}' is of type '${kbType}', but ManagedKnowledgeBase ` +
             "supports only 'MANAGED' knowledge bases (the ones where Bedrock owns the vector store). " +
             "A 'VECTOR' knowledge base is backed by your own vector store and is served by a different " +
             "search branch, so retrieve() and deleteByFilter() are not valid against it. Use " +
-            "BedrockVectorKnowledgeBase for a 'VECTOR' knowledge base.");
+            "VectorKnowledgeBase for a 'VECTOR' knowledge base.");
     }
     return kb;
 }

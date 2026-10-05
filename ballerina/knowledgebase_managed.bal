@@ -25,8 +25,9 @@ import ballerinax/aws;
 # creates one, and attaching by id fails construction, naming why, if it lacks one.
 #
 # Self-managed (customer vector store, `type = VECTOR`) knowledge bases are not
-# supported here — use `BedrockVectorKnowledgeBase` for those.
-public distinct isolated client class BedrockManagedKnowledgeBase {
+# supported here — use `VectorKnowledgeBase` for those.
+@display {label: "Bedrock Managed Knowledge Base"}
+public distinct isolated client class ManagedKnowledgeBase {
     *ai:KnowledgeBase;
 
     private final BedrockTransport controlTransport;

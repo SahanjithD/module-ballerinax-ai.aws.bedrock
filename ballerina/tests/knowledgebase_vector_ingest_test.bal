@@ -126,7 +126,7 @@ function testVectorIngestBatchesInGroupsOfTen() returns error? {
     check mockListener.'start();
     resetVectorIngestBatchSizes();
 
-    BedrockVectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
+    VectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
 
     ai:TextDocument[] docs = [];
@@ -153,7 +153,7 @@ function testVectorIngestReportsFailedDocuments() returns error? {
     check mockListener.'start();
     resetVectorIngestBatchSizes();
 
-    BedrockVectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
+    VectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:TextDocument[] docs = [
         {content: "fine", metadata: {id: 1}},
@@ -181,7 +181,7 @@ function testVectorIngestRefusesNonTextContent() returns error? {
     check mockListener.'start();
     resetVectorIngestBatchSizes();
 
-    BedrockVectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
+    VectorKnowledgeBase kb = check new (VING_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:ImageDocument image = {content: "https://example.com/cat.png"};
     ai:Error? result = kb.ingest(image);

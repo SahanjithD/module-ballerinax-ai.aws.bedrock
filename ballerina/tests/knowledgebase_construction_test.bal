@@ -16,7 +16,7 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/test;
 
-// `BedrockManagedKnowledgeBase` construction-error scenarios, each against a small
+// `ManagedKnowledgeBase` construction-error scenarios, each against a small
 // stubbed bedrock-agent on its own local listener: an ambiguous knowledge base
 // name, a knowledge base with no CUSTOM data source, and one with several.
 
@@ -48,7 +48,7 @@ function testAmbiguousKnowledgeBaseNameFailsAtConstruction() returns error? {
     check mockListener.attach(new AmbiguousNameMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase|ai:Error kb = new (
+    ManagedKnowledgeBase|ai:Error kb = new (
         {name: "dup-kb", roleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb"},
         KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
@@ -99,7 +99,7 @@ function testNoCustomDataSourceFailsAtConstruction() returns error? {
     check mockListener.attach(new NoCustomDataSourceMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase|ai:Error kb =
+    ManagedKnowledgeBase|ai:Error kb =
         new (NO_CUSTOM_KB_ID, KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -161,7 +161,7 @@ function testMultipleCustomDataSourcesFailAtConstruction() returns error? {
     check mockListener.attach(new MultipleCustomDataSourcesMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase|ai:Error kb =
+    ManagedKnowledgeBase|ai:Error kb =
         new (MULTI_CUSTOM_KB_ID, KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -212,7 +212,7 @@ function testVectorKnowledgeBaseIsRefusedAtConstruction() returns error? {
     check mockListener.attach(new VectorKnowledgeBaseMock(), "/");
     check mockListener.'start();
 
-    BedrockManagedKnowledgeBase|ai:Error kb =
+    ManagedKnowledgeBase|ai:Error kb =
         new (VECTOR_KB_ID, KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 

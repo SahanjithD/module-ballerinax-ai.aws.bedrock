@@ -15,7 +15,7 @@
 import ballerina/ai;
 import ballerina/http;
 
-// Public surface for `BedrockVectorKnowledgeBase` — the SELF-MANAGED knowledge base
+// Public surface for `VectorKnowledgeBase` — the SELF-MANAGED knowledge base
 // (`KnowledgeBaseConfiguration.type = VECTOR`), where the vector store belongs to the
 // caller rather than to Bedrock. See knowledgebase_vector_common.bal for the
 // resolution spine and knowledgebase_vector.bal for the public class.
@@ -384,7 +384,7 @@ public type VectorKnowledgeBaseDefinition record {|
     decimal readyTimeout = 300;
 |};
 
-# Configuration for `BedrockVectorKnowledgeBase`.
+# Configuration for `VectorKnowledgeBase`.
 public type VectorKnowledgeBaseConfig record {|
     # The `CUSTOM` data source to ingest into / delete from. Resolved automatically
     # when omitted, which requires exactly one `CUSTOM` data source on the knowledge

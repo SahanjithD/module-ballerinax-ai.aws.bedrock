@@ -17,7 +17,7 @@ import ballerina/http;
 import ballerinax/aws;
 import ballerinax/aws.auth;
 
-// The wire layer for `BedrockVectorKnowledgeBase`. Deliberately SEPARATE from
+// The wire layer for `VectorKnowledgeBase`. Deliberately SEPARATE from
 // knowledgebase_common.bal rather than branching inside it on a knowledge base type:
 // the managed class's request bodies and search branch stay untouched, so a change
 // here cannot regress it.
@@ -519,11 +519,11 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
     // failing construction over it would be a false positive.
     if kbType != "" && kbType != "VECTOR" {
         return error ai:Error(
-            string `Knowledge base '${kbId}' is of type '${kbType}', but BedrockVectorKnowledgeBase ` +
+            string `Knowledge base '${kbId}' is of type '${kbType}', but VectorKnowledgeBase ` +
             "supports only 'VECTOR' knowledge bases (the self-managed ones, backed by your own vector " +
             "store). A 'MANAGED' knowledge base is served by a different search branch and uses a " +
             "different reserved metadata prefix, so retrieve() and deleteByFilter() are not valid " +
-            "against it. Use BedrockManagedKnowledgeBase instead.");
+            "against it. Use ManagedKnowledgeBase instead.");
     }
     return kb;
 }
