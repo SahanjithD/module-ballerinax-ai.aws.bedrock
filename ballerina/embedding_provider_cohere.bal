@@ -19,11 +19,11 @@ import ballerinax/aws;
 
 const string COHERE_EMBED_PREFIX = "cohere.embed";
 
-# Cohere Embed on AWS Bedrock (InvokeModel only).
-#
-# **`inputType` is fixed at construction and matters.** Embed your corpus with
-# `SEARCH_DOCUMENT` and your queries with `SEARCH_QUERY`, using one provider per
-# role — getting it backwards degrades retrieval silently, with no error.
+// `inputType` is fixed at construction and matters. Embed the corpus with
+// `SEARCH_DOCUMENT` and queries with `SEARCH_QUERY`, using one provider per
+// role — getting it backwards degrades retrieval silently, with no error.
+
+# Cohere Embed text embeddings on AWS Bedrock.
 @display {label: "Bedrock Cohere Embedding Provider"}
 public distinct isolated client class CohereEmbeddingProvider {
     *ai:EmbeddingProvider;
@@ -33,19 +33,11 @@ public distinct isolated client class CohereEmbeddingProvider {
     private final BedrockTransport transport;
     private final readonly & EmbeddingParams params;
 
-    # + model - A Cohere Embed id, or a raw id for a model AWS ships before we update the enum
-    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
-    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
-    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + model - A Cohere Embed model id, or any id string the endpoint serves
+    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
-    #              The host is derived from the region when this is `()`, which is
-    #              correct in every partition — set it only for PrivateLink without
-    #              private DNS, an egress gateway, or a local mock. A `customEndpoint`
-    #              is a GLOBAL override with the same semantics as the AWS SDK's
-    #              `AWS_ENDPOINT_URL`: it applies to every service this client talks to
-    # + config - `inputType` (see the class docs), `truncate`, `dimensions`, retry, HTTP settings
+    # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
+    # + config - Input type, truncation, vector size and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} CohereEmbeddingModel|string model,
@@ -104,8 +96,8 @@ public distinct isolated client class CohereEmbeddingProvider {
     isolated remote function embed(ai:Chunk chunk) returns ai:Embedding|ai:Error
         => runEmbed("Cohere", self.wireModelId, self.converter, self.transport, self.params, chunk);
 
+    // Sends up to 96 texts per request (Cohere's `texts` limit).
     # Converts a batch of chunks into vector embeddings, preserving input order.
-    # Batches of up to 96 texts per request.
     #
     # + chunks - The chunks to convert; each must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embeddings in input order, or an `ai:Error`

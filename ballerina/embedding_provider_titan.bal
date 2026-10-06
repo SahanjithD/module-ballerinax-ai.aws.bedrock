@@ -19,13 +19,13 @@ import ballerinax/aws;
 
 const string TITAN_EMBED_PREFIX = "amazon.titan-embed";
 
-# Amazon Titan text embeddings on AWS Bedrock (InvokeModel only).
-#
-# NOTE: Titan's `inputText` is a single string, so there is no batch input at all —
-# `batchEmbed` of n chunks is n sequential round trips. That is Bedrock's
-# constraint, not ours; for large corpora AWS's own recommendation is an
-# asynchronous batch-inference job, which is outside the `ai:EmbeddingProvider`
-# contract.
+// Titan's `inputText` is a single string, so there is no batch input at all —
+// `batchEmbed` of n chunks is n sequential round trips. That is Bedrock's
+// constraint, not ours; for large corpora AWS's own recommendation is an
+// asynchronous batch-inference job, which is outside the `ai:EmbeddingProvider`
+// contract.
+
+# Amazon Titan text embeddings on AWS Bedrock.
 @display {label: "Bedrock Titan Embedding Provider"}
 public distinct isolated client class TitanEmbeddingProvider {
     *ai:EmbeddingProvider;
@@ -35,19 +35,11 @@ public distinct isolated client class TitanEmbeddingProvider {
     private final BedrockTransport transport;
     private final readonly & EmbeddingParams params;
 
-    # + model - A Titan embedding id, or a raw id for a model AWS ships before we update the enum
-    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
-    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), an
-    #                 `auth:StaticAuthConfig`/`auth:AssumeRoleConfig`/... for an explicit
-    #                 source, or a `BearerToken` for a Bedrock API key
+    # + model - A Titan embedding model id, or any id string the endpoint serves
+    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
-    #              The host is derived from the region when this is `()`, which is
-    #              correct in every partition — set it only for PrivateLink without
-    #              private DNS, an egress gateway, or a local mock. A `customEndpoint`
-    #              is a GLOBAL override with the same semantics as the AWS SDK's
-    #              `AWS_ENDPOINT_URL`: it applies to every service this client talks to
-    # + config - `dimensions`, `normalize`, retry, and HTTP settings
+    # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
+    # + config - Vector size, normalization and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} TitanEmbeddingModel|string model,

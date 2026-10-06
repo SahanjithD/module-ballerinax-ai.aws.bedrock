@@ -35,9 +35,10 @@ public enum CohereEmbeddingModel {
     COHERE_EMBED_V4 = "cohere.embed-v4:0"
 }
 
-# Cohere's REQUIRED `input_type`. Getting this wrong silently degrades retrieval
-# — there is no error, just worse results. Embed your corpus with
-# `SEARCH_DOCUMENT` and your queries with `SEARCH_QUERY`.
+// Cohere requires `input_type` on every request. Getting it wrong silently
+// degrades retrieval — there is no error, just worse results.
+
+# How Cohere should treat the input: `SEARCH_DOCUMENT` for the corpus, `SEARCH_QUERY` for queries.
 public enum CohereInputType {
     SEARCH_DOCUMENT = "search_document",
     SEARCH_QUERY = "search_query",
@@ -45,8 +46,9 @@ public enum CohereInputType {
     CLUSTERING = "clustering"
 }
 
-# Cohere's `truncate` behaviour for over-long inputs.
-# Members are prefixed because a bare `NONE` would collide with `GuardrailAction`.
+// Members are prefixed because a bare `NONE` would collide with `GuardrailAction`.
+
+# How Cohere truncates over-long inputs.
 public enum Truncate {
     TRUNCATE_NONE = "NONE",
     TRUNCATE_START = "START",
@@ -66,12 +68,12 @@ public type TitanEmbeddingConfig record {|
     // edit to the guard. The cost accepted is that the Integrator renders a text field
     // rather than a dropdown (its form generator emits SINGLE_SELECT only when every
     // union member is a singleton).
-    # Output vector size — Titan V2 accepts 256 | 512 | 1024 (default 1024).
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+    # Output vector size: 256, 512 or 1024 (Titan V2 only). Defaults to 1024
     int dimensions?;
-    # Whether to L2-normalize the returned vector (Titan only).
+    # Whether to L2-normalize the returned vector
     boolean normalize?;
-    # Escape hatch, mirroring the model provider's passthrough.
+    # Extra fields sent verbatim in the request body
     AdditionalRequestFields additionalModelRequestFields?;
     # Retry policy.
     RetryConfig retryConfig?;
@@ -79,24 +81,26 @@ public type TitanEmbeddingConfig record {|
     http:ClientConfiguration httpConfig?;
 |};
 
-# Cohere-specific embedding configuration. `inputType` lives ONLY here, which is
-# why the model provider's "inputType set on Titan → error" check is gone: with
-# the vendor split it is unrepresentable.
+// `inputType` lives ONLY here, which is why the model provider's "inputType set
+// on Titan → error" check is gone: with the vendor split it is unrepresentable.
+
+# Cohere-specific embedding configuration.
 public type CohereEmbeddingConfig record {|
-    # REQUIRED on the wire. Defaults to `SEARCH_DOCUMENT` — the ingest path is the
-    # higher-volume one. Construct a second provider with `SEARCH_QUERY` for the
-    # query side.
+    // Required on the wire. Defaults to `SEARCH_DOCUMENT` — the ingest path is the
+    // higher-volume one. Construct a second provider with `SEARCH_QUERY` for the
+    // query side.
+    # `SEARCH_DOCUMENT` for the corpus, `SEARCH_QUERY` for queries
     CohereInputType inputType = SEARCH_DOCUMENT;
 
-    # Truncation behaviour for over-long inputs.
+    # How over-long inputs are truncated
     Truncate truncate?;
     // `int` rather than a closed type, for the reasons spelled out on
-    // `TitanEmbeddingConfig.dimensions`.
-    # Output vector size — Cohere Embed v4 accepts 256 | 512 | 1024 | 1536 (default 1536).
-    # Embed v3 has no output-size parameter at all and always returns 1024.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+    // `TitanEmbeddingConfig.dimensions`. Embed v3 has no output-size parameter
+    // at all and always returns 1024.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+    # Output vector size: 256, 512, 1024 or 1536 (Embed v4 only). Defaults to 1536
     int dimensions?;
-    # Escape hatch, mirroring the model provider's passthrough.
+    # Extra fields sent verbatim in the request body
     AdditionalRequestFields additionalModelRequestFields?;
     # Retry policy.
     RetryConfig retryConfig?;
