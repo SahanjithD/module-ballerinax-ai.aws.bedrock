@@ -21,108 +21,112 @@ import ballerinax/aws.auth;
 // knowledgebase_common.bal for the resolution spine and knowledgebase_managed.bal
 // for the public class.
 
-# Credentials for the two Bedrock agent planes. SigV4 only, deliberately excluding
-# `BearerToken`: Bedrock API keys cannot be used with the Agents for Amazon Bedrock
-# APIs (`bedrock-agent`/`bedrock-agent-runtime`), which back knowledge bases.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html
+// SigV4 only, deliberately excluding `BearerToken`: Bedrock API keys cannot be used
+// with the Agents for Amazon Bedrock APIs (`bedrock-agent`/`bedrock-agent-runtime`),
+// which back knowledge bases.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html
+
+# AWS credentials for a Bedrock knowledge base.
 public type KnowledgeBaseCredentials auth:AuthConfig;
 
-# How Bedrock splits ingested documents into retrievable chunks. Set on
-# `CreateDataSource` and fixed for the life of the data source.
-# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html
+// Set on `CreateDataSource` and fixed for the life of the data source.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html
+
+# How Bedrock splits ingested documents into chunks.
 public enum ChunkingStrategy {
-    # Splits each document into chunks of the approximate size set by
-    # `maxTokens`/`overlapPercentage`. The default.
+    # Fixed-size chunks. The default
     FIXED_SIZE,
-    # Two-layer chunking: large parent chunks, smaller child chunks derived from them.
+    # Large parent chunks with smaller child chunks
     HIERARCHICAL,
-    # Chunks by grouping semantically similar content.
+    # Chunks by grouping semantically similar content
     SEMANTIC,
-    # Treats each document as exactly one chunk, leaving chunking to the client via
-    # an `ai:Chunker`.
+    # One chunk per document; chunk client-side with an `ai:Chunker`
     NONE
 }
 
-# Reranking model selection for `retrieve()` on a managed knowledge base.
-# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_ManagedSearchConfiguration.html
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_ManagedSearchConfiguration.html
+
+# Reranking model used for retrieval.
 public enum RerankingModelType {
-    # No reranking pass.
+    # No reranking
     RERANKING_NONE = "NONE",
-    # Bedrock's own managed reranking model.
+    # Bedrock's managed reranking model
     RERANKING_MANAGED = "MANAGED"
 }
 
-# The `CUSTOM` direct-ingestion data source created alongside a knowledge base in
-# the find-or-create (`KnowledgeBaseDefinition`) path.
+// The `CUSTOM` direct-ingestion data source created alongside a knowledge base in
+// the find-or-create (`KnowledgeBaseDefinition`) path.
+
+# The data source created with a new knowledge base.
 public type DataSourceDefinition record {|
-    # Data source name.
+    # Data source name
     string name;
-    # Data source description.
+    # Data source description
     string description?;
 |};
 
-# A caller-supplied Bedrock embedding model for a knowledge base created through
-# `KnowledgeBaseDefinition`, replacing Bedrock's service-managed one.
-#
-# `embeddingModelType` cannot be changed after creation. Choosing one also opts out
-# of the managed reranker (`RERANKING_MANAGED`) and bills the model separately from
-# the knowledge base.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html#kb-managed-embedding-models
+// Replaces Bedrock's service-managed embedding model. `embeddingModelType` cannot be
+// changed after creation. Choosing one also opts out of the managed reranker
+// (`RERANKING_MANAGED`) and bills the model separately from the knowledge base.
+// AWS supports Amazon Titan Text Embeddings V2, Cohere Embed English v3, Cohere Embed
+// Multilingual v3, Cohere Embed v4, and Amazon Nova Multimodal Embeddings here, and
+// requires 1024 dimensions and FLOAT32.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html#kb-managed-embedding-models
+
+# Your own embedding model for a new managed knowledge base.
 public type ManagedEmbeddingModel record {|
-    # Embedding model ARN. AWS supports Amazon Titan Text Embeddings V2, Cohere Embed
-    # English v3, Cohere Embed Multilingual v3, Cohere Embed v4, and Amazon Nova
-    # Multimodal Embeddings on a managed knowledge base.
+    # Embedding model ARN
     string embeddingModelArn;
-    # Vector dimensions. AWS requires 1024 on a managed knowledge base.
+    # Vector dimensions. Must be 1024
     int dimensions = 1024;
-    # Vector data type. AWS requires float32 on a managed knowledge base.
+    # Vector data type. Must be `FLOAT32`
     string embeddingDataType = "FLOAT32";
 |};
 
-# A knowledge base to find-or-create by name, with all content flowing through this
-# module. `init` searches `ListKnowledgeBases` for an exact name match: one match
-# attaches to it, no match creates it, more than one is a construction error.
+// `init` searches `ListKnowledgeBases` for an exact name match: one match attaches to
+// it, no match creates it, more than one is a construction error. `name` must match
+// `([0-9a-zA-Z][_-]?){1,100}`. Leaving `embeddingModel` unset uses Bedrock's
+// service-managed model (no extra cost, chunking fixed at 300 tokens / 20% overlap);
+// setting it is permanent — read `ManagedEmbeddingModel` first.
+
+# A managed knowledge base to find or create by name.
 public type KnowledgeBaseDefinition record {|
-    # Knowledge base name. Must match `([0-9a-zA-Z][_-]?){1,100}`. Also the
-    # find-or-create lookup key.
+    # Knowledge base name, also used to find an existing one
     string name;
-    # IAM role Bedrock assumes to manage the knowledge base.
+    # IAM role Bedrock assumes to manage the knowledge base
     string roleArn;
-    # Knowledge base description.
+    # Knowledge base description
     string description?;
-    # The `CUSTOM` direct-ingestion data source created alongside the knowledge base.
+    # The data source created with the knowledge base
     DataSourceDefinition dataSource = {name: "ballerina-custom-source"};
-    # Embedding model. Leave unset for Bedrock's service-managed model (no extra
-    # cost, chunking fixed at 300 tokens / 20% overlap). Set to use your own model;
-    # read `ManagedEmbeddingModel` first, the choice is permanent.
+    # Your own embedding model. Defaults to Bedrock's managed model
     ManagedEmbeddingModel embeddingModel?;
-    # Customer-managed KMS key for the managed vector store. Unset uses an AWS-owned
-    # key.
+    # KMS key ARN for the vector store. Defaults to an AWS-owned key
     string kmsKeyArn?;
-    # How long `init` waits for the knowledge base and data source to leave their
-    # transient `CREATING` states.
+    # Seconds to wait for a new knowledge base to become ready
     decimal readyTimeout = 300;
 |};
 
+// `dataSourceId` is resolved automatically when omitted, which requires exactly one
+// `CUSTOM` data source on the knowledge base. `chunker` left unset is detected from the
+// data source's actual `chunkingStrategy` (`ai:DISABLE` unless it is `NONE`, in which
+// case `ai:AUTO`); an explicit `ai:Chunker` against a server-chunking data source is a
+// construction error. `httpConfig`/`retryConfig` are shared by both agent-plane clients.
+
 # Configuration for `ManagedKnowledgeBase`.
 public type ManagedKnowledgeBaseConfig record {|
-    # The `CUSTOM` data source to ingest into / delete from. Resolved automatically
-    # when omitted, which requires exactly one `CUSTOM` data source on the knowledge
-    # base.
+    # The `CUSTOM` data source to use. Detected when unset
     string dataSourceId?;
-    # Client-side chunking before `ingest()`. Leave unset to detect it from the data
-    # source's actual `chunkingStrategy` (`ai:DISABLE` unless it is `NONE`, in which
-    # case `ai:AUTO`). Passing an explicit `ai:Chunker` against a server-chunking
-    # data source is a construction error.
+    # Client-side chunker. Detected from the data source when unset
     ai:Chunker|ai:AUTO|ai:DISABLE chunker?;
-    # How long `ingest()` polls for submitted documents to reach a terminal state.
+    # Seconds to wait for documents to be indexed
     decimal ingestTimeout = 300;
-    # Default `numberOfResults` for `retrieve()` (1-100).
+    # Default number of results per retrieval (1-100)
     int numberOfResults?;
-    # Reranking model for `retrieve()`. Unset leaves it to Bedrock's own default.
+    # Reranking model for retrieval
     RerankingModelType rerankingModelType?;
-    # Underlying HTTP client configuration, shared by both agent-plane clients.
+    # HTTP client configuration
     http:ClientConfiguration httpConfig?;
-    # Retry policy, shared by both agent-plane clients.
+    # Retry configuration
     RetryConfig retryConfig?;
 |};

@@ -16,18 +16,20 @@ import ballerina/ai;
 import ballerina/ai.observe;
 import ballerinax/aws;
 
-# A Bedrock self-managed knowledge base (`KnowledgeBaseConfiguration.type = VECTOR`)
-# — your own vector store rather than Bedrock's — exposed through `ai:KnowledgeBase`.
-# This is the console's *Self-managed KB → Unstructured Vector Store KB*.
-#
-# Pass an existing knowledge base id to attach to it, or a
-# `VectorKnowledgeBaseDefinition` to find-or-create one by name.
-#
-# The vector store named by `storageConfiguration` must already exist; this class
-# never provisions one. `ingest()` additionally needs `bedrock:StartIngestionJob`
-# and `bedrock:IngestKnowledgeBaseDocuments` on the caller's credentials, and the
-# knowledge base's own `roleArn` needs permissions on the vector store itself.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
+// A Bedrock self-managed knowledge base (`KnowledgeBaseConfiguration.type = VECTOR`)
+// — your own vector store rather than Bedrock's — exposed through `ai:KnowledgeBase`.
+// This is the console's *Self-managed KB → Unstructured Vector Store KB*.
+//
+// Pass an existing knowledge base id to attach to it, or a
+// `VectorKnowledgeBaseDefinition` to find-or-create one by name.
+//
+// The vector store named by `storageConfiguration` must already exist; this class
+// never provisions one. `ingest()` additionally needs `bedrock:StartIngestionJob`
+// and `bedrock:IngestKnowledgeBaseDocuments` on the caller's credentials, and the
+// knowledge base's own `roleArn` needs permissions on the vector store itself.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
+
+# A Bedrock knowledge base backed by your own vector store.
 @display {label: "Bedrock Vector Knowledge Base"}
 public distinct isolated client class VectorKnowledgeBase {
     *ai:KnowledgeBase;
@@ -45,20 +47,17 @@ public distinct isolated client class VectorKnowledgeBase {
     // such treatment — it is an enum, and so already immutable.
     private final readonly & VectorRerankingConfig? rerankingConfiguration;
 
-    # + knowledgeBase - An existing knowledge base id/ARN, or a `VectorKnowledgeBaseDefinition` to
-    #                   find-or-create by name. The vector store it names must already exist
-    # + credentials - AWS credential source. Pass `auth:DEFAULT_CREDENTIALS` for the full
-    #                 AWS chain (env vars, EKS IRSA, SSO, shared config, EC2 IMDSv2), or an
-    #                 explicit `auth:AuthConfig`. SigV4 only — Bedrock API keys are not
-    #                 accepted on the agent planes
+    // The vector store a definition names must already exist. `credentials` is SigV4
+    // only — Bedrock API keys are not accepted on the agent planes. `endpoint` is derived
+    // from the region when `()`, which is correct in every partition; a `customEndpoint`
+    // is a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`,
+    // applying to every service this client talks to.
+
+    # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
+    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + endpoint - Endpoint resolution options (`fips`, `dualstack`, `customEndpoint`).
-    #              The host is derived from the region when this is `()`, which is
-    #              correct in every partition — set it only for PrivateLink without
-    #              private DNS, an egress gateway, or a local mock. A `customEndpoint`
-    #              is a GLOBAL override with the same semantics as the AWS SDK's
-    #              `AWS_ENDPOINT_URL`: it applies to every service this client talks to
-    # + config - Data source override, chunking, ingest/retrieve tuning, HTTP/retry settings
+    # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
+    # + config - Data source, chunking, retrieval and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Knowledge Base"} string|VectorKnowledgeBaseDefinition knowledgeBase,
@@ -86,15 +85,15 @@ public distinct isolated client class VectorKnowledgeBase {
     // chunks as `<id>#0`, `<id>#1`, ...; one that does not fan out keeps `<id>`.
     // Two documents in one call resolving to the SAME id are rejected rather than
     // silently overwriting each other.
+    //
+    // Chunks client-side first when the data source's `chunkingStrategy` is `NONE`, and
+    // blocks until every document reaches a terminal status or `ingestTimeout` elapses,
+    // so a `retrieve()` immediately afterward sees them.
 
-    # Ingests documents into the `CUSTOM` data source, chunking client-side first
-    # when the data source's `chunkingStrategy` is `NONE`.
+    # Ingests documents into the knowledge base.
     #
-    # Blocks until every document reaches a terminal status or `ingestTimeout`
-    # elapses, so a `retrieve()` immediately afterward sees them.
-    #
-    # + documents - The documents or chunks to index; only text content is supported
-    # + return - An `ai:Error` if any document fails to submit or to index; `nil` otherwise
+    # + documents - The documents or chunks to ingest; only text content is supported
+    # + return - An `ai:Error` if ingestion fails, otherwise `nil`
     public isolated function ingest(ai:Chunk[]|ai:Document[]|ai:Document documents) returns ai:Error? {
         observe:KnowledgeBaseIngestSpan span = observe:createKnowledgeBaseIngestSpan(self.knowledgeBaseId);
         span.addId(self.knowledgeBaseId);
@@ -139,12 +138,16 @@ public distinct isolated client class VectorKnowledgeBase {
         }
     }
 
-    # Retrieves relevant chunks. Searches across every data source on the knowledge
-    # base, not just the `CUSTOM` one `ingest()` writes to.
+    // Searches across every data source on the knowledge base, not just the `CUSTOM`
+    // one `ingest()` writes to. `maxLimit = -1` is still subject to the vector store's
+    // own relevance cutoff, and filter operator support is BACKEND-DEPENDENT — see the
+    // module README.
+
+    # Retrieves relevant chunks for the given query.
     #
     # + query - The text query to search for
-    # + maxLimit - The maximum number of items to return, or `-1` for no limit (subject to your vector store's own relevance cutoff)
-    # + filters - Optional metadata filters. Operator support is BACKEND-DEPENDENT — see the module README
+    # + maxLimit - The maximum number of items to return, or `-1` for no limit
+    # + filters - Optional metadata filters to apply during retrieval
     # + return - Matching chunks with similarity scores, or an `ai:Error`
     public isolated function retrieve(string query, int maxLimit = 10, ai:MetadataFilters? filters = ())
             returns ai:QueryMatch[]|ai:Error {
@@ -216,16 +219,15 @@ public distinct isolated client class VectorKnowledgeBase {
     // Parameterised here by the self-managed reserved metadata key
     // (`VECTOR_SOURCE_URI_METADATA_KEY`, NOT the managed `_source_uri`) and the
     // `vectorSearchConfiguration` branch (`vectorDeleteRetrieve`).
-    # Deletes documents matching `filters`.
+    //
+    // Only `CUSTOM` and `S3` data sources support deletion; anything else is named in the
+    // returned error rather than silently skipped, and deletes that can be made still
+    // happen when some documents cannot be reached.
+
+    # Deletes documents that match the given metadata filters.
     #
-    # Only `CUSTOM` and `S3` data sources support deletion; anything else is named in the
-    # returned error rather than silently skipped, and deletes that can be made still
-    # happen when some documents cannot be reached.
-    #
-    # + filters - Metadata filters identifying the documents to delete. Must contain at
-    #             least one leaf predicate
-    # + return - An `ai:Error` naming what could not be deleted or confirmed; `nil`
-    #            otherwise
+    # + filters - The metadata filters identifying the documents to delete
+    # + return - An `ai:Error` naming anything not deleted or confirmed, otherwise `nil`
     public isolated function deleteByFilter(ai:MetadataFilters filters) returns ai:Error? {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
         check guardDeleteFilter(userFilter, filters);
