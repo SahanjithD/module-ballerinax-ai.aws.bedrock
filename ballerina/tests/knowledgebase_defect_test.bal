@@ -224,7 +224,10 @@ function testSharedConversionErrorsNameTheCallingClass() {
     test:assertTrue(fromVector is ai:Error);
     if fromVector is ai:Error {
         test:assertTrue(fromVector.message().includes(VECTOR_KB_PROVIDER), fromVector.message());
-        test:assertFalse(fromVector.message().includes(MANAGED_KB_PROVIDER), fromVector.message());
+        // `SelfManagedKnowledgeBase` contains `ManagedKnowledgeBase`, so drop the
+        // caller's own name before checking the other class is not mentioned.
+        string otherNames = re `SelfManagedKnowledgeBase`.replaceAll(fromVector.message(), "");
+        test:assertFalse(otherNames.includes(MANAGED_KB_PROVIDER), fromVector.message());
     }
 
     ai:ImageDocument image = {content: "https://example.com/a.png"};

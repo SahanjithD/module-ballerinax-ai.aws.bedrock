@@ -16,7 +16,7 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/test;
 
-// `VectorKnowledgeBase` construction against a stubbed bedrock-agent on a
+// `SelfManagedKnowledgeBase` construction against a stubbed bedrock-agent on a
 // local listener: the knowledge base type guard, the find-or-create path, and the
 // checks that fire before any I/O at all.
 
@@ -62,7 +62,7 @@ function testVectorClassRefusesAManagedKnowledgeBase() returns error? {
     check mockListener.attach(new ManagedTypeKbMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -70,9 +70,9 @@ function testVectorClassRefusesAManagedKnowledgeBase() returns error? {
     if kb is ai:Error {
         string msg = kb.message();
         test:assertTrue(msg.includes("MANAGED"), msg);
-        test:assertTrue(msg.includes("VectorKnowledgeBase"), msg);
+        test:assertTrue(msg.includes("SelfManagedKnowledgeBase"), msg);
         // The message must point at the class that DOES support it.
-        test:assertTrue(msg.includes("ManagedKnowledgeBase"), msg);
+        test:assertTrue(msg.includes("Use ManagedKnowledgeBase"), msg);
     }
 }
 
@@ -117,7 +117,7 @@ function testVectorClassAttachesToAVectorKnowledgeBase() returns error? {
     check mockListener.attach(new VectorAttachMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -137,7 +137,7 @@ function testExplicitChunkerAllowedWhenDataSourceChunkingIsNone() returns error?
     check mockListener.attach(new VectorAttachMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`}, chunker = new ai:MarkdownChunker());
     check mockListener.gracefulStop();
 
@@ -215,13 +215,13 @@ function testFindOrCreateSendsVectorBodiesOnTheWire() returns error? {
     check mockListener.attach(new VectorCreateMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
         roleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE
     };
-    VectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -251,7 +251,7 @@ function testFindOrCreateSendsVectorBodiesOnTheWire() returns error? {
 // error, so a clean validation message proves the check ran first.
 @test:Config {}
 function testInvalidS3VectorsStorageFailsBeforeAnyRequest() returns error? {
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
         roleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
@@ -260,7 +260,7 @@ function testInvalidS3VectorsStorageFailsBeforeAnyRequest() returns error? {
             vectorBucketArn: "arn:aws:s3vectors:us-east-1:123456789012:bucket/b"
         }
     };
-    VectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: "http://localhost:1"});
 
     test:assertTrue(kb is ai:Error);
@@ -278,14 +278,14 @@ function testInvalidS3VectorsStorageFailsBeforeAnyRequest() returns error? {
 // check ran before any request was attempted.
 @test:Config {}
 function testDataSourceValidationIsWiredIntoConstruction() returns error? {
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
         roleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE,
         dataSource: {name: "ds", maxTokens: 0}
     };
-    VectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: "http://localhost:1"});
 
     test:assertTrue(kb is ai:Error);
@@ -297,14 +297,14 @@ function testDataSourceValidationIsWiredIntoConstruction() returns error? {
 
 @test:Config {}
 function testUnsupportedChunkingStrategyIsWiredIntoConstruction() returns error? {
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
         roleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE,
         dataSource: {name: "ds", chunkingStrategy: HIERARCHICAL}
     };
-    VectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: "http://localhost:1"});
 
     test:assertTrue(kb is ai:Error);
@@ -318,7 +318,7 @@ function testUnsupportedChunkingStrategyIsWiredIntoConstruction() returns error?
 // definition to validate.
 @test:Config {}
 function testRetrievalConfigValidationIsWiredIntoConstruction() returns error? {
-    VectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: "http://localhost:1"}, numberOfResults = 0);
 
     test:assertTrue(kb is ai:Error);
@@ -350,13 +350,13 @@ function testAmbiguousVectorKnowledgeBaseNameFailsAtConstruction() returns error
     check mockListener.attach(new VectorAmbiguousNameMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "dup-vec-kb",
         roleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE
     };
-    VectorKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (def, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -398,7 +398,7 @@ function testVectorKnowledgeBaseWithNoCustomDataSourceFailsAtConstruction() retu
     check mockListener.attach(new VectorNoCustomDataSourceMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -432,7 +432,7 @@ function testNonActiveVectorKnowledgeBaseFailsAtConstruction() returns error? {
     check mockListener.attach(new VectorCreatingKbMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase|ai:Error kb = new (VEC_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 

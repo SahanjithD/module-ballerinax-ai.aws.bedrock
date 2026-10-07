@@ -238,7 +238,7 @@ function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndReportsUn
         vectorDeletePayloads.removeAll();
     }
 
-    VectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:MetadataFilters filters = {filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]};
     ai:Error? result = kb.deleteByFilter(filters);
@@ -358,7 +358,7 @@ function testDeleteByFilterDoesNotMassDeleteWhenTheStoreIgnoresTheFilter() retur
         vectorDeletePayloads.removeAll();
     }
 
-    VectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
     check mockListener.gracefulStop();
@@ -394,7 +394,7 @@ function testDeleteByFilterRefusesNestedEmptyFilterGroups() returns error? {
         vectorDeletePayloads.removeAll();
     }
 
-    VectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:MetadataFilters nestedEmpty = {filters: [{filters: []}, {filters: []}]};
     // Nested empty groups now COLLAPSE to `()` rather than producing
@@ -428,7 +428,7 @@ function testDeleteByFilterRefusesAnEmptyFilterSet() returns error? {
         vectorDeletePayloads.removeAll();
     }
 
-    VectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:Error? result = kb.deleteByFilter({filters: []});
     check mockListener.gracefulStop();
@@ -505,7 +505,7 @@ function testDeleteByFilterNamesUndeletableDataSources() returns error? {
     check mockListener.attach(new VectorUndeletableSourceMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
         endpoint = {customEndpoint: string `http://localhost:${port}`});
     ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
     check mockListener.gracefulStop();

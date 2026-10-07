@@ -25,7 +25,7 @@ import ballerinax/aws;
 // creates one, and attaching by id fails construction, naming why, if it lacks one.
 //
 // Self-managed (customer vector store, `type = VECTOR`) knowledge bases are not
-// supported here — use `VectorKnowledgeBase` for those.
+// supported here — use `SelfManagedKnowledgeBase` for those.
 
 # A Bedrock knowledge base whose vector store is managed by Bedrock.
 @display {label: "Bedrock Managed Knowledge Base"}

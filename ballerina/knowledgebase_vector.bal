@@ -21,7 +21,7 @@ import ballerinax/aws;
 // This is the console's *Self-managed KB → Unstructured Vector Store KB*.
 //
 // Pass an existing knowledge base id to attach to it, or a
-// `VectorKnowledgeBaseDefinition` to find-or-create one by name.
+// `SelfManagedKnowledgeBaseDefinition` to find-or-create one by name.
 //
 // The vector store named by `storageConfiguration` must already exist; this class
 // never provisions one. `ingest()` additionally needs `bedrock:StartIngestionJob`
@@ -30,8 +30,8 @@ import ballerinax/aws;
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
 
 # A Bedrock knowledge base backed by your own vector store.
-@display {label: "Bedrock Vector Knowledge Base"}
-public distinct isolated client class VectorKnowledgeBase {
+@display {label: "Bedrock Self-Managed Knowledge Base"}
+public distinct isolated client class SelfManagedKnowledgeBase {
     *ai:KnowledgeBase;
 
     private final BedrockTransport controlTransport;
@@ -60,11 +60,11 @@ public distinct isolated client class VectorKnowledgeBase {
     # + config - Data source, chunking, retrieval and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Knowledge Base"} string|VectorKnowledgeBaseDefinition knowledgeBase,
+            @display {label: "Knowledge Base"} string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
             @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
-            @display {label: "Configuration"} *VectorKnowledgeBaseConfig config)
+            @display {label: "Configuration"} *SelfManagedKnowledgeBaseConfig config)
             returns ai:Error? {
         KbSpine spine = check resolveVectorKbSpine(VECTOR_KB_PROVIDER, credentials, region, endpoint,
             knowledgeBase, config);

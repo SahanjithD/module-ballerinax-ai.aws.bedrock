@@ -54,7 +54,7 @@ class because AWS serves no Amazon model on that endpoint.
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider` (InvokeModel on `bedrock-runtime`).
 
 **Knowledge base** — `ManagedKnowledgeBase` (Bedrock owns the vector store) and
-`VectorKnowledgeBase` (you own it), both implementing `ai:KnowledgeBase`. See
+`SelfManagedKnowledgeBase` (you own it), both implementing `ai:KnowledgeBase`. See
 [Knowledge bases](#knowledge-bases) and [Self-managed knowledge bases](#self-managed-knowledge-bases).
 
 A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Every
@@ -571,7 +571,7 @@ to provision). It spans two additional endpoints beyond the chat/embedding surfa
 `bedrock-agent-runtime.{region}.amazonaws.com` (data: retrieve) — both signing as SigV4 service
 `bedrock`, same as Converse/InvokeModel.
 
-`VectorKnowledgeBase` implements the same interface against a **self-managed** knowledge base
+`SelfManagedKnowledgeBase` implements the same interface against a **self-managed** knowledge base
 (`KnowledgeBaseConfiguration.type = VECTOR` — a vector store you provision and own), which is the
 console's *Self-managed KB → Unstructured Vector Store KB*. Both classes use the same two endpoints
 and the same signing scope; see [Self-managed knowledge bases](#self-managed-knowledge-bases) below
@@ -827,7 +827,7 @@ AWS documents this directly: *"This API cannot be used with managed knowledge ba
 
 ## Self-managed knowledge bases
 
-`VectorKnowledgeBase` is the sibling of `ManagedKnowledgeBase` for
+`SelfManagedKnowledgeBase` is the sibling of `ManagedKnowledgeBase` for
 `KnowledgeBaseConfiguration.type = VECTOR`. Same three methods, same two endpoints, same SigV4 scope.
 Use it when you want control over indexing and ranking; use the managed class when you do not want to
 run a vector store.
@@ -836,13 +836,13 @@ run a vector store.
 import ballerinax/ai.aws.bedrock;
 
 // Attach to a knowledge base that already exists.
-final bedrock:VectorKnowledgeBase kb = check new ("KB1234ABCD");
+final bedrock:SelfManagedKnowledgeBase kb = check new ("KB1234ABCD");
 ```
 
 ```ballerina
 // Or create the knowledge base and its CUSTOM data source from Ballerina.
 // The VECTOR STORE ITSELF MUST ALREADY EXIST — see the callout below.
-final bedrock:VectorKnowledgeBase kb = check new ({
+final bedrock:SelfManagedKnowledgeBase kb = check new ({
     name: "support-articles",
     roleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
     embeddingModelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
@@ -873,7 +873,7 @@ Eight backends are supported, one record each: `OpenSearchServerlessStorage`,
 
 ### What differs from the managed class
 
-| | `ManagedKnowledgeBase` | `VectorKnowledgeBase` |
+| | `ManagedKnowledgeBase` | `SelfManagedKnowledgeBase` |
 |---|---|---|
 | Vector store | Bedrock's, nothing to provision | Yours, must pre-exist |
 | Embedding model | Optional (service-managed by default) | **Required** — `embeddingModelArn` |

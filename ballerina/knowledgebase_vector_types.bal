@@ -15,7 +15,7 @@
 import ballerina/ai;
 import ballerina/http;
 
-// Public surface for `VectorKnowledgeBase` — the SELF-MANAGED knowledge base
+// Public surface for `SelfManagedKnowledgeBase` — the SELF-MANAGED knowledge base
 // (`KnowledgeBaseConfiguration.type = VECTOR`), where the vector store belongs to the
 // caller rather than to Bedrock. See knowledgebase_vector_common.bal for the
 // resolution spine and knowledgebase_vector.bal for the public class.
@@ -387,7 +387,7 @@ public type VectorDataSourceDefinition record {|
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CreateKnowledgeBase.html
 
 # A self-managed knowledge base to find or create by name.
-public type VectorKnowledgeBaseDefinition record {|
+public type SelfManagedKnowledgeBaseDefinition record {|
     # Knowledge base name, also used to find an existing one
     string name;
     # IAM role Bedrock assumes to manage the knowledge base
@@ -414,8 +414,8 @@ public type VectorKnowledgeBaseDefinition record {|
 // `overrideSearchType` unset unless the backend supports it — see `SearchType`.
 // `httpConfig`/`retryConfig` are shared by both agent-plane clients.
 
-# Configuration for `VectorKnowledgeBase`.
-public type VectorKnowledgeBaseConfig record {|
+# Configuration for `SelfManagedKnowledgeBase`.
+public type SelfManagedKnowledgeBaseConfig record {|
     # The `CUSTOM` data source to use. Detected when unset
     string dataSourceId?;
     # Client-side chunker. Detected from the data source when unset
@@ -440,5 +440,5 @@ public type VectorKnowledgeBaseConfig record {|
 // array describing every filterable attribute, it has no counterpart anywhere in the
 // `ai` module's contract, and how it composes with an explicit `filter` is not
 // documented. Adding it later is additive — a new optional field on
-// `VectorKnowledgeBaseConfig` — so nothing here forecloses it.
+// `SelfManagedKnowledgeBaseConfig` — so nothing here forecloses it.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_ImplicitFilterConfiguration.html

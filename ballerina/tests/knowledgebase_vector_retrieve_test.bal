@@ -102,12 +102,12 @@ isolated service class VectorRetrieveMock {
     }
 }
 
-// Not `isolated`: it builds a mutable `VectorKnowledgeBaseConfig` before handing it
+// Not `isolated`: it builds a mutable `SelfManagedKnowledgeBaseConfig` before handing it
 // to `init`, which an isolated function may not do.
 function newVectorRetrieveKb(int port, SearchType? overrideSearchType = (),
         VectorRerankingConfig? reranking = (), int? numberOfResults = ())
-        returns VectorKnowledgeBase|ai:Error {
-    VectorKnowledgeBaseConfig config = {};
+        returns SelfManagedKnowledgeBase|ai:Error {
+    SelfManagedKnowledgeBaseConfig config = {};
     if overrideSearchType is SearchType {
         config.overrideSearchType = overrideSearchType;
     }
@@ -133,7 +133,7 @@ function testRetrieveSendsVectorSearchConfigurationOnly() returns error? {
     check mockListener.'start();
     resetVectorRetrieveBodies();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port);
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port);
     ai:QueryMatch[] matches = check kb.retrieve("hello", 2);
     check mockListener.gracefulStop();
 
@@ -158,7 +158,7 @@ function testRetrieveOmitsOverrideSearchTypeByDefault() returns error? {
     check mockListener.'start();
     resetVectorRetrieveBodies();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port);
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port);
     ai:QueryMatch[] _ = check kb.retrieve("hello", 1);
     check mockListener.gracefulStop();
 
@@ -178,7 +178,7 @@ function testRetrieveEmitsOverrideSearchTypeAndRerankingWhenConfigured() returns
     check mockListener.'start();
     resetVectorRetrieveBodies();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port, SEARCH_HYBRID,
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port, SEARCH_HYBRID,
         {modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.rerank-v1:0",
             numberOfRerankedResults: 3});
     // maxLimit must be >= numberOfRerankedResults here so the B5 clamp (see
@@ -208,7 +208,7 @@ function testRetrieveForwardsMetadataFilters() returns error? {
     check mockListener.'start();
     resetVectorRetrieveBodies();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port);
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port);
     ai:MetadataFilters filters = {filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]};
     ai:QueryMatch[] _ = check kb.retrieve("hello", 1, filters);
     check mockListener.gracefulStop();
@@ -226,7 +226,7 @@ function testRetrievePagesThroughNextTokenAndPreservesOrder() returns error? {
     check mockListener.'start();
     resetVectorRetrieveBodies();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port);
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port);
     // maxLimit -1 -> no client-side limit, so both pages are consumed.
     ai:QueryMatch[] matches = check kb.retrieve("hello", -1);
     check mockListener.gracefulStop();
@@ -250,7 +250,7 @@ function testRetrieveCapsPerCallByMaxLimitAndNumberOfResults() returns error? {
     resetVectorRetrieveBodies();
 
     // Configured cap 25; maxLimit 2 is smaller, so `numberOfResults` must be 2.
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port, numberOfResults = 25);
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port, numberOfResults = 25);
     ai:QueryMatch[] matches = check kb.retrieve("hello", 2);
     check mockListener.gracefulStop();
 
@@ -275,7 +275,7 @@ function testRetrieveClampsNumberOfRerankedResultsToThePerCallMaxLimit() returns
     check mockListener.'start();
     resetVectorRetrieveBodies();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port, (),
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port, (),
         {modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.rerank-v1:0",
             numberOfRerankedResults: 10});
     ai:QueryMatch[] _ = check kb.retrieve("hello", 5);
@@ -297,7 +297,7 @@ function testRetrieveRejectsNonPositiveMaxLimit() returns error? {
     check mockListener.attach(new VectorRetrieveMock(), "/");
     check mockListener.'start();
 
-    VectorKnowledgeBase kb = check newVectorRetrieveKb(port);
+    SelfManagedKnowledgeBase kb = check newVectorRetrieveKb(port);
     ai:QueryMatch[]|ai:Error result = kb.retrieve("hello", 0);
     check mockListener.gracefulStop();
 

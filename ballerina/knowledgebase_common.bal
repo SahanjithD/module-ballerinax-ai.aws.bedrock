@@ -23,7 +23,7 @@ import ballerinax/aws.auth;
 // The shared spine `ManagedKnowledgeBase` is built over: two agent-plane
 // transports, find-or-create, data-source resolution, chunking-strategy detection,
 // and the document/knowledge-base wire calls both `ingest()` and `deleteByFilter()`
-// need. `VectorKnowledgeBase` (knowledgebase_vector.bal) is built over the
+// need. `SelfManagedKnowledgeBase` (knowledgebase_vector.bal) is built over the
 // same spine, with its own request bodies where the self-managed API family differs.
 
 // Bedrock's `_source_uri` metadata attribute — injected on every retrieval result,
@@ -36,10 +36,10 @@ import ballerinax/aws.auth;
 const string SOURCE_URI_METADATA_KEY = "_source_uri";
 
 // The public class names, threaded into every error message raised from a file both
-// classes share. Without this a `VectorKnowledgeBase` user gets errors naming
+// classes share. Without this a `SelfManagedKnowledgeBase` user gets errors naming
 // `ManagedKnowledgeBase` — a class they are not using.
 const string MANAGED_KB_PROVIDER = "ManagedKnowledgeBase";
-const string VECTOR_KB_PROVIDER = "VectorKnowledgeBase";
+const string VECTOR_KB_PROVIDER = "SelfManagedKnowledgeBase";
 
 // `deleteByFilter`'s enumeration query text. Its CONTENT is irrelevant and this is
 // not a tuning knob — it exists solely because `Retrieve` REJECTS an empty query:
@@ -324,7 +324,7 @@ isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, s
             "supports only 'MANAGED' knowledge bases (the ones where Bedrock owns the vector store). " +
             "A 'VECTOR' knowledge base is backed by your own vector store and is served by a different " +
             "search branch, so retrieve() and deleteByFilter() are not valid against it. Use " +
-            "VectorKnowledgeBase for a 'VECTOR' knowledge base.");
+            "SelfManagedKnowledgeBase for a 'VECTOR' knowledge base.");
     }
     return kb;
 }

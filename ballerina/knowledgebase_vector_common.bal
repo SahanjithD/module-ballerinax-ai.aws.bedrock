@@ -17,7 +17,7 @@ import ballerina/http;
 import ballerinax/aws;
 import ballerinax/aws.auth;
 
-// The wire layer for `VectorKnowledgeBase`. Deliberately SEPARATE from
+// The wire layer for `SelfManagedKnowledgeBase`. Deliberately SEPARATE from
 // knowledgebase_common.bal rather than branching inside it on a knowledge base type:
 // the managed class's request bodies and search branch stay untouched, so a change
 // here cannot regress it.
@@ -223,7 +223,7 @@ isolated function storageConfigurationJson(StorageConfiguration storage) returns
 // child of it.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CreateKnowledgeBase.html
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_VectorKnowledgeBaseConfiguration.html
-isolated function createVectorKnowledgeBaseRequestBody(VectorKnowledgeBaseDefinition def) returns map<json> {
+isolated function createVectorKnowledgeBaseRequestBody(SelfManagedKnowledgeBaseDefinition def) returns map<json> {
     map<json> vectorConfig = {embeddingModelArn: def.embeddingModelArn};
     VectorEmbeddingModelConfig? embeddingModel = def?.embeddingModel;
     if embeddingModel is VectorEmbeddingModelConfig {
@@ -425,7 +425,7 @@ isolated function validateVectorDataSource(VectorDataSourceDefinition def) retur
 }
 
 // Rejects retrieve-time configuration Bedrock would reject, before any I/O.
-isolated function validateVectorRetrievalConfig(VectorKnowledgeBaseConfig config) returns ai:Error? {
+isolated function validateVectorRetrievalConfig(SelfManagedKnowledgeBaseConfig config) returns ai:Error? {
     // KnowledgeBaseVectorSearchConfigurationNumberOfResultsInteger: min 1, max 100.
     int? numberOfResults = config?.numberOfResults;
     if numberOfResults is int && (numberOfResults < 1 || numberOfResults > KB_MAX_RESULTS_PER_CALL) {
@@ -519,7 +519,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
     // failing construction over it would be a false positive.
     if kbType != "" && kbType != "VECTOR" {
         return error ai:Error(
-            string `Knowledge base '${kbId}' is of type '${kbType}', but VectorKnowledgeBase ` +
+            string `Knowledge base '${kbId}' is of type '${kbType}', but SelfManagedKnowledgeBase ` +
             "supports only 'VECTOR' knowledge bases (the self-managed ones, backed by your own vector " +
             "store). A 'MANAGED' knowledge base is served by a different search branch and uses a " +
             "different reserved metadata prefix, so retrieve() and deleteByFilter() are not valid " +
@@ -538,13 +538,13 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 // rather than being passed alongside it — one source of truth, so a future field
 // cannot be wired at one call site and forgotten at another.
 isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
-        aws:EndpointConfig? endpointConfig, string|VectorKnowledgeBaseDefinition knowledgeBase,
-        VectorKnowledgeBaseConfig config)
+        aws:EndpointConfig? endpointConfig, string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
+        SelfManagedKnowledgeBaseConfig config)
         returns KbSpine|ai:Error {
     do {
         check guardRegion(region);
         check validateVectorRetrievalConfig(config);
-        if knowledgeBase is VectorKnowledgeBaseDefinition {
+        if knowledgeBase is SelfManagedKnowledgeBaseDefinition {
             check validateStorageConfiguration(knowledgeBase.storageConfiguration);
             check validateVectorDataSource(knowledgeBase.dataSource);
         }
@@ -586,14 +586,14 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredent
     }
 }
 
-// `string` -> verify and attach (no writes). `VectorKnowledgeBaseDefinition` -> find
+// `string` -> verify and attach (no writes). `SelfManagedKnowledgeBaseDefinition` -> find
 // by name; exactly one match attaches, no match creates, more than one is a
 // construction error. Same reasoning as the managed path: `CreateKnowledgeBase` has
 // no upsert, and while knowledge base names ARE unique per account, AWS's own
 // enforcement has a race window — see A10 (§2a/§2b) below, mirrored from
 // `resolveKnowledgeBase` in knowledgebase_common.bal.
 isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
-        string|VectorKnowledgeBaseDefinition knowledgeBase) returns KbAttachResult|ai:Error {
+        string|SelfManagedKnowledgeBaseDefinition knowledgeBase) returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
         map<json> _ = check verifyVectorKnowledgeBaseUsable(controlTransport, knowledgeBase);
         return {knowledgeBaseId: knowledgeBase, createdDataSourceId: ()};
@@ -628,7 +628,7 @@ isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
 // A10 §2a, vector counterpart of `createKnowledgeBaseRecoveringFromConflict` — same
 // recovery, using the VECTOR create body and `verifyVectorKnowledgeBaseUsable`.
 isolated function createVectorKnowledgeBaseRecoveringFromConflict(BedrockTransport controlTransport,
-        VectorKnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
+        SelfManagedKnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
     map<json> body = createVectorKnowledgeBaseRequestBody(def);
     body["clientToken"] = idempotencyToken(body);
     TransportResponse|ConflictError|ai:Error response =

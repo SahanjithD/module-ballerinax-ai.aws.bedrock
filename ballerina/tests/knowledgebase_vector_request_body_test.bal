@@ -375,7 +375,7 @@ const string TEST_EMBEDDING_ARN = "arn:aws:bedrock:us-east-1::foundation-model/a
 
 @test:Config {}
 function testCreateVectorKnowledgeBaseBodyShape() {
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "my-vector-kb",
         roleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
         embeddingModelArn: TEST_EMBEDDING_ARN,
@@ -404,7 +404,7 @@ function testCreateVectorKnowledgeBaseBodyShape() {
 
 @test:Config {}
 function testCreateVectorKnowledgeBaseBodyCarriesEmbeddingModelConfiguration() {
-    VectorKnowledgeBaseDefinition def = {
+    SelfManagedKnowledgeBaseDefinition def = {
         name: "my-vector-kb",
         roleArn: "arn:aws:iam::123456789012:role/service-role/kb",
         embeddingModelArn: TEST_EMBEDDING_ARN,
