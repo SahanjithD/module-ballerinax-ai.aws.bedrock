@@ -113,5 +113,6 @@ clean {
 build.dependsOn ':ai.aws.bedrock-native:build'
 build.dependsOn ':ai.aws.bedrock-compiler-plugin:build'
 build.dependsOn 'generatePomFileForMavenPublication'
+test.dependsOn ':ai.aws.bedrock-native:build'
 publishToMavenLocal.dependsOn build
 publish.dependsOn build
