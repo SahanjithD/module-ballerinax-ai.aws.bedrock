@@ -14,15 +14,16 @@ classes so that what an endpoint can and cannot do is visible in the type you co
 
 AWS recommends `bedrock-runtime` for new applications and describes `bedrock-mantle` as the
 compatibility surface. Reach for a `Mantle*` class only when the model or capability you need
-is not on `bedrock-runtime` — GPT-5.4/5.5 and Gemma 4 are Mantle-only, for instance. Guardrails,
-cross-region inference and structured output are all runtime-only.
+is not on `bedrock-runtime` — GPT-5.4/5.5 and Gemma 4 are Mantle-only, for instance. Guardrails and
+cross-region inference are runtime-only. Typed `generate()` works on both endpoints except the Mantle
+Anthropic Messages route.
 
 ### Key features
 
 - Chat completion through one `ai:ModelProvider` contract, on either endpoint
 - `CommonModelProvider` reaches **every** model Bedrock serves on Converse — 15 of AWS's 17
   providers, including the ten with no dedicated class here
-- Structured output (`generate()`) by tool-forcing on Converse and InvokeModel
+- Structured output (`generate()`) by tool-forcing, on every API that supports tool calling
 - Text embeddings through the `ai:EmbeddingProvider` contract, with order-preserving batching
 - Per-model dialect and SigV4 signing-scope resolution, decided at construction
 - The full AWS credential chain (IMDSv2, ECS, EKS IRSA, SSO, profiles, `AssumeRole`) via
@@ -65,10 +66,10 @@ from its id.
 
 ### Choosing the API family
 
-Runtime classes take an `api` argument defaulting to `CONVERSE`. Which families a class offers is a
+Runtime classes take an `apiType` argument defaulting to `CONVERSE`. Which families a class offers is a
 property of its type, so an unreachable combination does not compile:
 
-| Class | Type of `api` | Accepts |
+| Class | Type of `apiType` | Accepts |
 | --- | --- | --- |
 | `RuntimeAnthropicModelProvider` | `AnthropicRuntimeApi` | `CONVERSE`, `INVOKE`, `MESSAGES` |
 | `RuntimeOpenAIModelProvider` | `OpenAIRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS`, `RESPONSES` |
@@ -81,7 +82,7 @@ property of its type, so an unreachable combination does not compile:
 | `Mantle*ModelProvider` | — | the model's own family |
 
 `CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that family for DeepSeek, Gemma 3, Mistral,
-Qwen3 and others. **Mantle classes take no `api` argument at all.** Each Mantle model has exactly one route this module
+Qwen3 and others. **Mantle classes take no `apiType` argument at all.** Each Mantle model has exactly one route this module
 takes, so there is nothing for a caller to choose — the model decides. (`openai.gpt-oss-120b` is
 published on both Responses and Chat Completions; this module takes Chat Completions.)
 
@@ -116,8 +117,8 @@ import ballerinax/ai.aws.bedrock;
 
 ### Step 2: Initialize the model provider
 
-Only the model is required. Region falls back to `AWS_REGION`/`AWS_DEFAULT_REGION`, and credentials
-to the AWS credential chain — so on AWS compute this is the whole thing:
+`model`, `auth` and `region` are required. On AWS compute, `auth:DEFAULT_CREDENTIALS` is all the
+credential setup you need:
 
 ```ballerina
 import ballerinax/aws;
@@ -127,9 +128,9 @@ final ai:ModelProvider claude = check new bedrock:RuntimeAnthropicModelProvider(
         bedrock:CLAUDE_SONNET_4_6, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 ```
 
-Every runtime class follows the same shape — `(model, credentials, region, api?, endpoint?,
-maxTokens?, temperature?, *Config)`. `model`, `credentials` and `region` are required; `api` defaults
-to `CONVERSE`. `api` and `endpoint` sit directly on `init` rather than inside the config record,
+Every runtime class follows the same shape — `(model, auth, region, apiType?, endpoint?,
+maxTokens?, temperature?, *Config)`. `model`, `auth` and `region` are required; `apiType` defaults
+to `CONVERSE`. `apiType` and `endpoint` sit directly on `init` rather than inside the config record,
 because both are decisions you make at the same moment you pick the model and region:
 
 ```ballerina
@@ -150,9 +151,9 @@ escape hatch still reaches a region newer than the enum. Nothing is read from th
 `AWS_REGION` is **not** consulted for this parameter — pass it explicitly. (Credentials are the
 exception, and only because `auth:DEFAULT_CREDENTIALS` asks the AWS SDK to run its own chain.)
 
-### Credentials
+### Authentication
 
-`credentials` is required — pass `auth:DEFAULT_CREDENTIALS` to walk the standard AWS chain —
+`auth` (a `BedrockAuthConfig`) is required — pass `auth:DEFAULT_CREDENTIALS` to walk the standard AWS chain —
 environment variables, EKS IRSA web identity, IAM Identity Center (SSO), the shared config file,
 `credential_process`, ECS container credentials, then EC2 IMDSv2 — with expiry and refresh handled
 for you. **On EC2, ECS, EKS and Lambda that is all you need** — no keys anywhere in your code or
@@ -167,19 +168,19 @@ config, or a Bedrock API key:
 import ballerinax/aws.auth;
 
 // Long-lived keys (add `sessionToken` for temporary STS credentials).
-bedrock:BedrockCredentials keys = {accessKeyId: "...", secretAccessKey: "..."};
+bedrock:BedrockAuthConfig keys = {accessKeyId: "...", secretAccessKey: "..."};
 
 // Cross-account: assume a role in another account.
-bedrock:BedrockCredentials role = {
+bedrock:BedrockAuthConfig role = {
     roleArn: "arn:aws:iam::222222222222:role/IntegratorRole",
     externalId: "optional-for-third-party-access"
 };
 
 // A named profile from ~/.aws/credentials.
-bedrock:BedrockCredentials profile = {profileName: "prod"};
+bedrock:BedrockAuthConfig profile = {profileName: "prod"};
 
 // A Bedrock API key (bearer) — bypasses SigV4 entirely.
-bedrock:BedrockCredentials apiKey = {apiKey: "..."};
+bedrock:BedrockAuthConfig apiKey = {apiKey: "..."};
 
 final ai:ModelProvider claude =
     check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_4_6, role, aws:US_EAST_1);
@@ -212,19 +213,16 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 > **Typed `generate()` works everywhere except Mantle Messages.** On `bedrock-runtime` and on the
 > OpenAI-shaped Mantle routes (Responses, Chat Completions) a typed target is obtained by forcing a
 > tool. The one exception is `MantleAnthropicModelProvider`, which resolves to the Anthropic
-> Messages API: that route rejects both `output_config.format` and `strict: true` on tools, so it
-> returns an `ai:Error` for any non-`string` target type, naming the model and saying so.
->
-> There is no silent cross-endpoint fallback — the class you constructed is the endpoint you talk to.
-> Claude is dual-homed, so the fix is `RuntimeAnthropicModelProvider` instead.
->
-> A `string` target is plain text on every class and never hits this.
+> Messages API: AWS documents that route as rejecting `output_config.format`, and this module does not
+> force a tool there either, so it returns an `ai:Error` for any non-`string` target type, naming the
+> model. Claude is dual-homed, so the fix is `RuntimeAnthropicModelProvider` instead — there is no
+> silent cross-endpoint fallback.
 >
 > A `string` target always returns text normally, and `chat()` is unaffected in every case.
 >
 > Typed generation is also unavailable on Mistral's **text-completion** dialect (see below), which has no
-> tool-calling at all. That only bites when you pass `api = INVOKE` for those ids — the default Converse
-> shape supports typed generation for every Mistral model.
+> tool-calling at all. That only bites when you pass `apiType = INVOKE` for those ids — the default
+> Converse shape supports typed generation for every Mistral model.
 
 > **Two models refuse a forced tool choice, so `generate()` can only return `string` on them.**
 > `CLAUDE_OPUS_5_5` and `CLAUDE_FABLE_5_1` (and their `MANTLE_` twins) reject `tool_choice` of type
@@ -263,25 +261,29 @@ See [IAM for Bedrock powered by AWS Mantle](https://docs.aws.amazon.com/service-
 ### Cohere `inputType` decides your retrieval quality
 
 **Cohere requires `input_type` on every request, and getting it wrong degrades retrieval silently** — no
-error, no exception, just worse results. Use **`SEARCH_DOCUMENT` for your corpus** and **`SEARCH_QUERY`
-for your queries**, constructing one provider per role:
+error, no exception, just worse results. Your corpus must be embedded as **`search_document`** and your
+queries as **`search_query`**.
+
+By default the provider picks it from the method, which matches how `ai:VectorKnowledgeBase` calls an
+embedding provider: **`embed()` sends `search_query`** (a retrieval query) and **`batchEmbed()` sends
+`search_document`** (ingestion). One provider serves both sides:
 
 ```ballerina
-// Ingest side
-final ai:EmbeddingProvider ingest = check new bedrock:CohereEmbeddingProvider(
-    bedrock:COHERE_EMBED_ENGLISH_V3, creds, "us-east-1", inputType = bedrock:SEARCH_DOCUMENT);
-
-// Query side
-final ai:EmbeddingProvider query = check new bedrock:CohereEmbeddingProvider(
-    bedrock:COHERE_EMBED_ENGLISH_V3, creds, "us-east-1", inputType = bedrock:SEARCH_QUERY);
+final ai:EmbeddingProvider cohere = check new bedrock:CohereEmbeddingProvider(
+    bedrock:COHERE_EMBED_ENGLISH_V3, creds, "us-east-1");
 ```
 
-The `ai:EmbeddingProvider` contract carries no query-vs-document signal, which is exactly why this is
-config rather than a method argument. It defaults to `SEARCH_DOCUMENT`.
+**Set `inputType` only to override both methods** — for example if you ingest your corpus one
+document at a time through `embed()`, which would otherwise embed it as queries:
+
+```ballerina
+final ai:EmbeddingProvider ingest = check new bedrock:CohereEmbeddingProvider(
+    bedrock:COHERE_EMBED_ENGLISH_V3, creds, "us-east-1", inputType = bedrock:SEARCH_DOCUMENT);
+```
 
 ## Routing
 
-You pick the endpoint by picking the class, and the API family with `api`. What is left for the module to
+You pick the endpoint by picking the class, and the API family with `apiType`. What is left for the module to
 resolve is the model id and the request path, and that happens once, at construction — before any
 network call.
 
@@ -295,7 +297,7 @@ perfectly valid for Bedrock. The endpoint is now yours to state, and the type sy
 
 | You pass | Resolves to |
 | --- | --- |
-| a bare id (`amazon.nova-pro-v1:0`) | the `api` shape you asked for; `CONVERSE` by default |
+| a bare id (`amazon.nova-pro-v1:0`) | the `apiType` you asked for; `CONVERSE` by default |
 | a CRIS id (`us.anthropic.claude-opus-4-8`) | same, prefix stripped for lookup and re-applied on the wire |
 | `provisioned-model/` · `custom-model-deployment/` · `inference-profile/` ARN | same, ARN sent verbatim (URL-encoded) |
 | `foundation-model/` ARN | same, stripped to the bare id it carries |
@@ -342,9 +344,9 @@ An id absent from the table is refused by name rather than sent to a guessed URL
 // 1. Pick the endpoint by picking the class.
 check new bedrock:MantleAnthropicModelProvider("anthropic.claude-haiku-4-5", creds, "us-east-1");
 
-// 2. Pick the wire shape with `api`. Only the shapes AWS serves for that vendor compile.
+// 2. Pick the wire shape with `apiType`. Only the shapes AWS serves for that vendor compile.
 check new bedrock:RuntimeAnthropicModelProvider("us.anthropic.claude-haiku-4-5", creds,
-        "us-east-1", api = bedrock:MESSAGES);
+        "us-east-1", apiType = bedrock:MESSAGES);
 
 // 3. Any raw model id string is always accepted — the model enums are
 //    conveniences, never a gate. A model AWS shipped after this release works today.
@@ -355,8 +357,8 @@ check new bedrock:CommonModelProvider("us.writer.palmyra-x5-v1:0", creds, "us-ea
 ```
 
 The `mantle/`, `converse/` and `invoke/` model-id string prefixes are **gone**. They were a way to
-override a resolver that no longer exists; the class and the `api` argument say the same thing in the
-type system.
+override a resolver that no longer exists; the class and the `apiType` argument say the same thing in
+the type system.
 
 **A brand-new model needs no module release on `bedrock-runtime`** — pass its id as a string. The one
 exception is a brand-new **Mantle** model: its request path is per-model data that cannot be derived
@@ -408,8 +410,7 @@ service.
 > **`customEndpoint` is a global override.** It has the same semantics as the AWS SDK's
 > [`AWS_ENDPOINT_URL`](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html):
 > one URL for **every** service the client talks to. A knowledge base client talks to two
-> (`bedrock-agent` and `bedrock-agent-runtime`), and so does a provider whose `chat()` is on Mantle
-> while a typed `generate()` falls back to Converse. That suits a mock or a single gateway; it does
+> (`bedrock-agent` and `bedrock-agent-runtime`). That suits a mock or a single gateway; it does
 > **not** describe a real PrivateLink deployment, where each service has its own interface endpoint
 > and its own `vpce-id`. For PrivateLink, **enable private DNS and set nothing** — AWS's own guidance
 > is *"No code changes needed."* If you must pin per service, the AWS-blessed mechanism is the
@@ -497,15 +498,14 @@ Worth knowing before you upgrade:
 > 2026-09-24), so do not assume the GPT-5.x models refuse it. Set `temperature` when you know the model
 > takes it, and let AWS refuse it otherwise.
 
-> **`reasoningEffort` is a `ReasoningEffort` enum, and `minimal` is gpt-oss-only.** The members —
+> **`reasoningEffort` is a `ReasoningEffort` enum, and no member is accepted everywhere.** The members —
 > `REASONING_NONE`, `REASONING_MINIMAL`, `REASONING_LOW`, `REASONING_MEDIUM`, `REASONING_HIGH`,
-> `REASONING_XHIGH`, `REASONING_MAX` — are the union of what the OpenAI models on Bedrock accepted on
-> 2026-09-09, read out of the endpoint's own 400s in `us-east-1`. Membership is not a promise every
-> model takes it: the two families differ in exactly one value, `openai.gpt-oss-*` accepting `minimal`
-> where every `openai.gpt-5.x` refuses it with `Invalid value: 'minimal'`. The module does **not**
-> enforce that split — which values a model accepts is the model's contract, AWS's model cards document
-> no list for either family, and a per-model table here would only go stale. The endpoint stays the
-> authority: its refusal enumerates the set that model does accept, which is the list worth reading.
+> `REASONING_XHIGH`, `REASONING_MAX` — are the union of every value seen on the OpenAI models on Bedrock.
+> Measured on 2026-09-24 in `us-east-1` by sending each value: `openai.gpt-oss-120b` (Invoke) accepted
+> `low`, `medium` and `high`; `openai.gpt-5.4` (Mantle Responses) accepted `none`, `low`, `medium`,
+> `high` and `xhigh`. **`minimal` was refused by both**, even though gpt-oss lists it as valid in its
+> own 400. The module does not enforce a per-model set — which values a model accepts is the model's
+> contract and changes over time — so an unsupported value comes back as AWS's 400.
 
 `maxTokens` **does** default (to 4096). It is capped per model — Nova Pro/Lite/Micro top out at 5K output
 tokens — and on adaptive-thinking models the thinking pass is billed against the same ceiling, so raise
@@ -532,10 +532,10 @@ Mistral is the one vendor whose `InvokeModel` wire shape cannot be derived from 
 
 Note that `mistral-large-**2402**` and `mistral-large-**2407**` are the same family four months apart and
 speak *opposite* dialects. The module picks by id; an id it has never seen defaults to chat. If it guesses wrong, Bedrock returns a
-`ValidationException` — switch to `api = bedrock:CONVERSE`, which is model-agnostic and sidesteps
+`ValidationException` — switch to `apiType = bedrock:CONVERSE`, which is model-agnostic and sidesteps
 the split entirely.
 
-**Converse (the default) hides all of this** — the split only matters when you pass `api = INVOKE`.
+**Converse (the default) hides all of this** — the split only matters when you pass `apiType = INVOKE`.
 
 > **`MISTRAL_LARGE_2407` is `us-west-2` only.** It is the one id in these enums whose availability is a
 > single region: AWS's
@@ -560,7 +560,7 @@ Same story, split by generation rather than by date:
 | [chat completion](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html) | **V3.1**, **V3.2**, newer ids | `messages`/`tools` → `choices[].message` |
 
 The module picks by id, and an id it has never seen defaults to chat. Again, only relevant when you
-pass `api = INVOKE` — Converse and the vendor-native shapes are unaffected.
+pass `apiType = INVOKE` — Converse and the vendor-native shapes are unaffected.
 
 ## Knowledge bases
 
@@ -585,7 +585,7 @@ sync schedule:
 
 ```ballerina
 ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase("GKICZMNWRG", creds, "us-east-1");
-ai:QueryMatch[] matches = check kb->retrieve("What is our refund policy?", 5);
+ai:QueryMatch[] matches = check kb.retrieve("What is our refund policy?", 5);
 ```
 
 `retrieve()` searches across **every** data source on the knowledge base. `ingest()` and
@@ -604,7 +604,7 @@ ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase(
     },
     creds, "us-east-1");
 
-check kb->ingest([{content: "Refunds are processed within 5 business days."}]);
+check kb.ingest([{content: "Refunds are processed within 5 business days."}]);
 ```
 
 **Find-or-create is by NAME.** `CreateKnowledgeBase` has no upsert, so `init` searches for an exact
@@ -724,45 +724,31 @@ chunker's own boundaries.
 
 **Bedrock has no metadata-based delete API and no way to read a document's metadata back**
 (`ListKnowledgeBaseDocuments` carries status and identifier only; `GetDocumentContent` returns a
-presigned content URL). `deleteByFilter` reconstructs one, per data source, from two **paged
-enumerations**: `Retrieve` with the caller's filter applied, then `Retrieve` again with no filter at
-all, each paged to exhaustion (or a page cap — see below). A candidate document (from
-`ListKnowledgeBaseDocuments`) is then classified by which enumeration(s) saw it:
+presigned content URL). `deleteByFilter` reconstructs one with `Retrieve`, in this order:
 
-| candidate identity was seen in | meaning | action |
+1. **Control probe.** One `Retrieve` with a filter no document can match. A store that returns
+   anything for it is not applying filters, so **nothing is deleted**, and the error says why. If the
+   probe itself fails, the refusal stands — an unverifiable filter is not permission to delete. AWS
+   documents this failure mode for MongoDB Atlas ("Metadata filtering doesn't work by default").
+2. **Filtered enumeration.** `Retrieve` with your filter, paged. Every candidate document (from
+   `ListKnowledgeBaseDocuments`) whose identity appears here is a confirmed match.
+3. **Pinned probes** for every candidate the enumeration did not confirm, one group of documents at a
+   time:
+
+| the candidate is reached by | meaning | action |
 | --- | --- | --- |
-| the FILTERED enumeration | a confirmed match | delete |
-| a pinned probe reaches it WITH the filter | the filter matched it | delete |
-| a pinned probe reaches it only WITHOUT the filter | the filter excluded it | skip — sound, not reported |
-| no pinned probe reaches it at all | nothing can be concluded | indeterminate — named in the error |
+| a pinned probe WITH your filter | the filter matched it | delete |
+| a pinned probe only WITHOUT your filter | the filter excluded it | skip — sound, not reported |
+| no pinned probe at all | nothing can be concluded | indeterminate — named in the error |
 
-This replaced an earlier per-document PINNED-probe design (the caller's filter ANDed onto a
-`sourceUri == id` leaf, one to two `Retrieve` calls **per candidate document**). That design silently
-deleted nothing at all on a self-managed knowledge base whose data source is `CUSTOM`: Bedrock does
-not emit the pin key (`x-amz-bedrock-kb-source-uri`) for that source type, so every pinned probe came
-back empty. The two-enumeration design does not depend on that key being emitted at all — identity is
-read from whatever the response actually carries (the reserved metadata key when present, or the
-documented `location.customDocumentLocation.id`/`location.s3Location.uri` members).
+Identity is read from what the response carries: the reserved source-uri metadata key when present, or
+the documented `location.customDocumentLocation.id`/`location.s3Location.uri` members.
 
-**Identity is still verified, not just result count.** A non-empty response only says *something* came
-back; it does not say the filter was honoured. If a filter were ever silently ignored, the filtered
-and unfiltered enumerations would return the exact same set, and every document would look like a
-match. `deleteByFilter` checks for exactly that: if a non-nil filter is set and the filtered
-enumeration returns the same set as the unfiltered one (with more than one document in it), the
-result is treated as *ambiguous* — because it has two possible causes, and only one of them is a
-fault:
-
-- the store ignored the filter, so the filtered pass degenerated into the unfiltered one; or
-- the filter is honoured and legitimately selects **every** document — `deleteByFilter({tenant ==
-  "acme"})` on a knowledge base where every document really is `acme`, an ordinary single-tenant
-  cleanup.
-
-To separate them, `deleteByFilter` re-probes once with a filter that no document can possibly match.
-A store that honours filters returns nothing for it, and the delete proceeds; a store that still
-returns results is not applying filters at all, and **`deleteByFilter` refuses to delete anything
-from that data source**, returning an error naming it. If that follow-up probe cannot be completed,
-the refusal stands — an unverifiable filter is not permission to delete. AWS documents this failure
-mode for MongoDB Atlas ("Metadata filtering doesn't work by default").
+**Scoped to this class's own data source.** `deleteByFilter` only looks at, and only deletes from, the
+data source `ingest()` writes to. Every `Retrieve` it makes is filtered to that data source, and each
+result is checked against it again: document ids are unique only within a data source, so a document
+with the same id on another data source says nothing about the one here. Other data sources on the same
+knowledge base — S3, SharePoint, a second CUSTOM source — are never touched and never cause an error.
 
 > **`filters` must contain at least one leaf predicate.** `ai:KnowledgeBase.deleteByFilter` takes
 > filters as a required argument, so a caller assembling them from a collection that happened to be
@@ -770,16 +756,10 @@ mode for MongoDB Atlas ("Metadata filtering doesn't work by default").
 > document. An `ai:MetadataFilters` with no leaf predicates is refused. "Delete everything" has to be
 > explicit.
 
-**Cost: two paged `Retrieve` enumerations PER DATA SOURCE** (a small, bounded number of round trips —
-at most 100 pages of 100 results each per enumeration — regardless of how many documents that data
-source holds), not one to two round trips per document. This is a real improvement over the earlier
-design, not just a bug fix: cost no longer scales with the size of the knowledge base. Each
-enumeration pass is capped; if either one hits the cap, the result set may be incomplete, so **nothing
-is deleted from that data source**, reported by name rather than risking an unsound skip. Documents on
-a non-`CUSTOM`/`S3` data source (a native connector) cannot be deleted through this API at all, and are
-named in the returned error; deletes that CAN be made still happen. The per-document delete statuses
-AWS returns are checked, so a document the service did not confirm deleted is reported rather than
-counted as a success.
+**Cost** is a handful of fixed `Retrieve` calls plus two per group of unconfirmed documents — not a
+pass over the whole knowledge base. A maintenance operation, not something to put on a request path.
+The per-document delete statuses AWS returns are checked, so a document the service did not confirm
+deleted is reported rather than counted as a success.
 
 > **Why candidates are resolved one at a time.** An earlier design classified a
 > candidate by whether a paged UNFILTERED `Retrieve` had seen it: seen there but not in
@@ -929,7 +909,7 @@ is on you:
 
 ### `deleteByFilter` — same algorithm as the managed class, a different reserved key
 
-The reconstruction is [the same two-enumeration algorithm as the managed one](#deletebyfilter-is-a-reconstruction)
+The reconstruction is [the same algorithm as the managed one](#deletebyfilter-is-a-reconstruction)
 — literally the same implementation, called with this class's own reserved metadata key and its own
 `vectorSearchConfiguration` search branch instead of the managed class's `_source_uri` and
 `managedSearchConfiguration`. **Self-managed and managed knowledge bases use DIFFERENT reserved
@@ -1020,8 +1000,8 @@ ai:ChatAssistantMessage answer = check claude->chat({
 });
 ```
 
-**Supported on the routes below.** Everywhere else an image is a **construction-time
-`ai:Error` naming the dialect** — never silently dropped into the prompt text.
+**Supported on the routes below.** Everywhere else an image is refused **per request, before any
+network call**, with an `ai:Error` naming the dialect — never silently dropped into the prompt text.
 
 | Route | Images | Notes |
 | --- | --- | --- |
@@ -1079,17 +1059,17 @@ check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_
 check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_EAST_1);
 ```
 
-**2. `apiFamily` became `api`, and lost `AUTO` and `MANTLE`.**
+**2. `apiFamily` became `apiType`, and lost `AUTO` and `MANTLE`.**
 
 ```ballerina
 apiFamily = bedrock:AUTO       → (removed) pick the class instead
-apiFamily = bedrock:CONVERSE   → api = bedrock:CONVERSE   // now the default
-apiFamily = bedrock:INVOKE     → api = bedrock:INVOKE
+apiFamily = bedrock:CONVERSE   → apiType = bedrock:CONVERSE   // now the default
+apiFamily = bedrock:INVOKE     → apiType = bedrock:INVOKE
 apiFamily = bedrock:MANTLE     → use the Mantle* class
-"mantle/<id>" / "converse/<id>" / "invoke/<id>"  → (removed) use the class and `api`
+"mantle/<id>" / "converse/<id>" / "invoke/<id>"  → (removed) use the class and `apiType`
 ```
 
-`api` also gained the three vendor-native shapes — `MESSAGES`, `CHAT_COMPLETIONS` and `RESPONSES` —
+`apiType` also gained the three vendor-native shapes — `MESSAGES`, `CHAT_COMPLETIONS` and `RESPONSES` —
 which `bedrock-runtime` now serves directly. Which of them a class accepts is part of its type.
 
 **3. Behaviour that changed, not just spelling.**
@@ -1099,7 +1079,8 @@ which `bedrock-runtime` now serves directly. Which of them a class accepts is pa
   reaches `bedrock-runtime` unless you construct a Mantle class.
 - **`generate()` no longer silently switches endpoints.** It used to resolve a second Converse spine so
   a typed `generate()` worked on a Mantle-routed model — meaning one object needed two IAM permissions.
-  One class, one endpoint now: a typed `generate()` on a `Mantle*` class returns an `ai:Error`.
+  One class, one endpoint now: a typed `generate()` on a `Mantle*` class uses that endpoint's own tool
+  calling, and returns an `ai:Error` only on the Mantle Anthropic Messages route.
 - **`guardrail`, `serviceTier` and `latencyOptimized` are gone from the Mantle config records**, so
   setting them there is now a compile error rather than a construction error.
 - **Guardrails are refused on the `RESPONSES` and `MESSAGES` shapes.** AWS states guardrails do not
