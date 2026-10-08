@@ -215,6 +215,10 @@ isolated client class BedrockTransport {
     // Maps an HTTP response to a `TransportResponse` or a typed error.
     isolated function mapResponse(http:Response resp) returns TransportResponse|RetryableError|ConflictError|ai:Error {
         int status = resp.statusCode;
+        // Bedrock's own APIs answer with `x-amzn-RequestId`; the OpenAI-compatible
+        // paths may use the OpenAI convention `x-request-id` instead. It is the one
+        // value AWS Support asks for, so every error below carries it.
+        string? requestId = optionalHeader(resp, "x-amzn-RequestId") ?: optionalHeader(resp, "x-request-id");
         if status >= 200 && status < 300 {
             json|error jsonBody = resp.getJsonPayload();
             if jsonBody is error {
@@ -229,13 +233,15 @@ isolated client class BedrockTransport {
             // headers are request-only.
             // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
             map<string> responseHeaders = {};
-            string? requestId = optionalHeader(resp, "x-amzn-RequestId");
             if requestId is string {
                 responseHeaders[REQUEST_ID_HEADER] = requestId;
             }
             return {body: jsonBody, headers: responseHeaders};
         }
         string detail = self.errorDetail(resp);
+        if requestId is string {
+            detail += string ` (request id: ${requestId})`;
+        }
         boolean mantle = self.isMantleRoute;
         boolean agent = self.isAgentRoute;
         match status {
@@ -251,8 +257,9 @@ isolated client class BedrockTransport {
                 // "Model does not support image modality"), tacking on a generic
                 // routing guess is redundant at best and misleading at worst. Never on
                 // an agent (KB) route: there is no `api` to retry with there.
-                string hint = !agent && detail.startsWith("status ")
-                    ? " The model may not support this shape; try 'api = INVOKE' (or CONVERSE)."
+                // Mantle classes have no `apiType` to switch, so the hint is runtime-only.
+                string hint = !agent && !mantle && detail.startsWith("status ")
+                    ? " The model may not support this API; try 'apiType = INVOKE' (or CONVERSE)."
                     : "";
                 return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}.${hint}`);
             }

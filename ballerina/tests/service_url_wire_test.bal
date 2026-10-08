@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import ballerina/ai;
 import ballerina/http;
 import ballerina/test;
 
@@ -94,4 +95,36 @@ function testCustomServiceUrlIsHonouredOnTheWire() returns error? {
     test:assertTrue(auth.startsWith("AWS4-HMAC-SHA256 "), auth);
     test:assertTrue(auth.includes("/us-east-1/bedrock/aws4_request"),
             string `signing scope must stay us-east-1/bedrock, got '${auth}'`);
+}
+
+// A stand-in Bedrock that refuses every request the way AWS does, request id included.
+isolated service class RefusingBedrock {
+    *http:Service;
+
+    isolated resource function post [string... path]() returns http:Response {
+        http:Response res = new;
+        res.statusCode = 400;
+        res.setHeader("x-amzn-RequestId", "a1b2c3d4-request-id");
+        res.setJsonPayload({message: "The provided model identifier is invalid."});
+        return res;
+    }
+}
+
+@test:Config {}
+function testAnErrorResponseCarriesTheRequestId() returns error? {
+    // The request id is what AWS Support asks for; without it an error is not traceable.
+    final int port = 18097;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new RefusingBedrock(), "/");
+    check mockListener.'start();
+    RuntimeAnthropicModelProvider provider = check new (
+            "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1",
+            endpoint = {customEndpoint: string `http://localhost:${port}`});
+    ai:ChatAssistantMessage|ai:Error result = provider->chat([{role: "user", content: "hi"}]);
+    check mockListener.gracefulStop();
+    test:assertTrue(result is ai:Error, "a 400 must surface as an error");
+    if result is ai:Error {
+        test:assertTrue(result.message().includes("a1b2c3d4-request-id"),
+                "the error must carry the request id; got: " + result.message());
+    }
 }
