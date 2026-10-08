@@ -569,16 +569,15 @@ function testVendorExtrasMergeIntoThePassthroughWithoutClobbering() returns erro
 }
 
 @test:Config {}
-function testAnydataRestValueIsConvertedRatherThanDropped() returns error? {
-    // `AdditionalRequestFields` is `record {}`, so its rest type is `anydata` — wider
-    // than json. A value with no direct JSON form must be CONVERTED at the wire
-    // boundary, never silently dropped and never a runtime failure: `toJson` is total.
-    AdditionalRequestFields odd = {"weird": xml `<p>hi</p>`, "normal": 1};
-    InferenceParams params = buildInferenceParams(100, (), (), odd, (), (), ());
+function testNestedPassthroughValuesReachTheWireUntouched() returns error? {
+    // `AdditionalRequestFields` takes only json, so a non-json value is a compile
+    // error; nested json must still arrive exactly as given.
+    AdditionalRequestFields nested = {"normal": 1, "cfg": {"list": [1, "two", true], "off": ()}};
+    InferenceParams params = buildInferenceParams(100, (), (), nested, (), (), ());
     map<json> body = check encodeConverse((), SAMPLE_MESSAGES, [], (), params).ensureType();
     map<json> fwd = check body["additionalModelRequestFields"].ensureType();
-    test:assertEquals(fwd["normal"], <json>1, "json-shaped values pass through untouched");
-    test:assertEquals(fwd["weird"], <json>"<p>hi</p>", "xml degrades to its string form");
+    test:assertEquals(fwd["normal"], <json>1);
+    test:assertEquals(fwd["cfg"], <json>{"list": [1, "two", true], "off": ()});
 }
 
 @test:Config {}

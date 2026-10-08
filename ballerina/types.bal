@@ -125,8 +125,9 @@ enum ToolChoiceStyle {
 // `top_p`, `top_k`, Nova `reasoningConfig`, `anthropic_beta`, `cache_control`, …
 
 # Extra request-body fields sent as-is. Quote the keys, e.g. `{"top_p": 0.9}`.
-public type AdditionalRequestFields record {
-};
+public type AdditionalRequestFields record {|
+    json...;
+|};
 
 # How an Anthropic model thinks before answering.
 public enum ThinkingMode {

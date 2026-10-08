@@ -490,18 +490,13 @@ isolated function resolveSpine(string providerName, BedrockAuthConfig credential
     }
 }
 
-// `AdditionalRequestFields` -> a JSON object ready for a request body.
-//
-// `AdditionalRequestFields` is `record {}`, whose rest type is `anydata` and is
-// therefore NOT assignable to `json`. Every wire boundary funnels through here so
-// that conversion exists exactly once. `toJson` is TOTAL — it deep-converts anydata
-// values that are not already json instead of failing — so this returns no error.
+// `AdditionalRequestFields` -> a JSON object ready for a request body, or `()` when
+// there is nothing to send. Every wire boundary funnels through here.
 isolated function additionalFieldsToJson(AdditionalRequestFields? fields) returns map<json>? {
-    if fields is () {
+    if fields is () || fields.length() == 0 {
         return ();
     }
-    json converted = fields.toJson();
-    return converted is map<json> && converted.length() > 0 ? converted : ();
+    return fields.clone();
 }
 
 // Folds a vendor's extra request fields into `additionalModelRequestFields`.
@@ -510,7 +505,7 @@ isolated function foldRequestFields(AdditionalRequestFields? base, map<json> ext
         returns AdditionalRequestFields? {
     AdditionalRequestFields merged = {};
     if base is AdditionalRequestFields {
-        foreach [string, anydata] [k, v] in base.entries() {
+        foreach [string, json] [k, v] in base.entries() {
             merged[k] = v;
         }
     }
