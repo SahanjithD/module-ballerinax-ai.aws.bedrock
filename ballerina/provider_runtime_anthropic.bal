@@ -17,9 +17,9 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Well-known Claude model ids for `bedrock-runtime`, CRIS-PREFIXED.
+# Well-known Anthropic model ids for `bedrock-runtime`, CRIS-PREFIXED.
 #
-# Current Claude models are served on this endpoint through cross-region inference
+# Current Anthropic models are served on this endpoint through cross-region inference
 # profiles only: each model card's regional-availability table marks In-Region
 # unsupported in every region and lists the Geo (`us.`, `eu.`, `au.`) and Global
 # (`global.`) profile ids as the way in. A BARE id here fails with

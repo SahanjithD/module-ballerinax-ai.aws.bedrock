@@ -132,9 +132,9 @@ enum ToolChoiceStyle {
 public type AdditionalRequestFields record {
 };
 
-# How Claude allocates internal reasoning before answering.
+# How an Anthropic model allocates internal reasoning before answering.
 public enum ThinkingMode {
-    # Claude decides when and how much to think. The recommended mode, and the only
+    # The model decides when and how much to think. The recommended mode, and the only
     # one supported by Claude Fable 5 and Opus 4.7. Pair
     # with `effort` to steer depth.
     ADAPTIVE = "adaptive",
@@ -145,9 +145,9 @@ public enum ThinkingMode {
     DISABLED = "disabled"
 }
 
-# Extended/adaptive thinking configuration for Claude.
+# Extended/adaptive thinking configuration for Anthropic models.
 public type ThinkingConfig record {|
-    # Thinking mode. Defaults to `ADAPTIVE`, which every current Claude accepts.
+    # Thinking mode. Defaults to `ADAPTIVE`, which every current Anthropic model accepts.
     ThinkingMode mode = ADAPTIVE;
     # Reasoning-token budget. Valid only with `ENABLED`, minimum 1024, and must be
     # less than `maxTokens`.
@@ -162,7 +162,7 @@ public enum Effort {
     EFFORT_LOW = "low",
     # Moderate thinking.
     EFFORT_MEDIUM = "medium",
-    # The default. Claude always thinks.
+    # The default. The model always thinks.
     EFFORT_HIGH = "high",
     # Extended depth. Claude Opus 5 and Opus 4.6 ONLY — Sonnet 4.6 rejects it with
     # `output_config.effort: Input should be 'low', 'medium', 'high' or 'max'`.

@@ -17,7 +17,7 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Claude model ids for `bedrock-mantle`, in their BARE form — Mantle takes no
+# Anthropic model ids for `bedrock-mantle`, in their BARE form — Mantle takes no
 # cross-region prefix, because it has no cross-region inference.
 #
 # All of them are dual-homed (also on `bedrock-runtime`). Prefer the runtime class

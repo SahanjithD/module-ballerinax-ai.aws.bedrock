@@ -163,7 +163,7 @@ type InferenceParams record {|
     # Converse `performanceConfig.latency = "optimized"`, or the Invoke
     # `X-Amzn-Bedrock-PerformanceConfig-Latency` header. Refused on Mantle.
     boolean latencyOptimized?;
-    # Claude thinking. Emitted as a top-level `thinking` body field on the Anthropic
+    # Anthropic thinking. Emitted as a top-level `thinking` body field on the Anthropic
     # Messages dialects, and through `additionalModelRequestFields` on Converse
     # (which does not model it natively).
     ThinkingConfig thinking?;
@@ -258,9 +258,9 @@ type ResponseDecoder isolated function (json response) returns DecodedResponse|a
 type DialectSupport record {|
     # A stop-sequence parameter exists in this dialect's request schema.
     boolean stopSequences = true;
-    # Claude `thinking`.
+    # Anthropic `thinking`.
     boolean thinking = false;
-    # Claude `output_config.effort`.
+    # Anthropic `output_config.effort`.
     boolean effort = false;
     # OpenAI reasoning depth, in whatever spelling this dialect uses.
     boolean reasoningEffort = false;
