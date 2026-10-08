@@ -77,7 +77,7 @@ function a17Transport(int port) returns BedrockTransport|error
 isolated function a17Result(string id) returns json => {
     content: {text: string `text for ${id}`, 'type: "TEXT"},
     location: {'type: "CUSTOM", customDocumentLocation: {id}},
-    metadata: {"_source_uri": id},
+    metadata: {"_source_uri": id, "_data_source_id": A17_DS_ID},
     score: 0.9
 };
 
@@ -108,7 +108,7 @@ function testResolveDataSourceDeletesRefusesWhenTheStoreDoesNotAppearToHonourFil
     ];
     json userFilter = {'equals: {key: "tenant", value: "acme"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -152,7 +152,7 @@ function testASingleReachableDocumentIsNotMistakenForAnUnfilteredStore() returns
     ];
     json userFilter = {'equals: {key: "tenant", value: "acme"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -202,7 +202,7 @@ function testAFilterThatLegitimatelyMatchesEveryDocumentStillDeletes() returns e
     ];
     json userFilter = {'equals: {key: "tenant", value: "acme"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -248,7 +248,7 @@ function testAFailedFilterControlProbeRefusesRatherThanDeleting() returns error?
     ];
     json userFilter = {'equals: {key: "tenant", value: "acme"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -278,7 +278,7 @@ isolated function a19Result(string id, string tenant) returns json => {
     location: {'type: "CUSTOM", customDocumentLocation: {id}},
     // No source-uri key: this is a CUSTOM data source, so `observePinKey` must fall
     // back to the caller's own `id` attribute — the shape that makes A19 reachable.
-    metadata: {"id": 7, "tenant": tenant},
+    metadata: {"id": 7, "tenant": tenant, "_data_source_id": A17_DS_ID},
     score: 0.9
 };
 
@@ -297,11 +297,11 @@ isolated service class FanOutFamilyMock {
         json? filter = search.hasKey("filter") ? search["filter"] : ();
 
         json[] results = [];
-        if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "acme"}) {
+        if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "acme", "_data_source_id": A17_DS_ID}) {
             results.push(a19Result("7", "acme"));
         }
         foreach int i in 0 ..< 30 {
-            if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "globex"}) {
+            if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "globex", "_data_source_id": A17_DS_ID}) {
                 results.push(a19Result(string `7#${i}`, "globex"));
             }
         }
@@ -329,7 +329,7 @@ function testABareIdDocumentIsNotDeletedOnItsFanOutNamesakesEvidence() returns e
     BedrockTransport transport = check a17Transport(port);
     json userFilter = {'equals: {key: "tenant", value: "globex"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        a19Candidates(), SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        a19Candidates(), SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -416,7 +416,7 @@ function testAPinGroupBeyondTheRetrieveCapIsReportedNotSilentlyHalfDeleted() ret
     BedrockTransport transport = check a17Transport(port);
     json userFilter = {'equals: {key: "tenant", value: "globex"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -450,7 +450,7 @@ function testAGroupThatFitsInOnePageIsNotFlaggedAsTruncated() returns error? {
     BedrockTransport transport = check a17Transport(port);
     json userFilter = {'equals: {key: "tenant", value: "globex"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        a19Candidates(), SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        a19Candidates(), SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
@@ -488,7 +488,7 @@ function testDocumentsWithNoMetadataIdAreSeparatedWithoutProbingThem() returns e
     BedrockTransport transport = check a17Transport(port);
     json userFilter = {'equals: {key: "tenant", value: "globex"}};
     DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
-        candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
     check mockListener.gracefulStop();
 
     test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));

@@ -131,8 +131,10 @@ isolated service class VectorDeleteMock {
             // not return under ANY filter, which is what makes it indeterminate rather
             // than merely excluded.
             map<map<json>> docs = {
-                [VDEL_MATCH_ID]: {"tenant": "acme", "x-amz-bedrock-kb-source-uri": VDEL_MATCH_ID},
-                [VDEL_MISS_ID]: {"tenant": "globex", "x-amz-bedrock-kb-source-uri": VDEL_MISS_ID}
+                [VDEL_MATCH_ID]: {"tenant": "acme", "x-amz-bedrock-kb-source-uri": VDEL_MATCH_ID,
+                    "x-amz-bedrock-kb-data-source-id": VDEL_DS_ID},
+                [VDEL_MISS_ID]: {"tenant": "globex", "x-amz-bedrock-kb-source-uri": VDEL_MISS_ID,
+                    "x-amz-bedrock-kb-data-source-id": VDEL_DS_ID}
             };
             json[] results = [];
             foreach [string, map<json>] [id, metadata] in docs.entries() {
@@ -170,7 +172,7 @@ isolated function vecDelResult(string id) returns json => {
     content: {text: string `text for ${id}`, 'type: "TEXT"},
     documentId: id,
     location: {'type: "CUSTOM", customDocumentLocation: {id}},
-    metadata: {"x-amz-bedrock-kb-source-uri": id},
+    metadata: {"x-amz-bedrock-kb-source-uri": id, "x-amz-bedrock-kb-data-source-id": VDEL_DS_ID},
     score: 0.95
 };
 
@@ -245,15 +247,17 @@ function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndReportsUn
     check mockListener.gracefulStop();
 
     // The probe sequence, in order: the sentinel control (which must match nothing on
-    // a store that honours filters), the filtered enumeration carrying the RAW user
-    // filter, then the pin-key observation.
+    // a store that honours filters), the filtered enumeration carrying the user
+    // filter, then the pin-key observation. Every one is scoped to this class's data
+    // source, because document ids are only unique within a data source.
+    json dsLeaf = {'equals: {key: VECTOR_DATA_SOURCE_ID_METADATA_KEY, value: VDEL_DS_ID}};
     json[] probes = readVectorProbes();
     test:assertEquals(probes[0],
-        {'equals: {key: VECTOR_SOURCE_URI_METADATA_KEY, value: FILTER_CONTROL_SENTINEL}},
+        {andAll: [{'equals: {key: VECTOR_SOURCE_URI_METADATA_KEY, value: FILTER_CONTROL_SENTINEL}}, dsLeaf]},
         "the control probe must pin a value no document can carry");
-    test:assertEquals(probes[1], {'equals: {key: "tenant", value: "acme"}},
-        "the filtered enumeration sends the RAW user filter, unwrapped");
-    test:assertEquals(probes[2], (), "the pin-key observation sends no filter at all");
+    test:assertEquals(probes[1], {andAll: [{'equals: {key: "tenant", value: "acme"}}, dsLeaf]},
+        "the filtered enumeration sends the user filter scoped to the data source");
+    test:assertEquals(probes[2], dsLeaf, "the pin-key observation samples this data source only");
 
     // Every later probe is PINNED to one document — the A18 repair. None of them is
     // the bare user filter, because no candidate is resolved by set membership.
@@ -498,8 +502,11 @@ isolated service class VectorUndeletableSourceMock {
     }
 }
 
+// BED-29: a SharePoint (or S3, or any other) data source on the same knowledge base
+// is not this class's data source, so deleteByFilter neither touches it nor fails
+// because of it.
 @test:Config {}
-function testDeleteByFilterNamesUndeletableDataSources() returns error? {
+function testDeleteByFilterIgnoresTheKnowledgeBasesOtherDataSources() returns error? {
     final int port = 18703;
     http:Listener mockListener = check new (port);
     check mockListener.attach(new VectorUndeletableSourceMock(), "/");
@@ -510,11 +517,5 @@ function testDeleteByFilterNamesUndeletableDataSources() returns error? {
     ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
     check mockListener.gracefulStop();
 
-    test:assertTrue(result is ai:Error);
-    if result is ai:Error {
-        string msg = result.message();
-        test:assertTrue(msg.includes("DSSHAREPT1"), msg);
-        test:assertTrue(msg.includes("SHAREPOINT"), msg);
-        test:assertTrue(msg.includes("CUSTOM/S3"), msg);
-    }
+    test:assertTrue(result is (), result is ai:Error ? result.message() : "");
 }

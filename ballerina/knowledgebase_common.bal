@@ -35,6 +35,12 @@ import ballerinax/aws.auth;
 // document's metadata back any other way.
 const string SOURCE_URI_METADATA_KEY = "_source_uri";
 
+// The reserved attribute naming the data source a MANAGED knowledge base result came
+// from. Managed knowledge bases spell reserved fields with an underscore prefix; the
+// self-managed spelling is `VECTOR_DATA_SOURCE_ID_METADATA_KEY`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/kb-test-config.html
+const string MANAGED_DATA_SOURCE_ID_METADATA_KEY = "_data_source_id";
+
 // The public class names, threaded into every error message raised from a file both
 // classes share. Without this a `SelfManagedKnowledgeBase` user gets errors naming
 // `ManagedKnowledgeBase` — a class they are not using.
@@ -1221,7 +1227,8 @@ type DeleteEnumeration record {|
 // `numberOfResults` is `KB_MAX_RESULTS_PER_CALL` (100) per page — Bedrock's own
 // maximum — to minimise the number of round trips.
 isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, string kbId, json? filter,
-        string sourceUriKey, DeleteRetrieveCaller retrieveCaller) returns DeleteEnumeration|ai:Error {
+        string sourceUriKey, DeleteRetrieveCaller retrieveCaller, DataSourceScope scope)
+        returns DeleteEnumeration|ai:Error {
     map<()> identities = {};
     string? nextToken = ();
     int page = 0;
@@ -1233,6 +1240,11 @@ isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, stri
         [json[], string?] [results, respNextToken] =
             check retrieveCaller(dataTransport, kbId, filter, KB_MAX_RESULTS_PER_CALL, nextToken);
         foreach json result in results {
+            // Only this data source's results identify a candidate: document ids are
+            // unique per data source, not per knowledge base.
+            if !belongsToDataSource(result, scope) {
+                continue;
+            }
             string? sourceValue = retrievalResultSourceValue(result, sourceUriKey);
             if sourceValue is string {
                 identities[sourceValue] = ();
@@ -1270,12 +1282,13 @@ isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, stri
 // This holds for a CUSTOM data source too, where Bedrock emits no source-uri
 // attribute at all (A17's root cause): a filter on an absent key matches nothing when
 // filters are applied, and is discarded along with every other filter when they are
-// not. One extra `Retrieve` for one result, run ONLY on the ambiguous path.
+// not. One extra `Retrieve` for one result, run on every delete that carries a filter.
 const string FILTER_CONTROL_SENTINEL = "ballerina-ai-aws-bedrock-no-such-document-cf1d7a2e";
 
 isolated function storeIgnoresMetadataFilters(BedrockTransport dataTransport, string kbId, string sourceUriKey,
-        DeleteRetrieveCaller retrieveCaller) returns boolean|ai:Error {
-    json controlFilter = {'equals: {key: sourceUriKey, value: FILTER_CONTROL_SENTINEL}};
+        DeleteRetrieveCaller retrieveCaller, DataSourceScope scope) returns boolean|ai:Error {
+    json controlFilter = check combineFilters((),
+            [{'equals: {key: sourceUriKey, value: FILTER_CONTROL_SENTINEL}}, dataSourceLeaf(scope)]);
     [json[], string?] [results, _] = check retrieveCaller(dataTransport, kbId, controlFilter, 1, ());
     return results.length() > 0;
 }
@@ -1364,8 +1377,15 @@ type DataSourceDeleteResult record {|
 // this one implementation — see `SOURCE_URI_METADATA_KEY`/`managedDeleteRetrieve` and
 // `VECTOR_SOURCE_URI_METADATA_KEY`/`vectorDeleteRetrieve`.
 isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, string kbId, string dsId,
-        json? userFilter, DeletableDocument[] candidates, string sourceUriKey,
+        json? userFilter, DeletableDocument[] candidates, string sourceUriKey, string dataSourceIdKey,
         DeleteRetrieveCaller retrieveCaller) returns DataSourceDeleteResult|ai:Error {
+    // Every `Retrieve` below searches the WHOLE knowledge base unless told otherwise,
+    // and document ids are unique only within a data source — data source A's "1" and
+    // B's "1" are different documents. So every probe carries a filter on this data
+    // source, and every result is checked against it again, because that filter has
+    // been reported to leak results from other data sources.
+    // https://repost.aws/questions/QU08ymRXIITDe4xuwGmFFuAA/bedrock-data-sources-mixed-up
+    DataSourceScope scope = {key: dataSourceIdKey, id: dsId};
     // The FAST PATH trusts the store to have applied the filter, because a filtered
     // enumeration that was silently unfiltered would return every document with a
     // correct identity on each — and every candidate would land in `matched`, turning
@@ -1374,7 +1394,7 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
     // document), but this stage is not, so the control probe gates it.
     if userFilter !is () {
         boolean|ai:Error ignoresFilters =
-            storeIgnoresMetadataFilters(dataTransport, kbId, sourceUriKey, retrieveCaller);
+            storeIgnoresMetadataFilters(dataTransport, kbId, sourceUriKey, retrieveCaller, scope);
         if ignoresFilters is ai:Error {
             return dataSourceRefusal(dsId,
                 string `the check for whether the vector store honours metadata filters could not be ` +
@@ -1387,8 +1407,8 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
         }
     }
 
-    DeleteEnumeration matchedEnum =
-        check enumerateDeleteIdentities(dataTransport, kbId, userFilter, sourceUriKey, retrieveCaller);
+    DeleteEnumeration matchedEnum = check enumerateDeleteIdentities(dataTransport, kbId,
+            check combineFilters(userFilter, [dataSourceLeaf(scope)]), sourceUriKey, retrieveCaller, scope);
     // The fast path truncating is NOT an error and must not refuse the data source:
     // any data source with more than `KB_MAX_RESULTS_PER_CALL` matches truncates here
     // by definition. An identity it confirmed is still a sound delete, and a candidate
@@ -1414,7 +1434,7 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
     // the pin instead, because `documentIdFor` DERIVES the document id from
     // `ai:Metadata.id` and so guarantees the two agree for anything this module
     // ingested.
-    string? pinKey = check observePinKey(dataTransport, kbId, sourceUriKey, retrieveCaller);
+    string? pinKey = check observePinKey(dataTransport, kbId, sourceUriKey, retrieveCaller, scope);
     UnresolvedCandidate[] indeterminate = [];
     if pinKey is () {
         foreach DeletableDocument candidate in unresolved {
@@ -1455,7 +1475,7 @@ isolated function resolveDataSourceDeletes(BedrockTransport dataTransport, strin
     int truncatedGroups = 0;
     foreach [string, DeletableDocument[]] [pinValue, group] in groups.entries() {
         [json[], UnresolvedCandidate[], boolean] [groupDeletes, groupIndeterminate, groupTruncated] =
-            check resolvePinGroup(dataTransport, kbId, dsId, userFilter, group, pinValue, pinKey, sourceUriKey,
+            check resolvePinGroup(dataTransport, kbId, scope, userFilter, group, pinValue, pinKey, sourceUriKey,
                 retrieveCaller);
         toDelete.push(...groupDeletes);
         indeterminate.push(...groupIndeterminate);
@@ -1504,15 +1524,19 @@ isolated function dataSourceRefusal(string dsId, string reason) returns DataSour
 // `()` means neither is present — a document ingested without an `ai:Metadata.id` by
 // something other than this module. Unpinnable is reported, never guessed at.
 isolated function observePinKey(BedrockTransport dataTransport, string kbId, string sourceUriKey,
-        DeleteRetrieveCaller retrieveCaller) returns string?|ai:Error {
+        DeleteRetrieveCaller retrieveCaller, DataSourceScope scope) returns string?|ai:Error {
     // A SAMPLE, not one result: a data source can hold a mix, and documents ingested
     // without an `ai:Metadata.id` carry neither key (one live knowledge base held ~95
     // of them alongside pinnable ones). Sampling a single document would let one of
     // those decide "unpinnable" for the whole data source, making every candidate
     // indeterminate. Any sampled document carrying a key proves the key is in use.
     [json[], string?] [results, _] =
-        check retrieveCaller(dataTransport, kbId, (), KB_PIN_KEY_SAMPLE_SIZE, ());
+        check retrieveCaller(dataTransport, kbId, dataSourceLeaf(scope), KB_PIN_KEY_SAMPLE_SIZE, ());
     foreach json result in results {
+        // Sampled from this data source only: another one can use a different pin.
+        if !belongsToDataSource(result, scope) {
+            continue;
+        }
         map<json> metadata = asMap(asMap(result)["metadata"] ?: {});
         if metadata.hasKey(sourceUriKey) {
             return sourceUriKey;
@@ -1550,14 +1574,17 @@ isolated function observePinKey(BedrockTransport dataTransport, string kbId, str
 // What the widening actually worked around was a fixed 10-result window. Paging the
 // probe removes that need at the root: the pin bounds the result set to the group, so
 // paging terminates on the group's own size and every member is seen exactly.
-isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, string dsId, json? userFilter,
-        DeletableDocument[] group, string pinValue, string pinKey, string sourceUriKey,
+isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, DataSourceScope scope,
+        json? userFilter, DeletableDocument[] group, string pinValue, string pinKey, string sourceUriKey,
         DeleteRetrieveCaller retrieveCaller) returns [json[], UnresolvedCandidate[], boolean]|ai:Error {
+    string dsId = scope.id;
     json pin = pinnedFilter(pinKey, pinValue);
-    json filtered = userFilter is () ? pin : {andAll: [userFilter, pin]};
+    json dsLeaf = dataSourceLeaf(scope);
+    json filtered = check combineFilters(userFilter, [pin, dsLeaf]);
+    json reachable = check combineFilters((), [pin, dsLeaf]);
 
     DeleteEnumeration matchedProbe =
-        check enumerateDeleteIdentities(dataTransport, kbId, filtered, sourceUriKey, retrieveCaller);
+        check enumerateDeleteIdentities(dataTransport, kbId, filtered, sourceUriKey, retrieveCaller, scope);
     boolean allMatched = true;
     foreach DeletableDocument candidate in group {
         if !matchedProbe.identities.hasKey(candidate.sourceValue) {
@@ -1569,7 +1596,7 @@ isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, s
     // nothing is left for it to explain.
     DeleteEnumeration reachableProbe = allMatched
         ? {identities: {}, truncated: false}
-        : check enumerateDeleteIdentities(dataTransport, kbId, pin, sourceUriKey, retrieveCaller);
+        : check enumerateDeleteIdentities(dataTransport, kbId, reachable, sourceUriKey, retrieveCaller, scope);
 
     // A20: a probe that came back FULL was cut to the cap by relevance, so absence
     // from its results is not evidence of anything. "Reached without the filter and
@@ -1595,6 +1622,60 @@ isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, s
         // filter and not with it — the filter excluded it.
     }
     return [toDelete, indeterminate, truncated];
+}
+
+# The one data source a `deleteByFilter` works on, and the metadata key that names it
+# on a retrieval result (it differs between managed and self-managed knowledge bases).
+#
+# + key - The reserved data-source-id metadata attribute
+# + id - The data source id
+type DataSourceScope record {|
+    string key;
+    string id;
+|};
+
+// The `equals` leaf that restricts a `Retrieve` to the scoped data source.
+isolated function dataSourceLeaf(DataSourceScope scope) returns json
+    => {'equals: {key: scope.key, value: scope.id}};
+
+// Whether a retrieval result came from the scoped data source. A result without the
+// attribute is NOT assumed to belong: a false positive here deletes a document from
+// the wrong data source.
+isolated function belongsToDataSource(json result, DataSourceScope scope) returns boolean
+    => stringField(asMap(asMap(result)["metadata"] ?: {}), scope.key) == scope.id;
+
+// AWS caps a `RetrievalFilter` group at 5 members and allows one level of nesting.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_RetrievalFilter.html
+const int MAX_FILTER_GROUP_MEMBERS = 5;
+
+// ANDs the caller's filter with this module's own leaves (a pin, the data-source
+// scope) without breaking those limits. Wrapping the caller's filter in another
+// `andAll` would nest a level too deep whenever it is itself a group, so an `andAll`
+// is flattened into its members first. An `orAll` stays one member, which is the one
+// level of nesting AWS allows. A filter that still does not fit is refused here
+// rather than sent for a 400.
+isolated function combineFilters(json? userFilter, json[] leaves) returns json|ai:Error {
+    if userFilter is () {
+        return leaves.length() == 1 ? leaves[0] : {andAll: leaves};
+    }
+    json[] members = [];
+    json? andAll = asMap(userFilter)["andAll"];
+    if andAll is json[] {
+        members.push(...andAll);
+    } else {
+        members.push(userFilter);
+    }
+    members.push(...leaves);
+    if members.length() <= MAX_FILTER_GROUP_MEMBERS {
+        return {andAll: members};
+    }
+    // Too wide to flatten: keep the caller's group whole, which is only legal when
+    // its own members are all leaves.
+    if andAll is json[] && andAll.every(m => asMap(m)["andAll"] is () && asMap(m)["orAll"] is ()) {
+        return {andAll: [userFilter, ...leaves]};
+    }
+    return error ai:Error(string `This filter is too complex for 'deleteByFilter': it must fit in ` +
+        string `${MAX_FILTER_GROUP_MEMBERS - leaves.length()} top-level conditions, or use only simple conditions.`);
 }
 
 // The pin group a candidate belongs to: every document one pinned filter selects.

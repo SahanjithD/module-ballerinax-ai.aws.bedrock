@@ -128,3 +128,48 @@ function testEmptyFilterGroupProducesNil() returns error? {
 // `withSourceUriFilter` (the per-document pinned-probe filter builder) was removed
 // with A17 — `deleteByFilter` no longer pins per document, so there is nothing here
 // to test.
+
+// ---- combineFilters: scoping a delete probe without breaking AWS's filter limits ----
+
+final readonly & json DS_LEAF = {'equals: {key: "_data_source_id", value: "DS1"}};
+final readonly & json PIN_LEAF = {'equals: {key: "id", value: 7}};
+
+@test:Config {}
+function testCombineFiltersWithNoUserFilter() returns error? {
+    test:assertEquals(check combineFilters((), [DS_LEAF]), DS_LEAF);
+    test:assertEquals(check combineFilters((), [PIN_LEAF, DS_LEAF]), {andAll: [PIN_LEAF, DS_LEAF]});
+}
+
+@test:Config {}
+function testCombineFiltersFlattensAnAndAllInsteadOfNestingIt() returns error? {
+    // Wrapping the caller's `andAll` in another `andAll` would be two levels deep;
+    // AWS allows one.
+    json user = {andAll: [{'equals: {key: "a", value: 1}}, {orAll: [{'equals: {key: "b", value: 2}},
+        {'equals: {key: "c", value: 3}}]}]};
+    json combined = check combineFilters(user, [PIN_LEAF, DS_LEAF]);
+    test:assertEquals(combined, {andAll: [{'equals: {key: "a", value: 1}}, {orAll: [{'equals: {key: "b", value: 2}},
+        {'equals: {key: "c", value: 3}}]}, PIN_LEAF, DS_LEAF]});
+}
+
+@test:Config {}
+function testCombineFiltersNestsAWideFlatGroupWhole() returns error? {
+    // Five leaves plus two of ours exceed the 5-member cap when flattened, but the
+    // caller's group has no nested groups, so keeping it whole is one legal level.
+    json[] five = [];
+    foreach int i in 0 ..< 5 {
+        five.push({'equals: {key: string `k${i}`, value: i}});
+    }
+    json user = {andAll: five};
+    test:assertEquals(check combineFilters(user, [PIN_LEAF, DS_LEAF]), {andAll: [user, PIN_LEAF, DS_LEAF]});
+}
+
+@test:Config {}
+function testCombineFiltersRefusesAFilterThatCannotFit() {
+    json[] members = [];
+    foreach int i in 0 ..< 4 {
+        members.push({'equals: {key: string `k${i}`, value: i}});
+    }
+    members.push({orAll: [{'equals: {key: "x", value: 1}}, {'equals: {key: "y", value: 2}}]});
+    json|ai:Error combined = combineFilters({andAll: members}, [PIN_LEAF, DS_LEAF]);
+    test:assertTrue(combined is ai:Error, "a filter AWS would reject must be refused before it is sent");
+}

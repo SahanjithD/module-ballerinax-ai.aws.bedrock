@@ -76,16 +76,26 @@ isolated function deleteTestDocDetail(string id) returns json => {
     updatedAt: "2026-08-13T00:00:00Z"
 };
 
-isolated function deleteTestRetrievalResult(string id) returns json => {
+isolated function deleteTestRetrievalResult(string id, map<json> metadata) returns json => {
     content: {text: string `chunk text for ${id}`, 'type: "TEXT"},
     documentId: id,
     location: {'type: "CUSTOM", customDocumentLocation: {id}},
-    metadata: {"_source_uri": id},
+    metadata,
     score: 0.9
 };
 
 isolated service class DeleteTestMock {
     *http:Service;
+
+    // Simulates the reported Retrieve behaviour where a data-source filter leaks
+    // results from other data sources: the `_data_source_id` leaf is ignored.
+    private final boolean leaksAcrossDataSources;
+    private final boolean withSecondDataSource;
+
+    isolated function init(boolean leaksAcrossDataSources = false, boolean withSecondDataSource = false) {
+        self.leaksAcrossDataSources = leaksAcrossDataSources;
+        self.withSecondDataSource = withSecondDataSource;
+    }
 
     isolated resource function get [string... path](http:Request req) returns json|error {
         string p = req.rawPath;
@@ -175,7 +185,7 @@ isolated service class DeleteTestMock {
             };
         }
         if p == string `/knowledgebases/${DEL_KB_ID}/retrieve` {
-            return deleteTestMockRetrieve(body);
+            return deleteTestMockRetrieve(body, self.leaksAcrossDataSources, self.withSecondDataSource);
         }
         return error(string `unexpected POST ${p}`);
     }
@@ -187,25 +197,38 @@ isolated service class DeleteTestMock {
 // filter), and it sends a sentinel control filter that must match nothing — so a mock
 // that keys off the mere PRESENCE of a filter cannot exercise any of it.
 //
-// Three documents, of which only 'doc-match' carries tenant=acme.
-isolated function deleteTestDocs() returns map<map<json>> => {
-    "doc-match": {"tenant": "acme", "_source_uri": "doc-match"},
-    "doc-skip-a": {"tenant": "globex", "_source_uri": "doc-skip-a"},
-    "doc-skip-b": {"tenant": "globex", "_source_uri": "doc-skip-b"}
-};
+// Three documents on the CUSTOM data source, of which only 'doc-match' carries
+// tenant=acme. With `withSecondDataSource`, another data source of the same knowledge
+// base also holds a 'doc-skip-a' — a DIFFERENT document under the same id — and that
+// one does carry tenant=acme.
+isolated function deleteTestDocs(boolean withSecondDataSource) returns [string, map<json>][] {
+    [string, map<json>][] docs = [
+        ["doc-match", {"tenant": "acme", "_source_uri": "doc-match", "_data_source_id": DEL_DS_CUSTOM}],
+        ["doc-skip-a", {"tenant": "globex", "_source_uri": "doc-skip-a", "_data_source_id": DEL_DS_CUSTOM}],
+        ["doc-skip-b", {"tenant": "globex", "_source_uri": "doc-skip-b", "_data_source_id": DEL_DS_CUSTOM}]
+    ];
+    if withSecondDataSource {
+        docs.push(["doc-skip-a", {"tenant": "acme", "_source_uri": "doc-skip-a", "_data_source_id": "DSOTHER001"}]);
+    }
+    return docs;
+}
 
 // Evaluates the `RetrievalFilter` subset this module ever emits: an `equals` leaf, and
 // an `andAll` of them. Anything else is an error rather than a silent pass, so a
 // change in emitted filter shape fails loudly here.
-isolated function deleteTestFilterMatches(json filter, map<json> metadata) returns boolean|error {
+isolated function deleteTestFilterMatches(json filter, map<json> metadata, boolean leaks = false)
+        returns boolean|error {
     map<json> f = <map<json>>filter;
     if f.hasKey("equals") {
         map<json> leaf = <map<json>>f["equals"];
+        if leaks && leaf["key"] == "_data_source_id" {
+            return true;
+        }
         return metadata[<string>leaf["key"]] == leaf["value"];
     }
     if f.hasKey("andAll") {
         foreach json child in <json[]>f["andAll"] {
-            if !check deleteTestFilterMatches(child, metadata) {
+            if !check deleteTestFilterMatches(child, metadata, leaks) {
                 return false;
             }
         }
@@ -214,7 +237,8 @@ isolated function deleteTestFilterMatches(json filter, map<json> metadata) retur
     return error(string `mock cannot evaluate filter ${filter.toJsonString()}`);
 }
 
-isolated function deleteTestMockRetrieve(json body) returns json|error {
+isolated function deleteTestMockRetrieve(json body, boolean leaks, boolean withSecondDataSource)
+        returns json|error {
     recordRetrieveProbe();
     map<json> bodyMap = <map<json>>body;
     map<json> managedSearch =
@@ -222,9 +246,9 @@ isolated function deleteTestMockRetrieve(json body) returns json|error {
     json? filter = managedSearch.hasKey("filter") ? managedSearch["filter"] : ();
 
     json[] results = [];
-    foreach [string, map<json>] [id, metadata] in deleteTestDocs().entries() {
-        if filter is () || check deleteTestFilterMatches(filter, metadata) {
-            results.push(deleteTestRetrievalResult(id));
+    foreach [string, map<json>] [id, metadata] in deleteTestDocs(withSecondDataSource) {
+        if filter is () || check deleteTestFilterMatches(filter, metadata, leaks) {
+            results.push(deleteTestRetrievalResult(id, metadata));
         }
     }
     return {retrievalResults: results};
@@ -246,8 +270,6 @@ function testDeleteByFilterDeletesMatchesAndReportsEveryUnconfirmedCandidate() r
     ai:Error? result = kb.deleteByFilter(filters);
     check mockListener.gracefulStop();
 
-    // The confirmed match was deleted regardless of the undeletable data source
-    // elsewhere — a partial failure must not withhold the deletes it COULD make.
     json[] deleted = readDeletedIdentifiers();
     test:assertEquals(deleted.length(), 1, deleted.toJsonString());
     map<json> deletedIdentifier = <map<json>>deleted[0];
@@ -260,15 +282,38 @@ function testDeleteByFilterDeletesMatchesAndReportsEveryUnconfirmedCandidate() r
     // everything costs the three fixed calls and nothing more.
     test:assertEquals(readRetrieveProbeCount(), 7, "unexpected Retrieve call budget");
 
-    // The undeletable data source is reported. The two excluded documents are NOT:
-    // each was resolved by its own pinned probe, which reached it without the filter
-    // and not with it, so "the filter excluded it" is an observation about that
-    // document rather than an inference from one enumeration's coverage.
-    test:assertTrue(result is ai:Error);
-    if result is ai:Error {
-        string msg = result.message();
-        test:assertTrue(msg.includes(DEL_DS_SHAREPOINT) || msg.includes("SHAREPOINT"), msg);
-        test:assertFalse(msg.includes("doc-skip"),
-            string `a document the pin proved excluded by the filter must not be reported: ${msg}`);
+    // Success. The SharePoint data source on the same knowledge base is not this
+    // class's data source, so it is neither touched nor reported (BED-29). The two
+    // excluded documents are not reported either: each was resolved by its own pinned
+    // probe, which reached it without the filter and not with it.
+    test:assertTrue(result is (), result is ai:Error ? result.message() : "");
+}
+
+// Regression: data source A's 'doc-skip-a' (tenant globex) and data source B's
+// 'doc-skip-a' (tenant acme) are different documents under the same id. Deleting
+// tenant == acme must not delete A's document because B's matched. Run against a
+// store that honours the data-source filter, and one that leaks across data sources.
+@test:Config {dependsOn: [testDeleteByFilterDeletesMatchesAndReportsEveryUnconfirmedCandidate]}
+function testDeleteByFilterNeverDeletesBecauseAnotherDataSourceMatched() returns error? {
+    foreach [int, boolean] [port, leaks] in [[18652, false], [18653, true]] {
+        lock {
+            deletedIdentifiers = [];
+        }
+        http:Listener mockListener = check new (port);
+        check mockListener.attach(new DeleteTestMock(leaks, true), "/");
+        check mockListener.'start();
+
+        ManagedKnowledgeBase kb = check new (
+            DEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+            endpoint = {customEndpoint: string `http://localhost:${port}`},
+            dataSourceId = DEL_DS_CUSTOM);
+        ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
+        check mockListener.gracefulStop();
+
+        json[] deleted = readDeletedIdentifiers();
+        test:assertEquals(deleted.length(), 1, string `leaks=${leaks}: ${deleted.toJsonString()}`);
+        test:assertEquals((<map<json>>(<map<json>>deleted[0])["custom"])["id"], "doc-match",
+            string `leaks=${leaks}: only this data source's own match may be deleted`);
+        test:assertTrue(result is (), result is ai:Error ? result.message() : "");
     }
 }

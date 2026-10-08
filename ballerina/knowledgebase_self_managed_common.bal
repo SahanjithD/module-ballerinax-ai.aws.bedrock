@@ -58,6 +58,11 @@ import ballerinax/aws.auth;
 // behaves the same way when the scoring is your vector store's rather than Bedrock's.
 const string VECTOR_SOURCE_URI_METADATA_KEY = "x-amz-bedrock-kb-source-uri";
 
+// The reserved attribute naming the data source a SELF-MANAGED knowledge base result
+// came from — the `x-amz-bedrock` spelling, per the same prefix rule as above. The
+// constant AWS documents for filtering by data source.
+const string VECTOR_DATA_SOURCE_ID_METADATA_KEY = "x-amz-bedrock-kb-data-source-id";
+
 // `FixedSizeChunkingConfigurationMaxTokensInteger` in the `bedrock-agent` service
 // model (botocore `service-2.json`) is `{"min": 1, "max": 8192}`. The API reference
 // documents no maximum, so the service model is the source here.

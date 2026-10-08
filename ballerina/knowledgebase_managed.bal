@@ -196,22 +196,23 @@ public distinct isolated client class ManagedKnowledgeBase {
         return matches;
     }
 
-    // Bedrock has no metadata-based delete, so this enumerates every document on every
-    // data source (`ListKnowledgeBaseDocuments`) and, per data source, runs TWO PAGED
+    // Bedrock has no metadata-based delete, so this enumerates every document on this
+    // class's data source (`ListKnowledgeBaseDocuments`) and runs TWO PAGED
     // `Retrieve` enumerations — filtered by `filters`, then unfiltered — to classify each
     // candidate as a confirmed match, genuinely excluded, or indeterminate. See
     // `resolveDataSourceDeletes` (knowledgebase_common.bal) for the algorithm (A17).
     //
-    // Cost: two paged `Retrieve` enumerations PER DATA SOURCE (at most
+    // Cost: two paged `Retrieve` enumerations (at most
     // `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results), not one to two round trips
     // per document. A maintenance operation, not something to put on a request path.
     //
     // `filters` must contain at least one leaf predicate: a filter set that constrains
     // nothing matches every document, so "delete everything" has to be explicit.
     //
-    // Only `CUSTOM` and `S3` data sources support deletion; anything else is named in the
-    // returned error rather than silently skipped, and deletes that can be made still
-    // happen when some documents cannot be reached.
+    // Scoped to this class's own data source, the one `ingest()` writes to. Other data
+    // sources on the same knowledge base are never touched: document ids are unique
+    // only within a data source, so a match elsewhere says nothing about a document
+    // here. Deletes that can be made still happen when some documents cannot be reached.
 
     # Deletes documents that match the given metadata filters.
     #
@@ -221,51 +222,26 @@ public distinct isolated client class ManagedKnowledgeBase {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
         check guardDeleteFilter(userFilter, filters);
 
-        map<json>[] dataSourceSummaries = check listDataSources(self.controlTransport, self.knowledgeBaseId);
-        string[] undeletableDataSources = [];
-        UnresolvedCandidate[] indeterminate = [];
-        string[] refused = [];
-        map<json[]> toDeleteByDataSource = {};
-
-        foreach map<json> summary in dataSourceSummaries {
-            string? dsId = stringField(summary, "dataSourceId");
-            if dsId is () {
-                continue;
-            }
-            map<json> dataSource = check getDataSource(self.controlTransport, self.knowledgeBaseId, dsId);
-            string effectiveType = effectiveDataSourceType(dataSource);
-            if effectiveType != "CUSTOM" && effectiveType != "S3" {
-                undeletableDataSources.push(string `${dsId} (${effectiveType})`);
-                continue;
-            }
-
-            DeletableDocument[] candidates =
-                check listDeletableDocuments(self.controlTransport, self.knowledgeBaseId, dsId, effectiveType);
-            if candidates.length() == 0 {
-                // Nothing to classify — skip the two enumeration round trips entirely.
-                continue;
-            }
-            DataSourceDeleteResult result = check resolveDataSourceDeletes(self.dataTransport, self.knowledgeBaseId,
-                dsId, userFilter, candidates, SOURCE_URI_METADATA_KEY, managedDeleteRetrieve);
-            refused.push(...result.notes);
-            string? refusalReason = result.refusalReason;
-            if refusalReason is string {
-                refused.push(refusalReason);
-                continue;
-            }
-            indeterminate.push(...result.indeterminate);
-            if result.toDelete.length() > 0 {
-                toDeleteByDataSource[dsId] = result.toDelete;
-            }
+        // Scoped to THIS class's data source — the only one `ingest()` writes to, and
+        // the one validated as CUSTOM at construction. Documents on other data sources
+        // of the same knowledge base are never touched: their ids are only unique
+        // within their own data source, and an S3 source re-syncs whatever is deleted.
+        DeletableDocument[] candidates = check listDeletableDocuments(self.controlTransport,
+                self.knowledgeBaseId, self.dataSourceId, "CUSTOM");
+        if candidates.length() == 0 {
+            return;
         }
-
-        string[] notDeleted = [];
-        foreach [string, json[]] [dsId, identifiers] in toDeleteByDataSource.entries() {
-            notDeleted.push(...check deleteDocuments(self.controlTransport, self.knowledgeBaseId, dsId,
-                identifiers));
+        DataSourceDeleteResult result = check resolveDataSourceDeletes(self.dataTransport, self.knowledgeBaseId,
+            self.dataSourceId, userFilter, candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+        string[] refused = [...result.notes];
+        string? refusalReason = result.refusalReason;
+        if refusalReason is string {
+            refused.push(refusalReason);
+            return deleteByFilterOutcome([], [], refused);
         }
-
-        return deleteByFilterOutcome(indeterminate, notDeleted, undeletableDataSources, refused);
+        string[] notDeleted = result.toDelete.length() == 0 ? [] :
+            check deleteDocuments(self.controlTransport, self.knowledgeBaseId, self.dataSourceId, result.toDelete);
+        return deleteByFilterOutcome(result.indeterminate, notDeleted, refused);
     }
 
 }
@@ -393,17 +369,12 @@ isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters
 // The shared tail of `deleteByFilter`: everything that could not be confirmed, in one
 // error, after every delete that COULD be made has been made.
 isolated function deleteByFilterOutcome(UnresolvedCandidate[] indeterminate, string[] notDeleted,
-        string[] undeletableDataSources, string[] refused = []) returns ai:Error? {
+        string[] refused = []) returns ai:Error? {
     string[] problems = [];
     problems.push(...unresolvedProblems(indeterminate));
     if notDeleted.length() > 0 {
         problems.push(string `${notDeleted.length()} document(s) matched the filter but were not confirmed ` +
             string `deleted by 'DeleteKnowledgeBaseDocuments': ${string:'join(", ", ...notDeleted)}`);
-    }
-    if undeletableDataSources.length() > 0 {
-        problems.push(string `${undeletableDataSources.length()} data source(s) are not deletable through ` +
-            string `this API — only CUSTOM/S3 support 'DeleteKnowledgeBaseDocuments': ` +
-            string:'join(", ", ...undeletableDataSources));
     }
     // A17: a data source refused outright — a store that does not appear to honour
     // metadata filters — contributes NOTHING to `toDelete`, so it is reported here
