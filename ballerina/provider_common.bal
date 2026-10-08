@@ -467,8 +467,8 @@ isolated function resolveSpine(string providerName, BedrockAuthConfig credential
     do {
         Route route = check resolved; // L1, pure — resolved by the calling class
         // Validate the RESOLVED region, not the argument: an ARN's region segment
-        // legitimately supplies it, so an ARN model with no `region` and no AWS_REGION
-        // in the environment is well-formed and must not be rejected.
+        // legitimately supplies it, so an ARN model passed with an empty `region` is
+        // well-formed and must not be rejected.
         check guardRegion(route.region);
         check guardGuardrailSupport(route.endpoint, route.api, guardrail);
         Endpoint ep = check buildEndpoint(route, endpointConfig);   // L2, pure
