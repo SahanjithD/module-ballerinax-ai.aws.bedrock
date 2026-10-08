@@ -35,7 +35,7 @@ function testExplicitChunkerAgainstAServerChunkingStrategyIsAConstructionError()
     ai:Chunker|ai:AUTO|ai:DISABLE|ai:Error result = resolveChunker(ai:AUTO, FIXED_SIZE);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
-        test:assertTrue(result.message().includes("double-chunk"), result.message());
+        test:assertTrue(errorText(result).includes("re-splits"), errorText(result));
     }
 
     ai:Chunker|ai:AUTO|ai:DISABLE|ai:Error withRealChunker = resolveChunker(new ai:GenericRecursiveChunker(), HIERARCHICAL);

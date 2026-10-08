@@ -325,12 +325,11 @@ isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, s
     // means an unexpected response shape rather than a non-managed knowledge base,
     // and failing construction over it would be a false positive.
     if kbType != "" && kbType != "MANAGED" {
-        return error ai:Error(
-            string `Knowledge base '${kbId}' is of type '${kbType}', but ManagedKnowledgeBase ` +
-            "supports only 'MANAGED' knowledge bases (the ones where Bedrock owns the vector store). " +
+        return errorWithDetail(
+            string `Knowledge base '${kbId}' is of type '${kbType}'; ManagedKnowledgeBase supports only ` +
+            "'MANAGED' knowledge bases. Use SelfManagedKnowledgeBase for a 'VECTOR' knowledge base.",
             "A 'VECTOR' knowledge base is backed by your own vector store and is served by a different " +
-            "search branch, so retrieve() and deleteByFilter() are not valid against it. Use " +
-            "SelfManagedKnowledgeBase for a 'VECTOR' knowledge base.");
+            "search branch, so retrieve() and deleteByFilter() are not valid against it.");
     }
     return kb;
 }
@@ -387,12 +386,11 @@ isolated function guardEmbeddingModelAgainstReranker(string|KnowledgeBaseDefinit
         return;
     }
     if knowledgeBase?.embeddingModel is ManagedEmbeddingModel {
-        return error ai:Error(
-            "'rerankingModelType' is RERANKING_MANAGED and 'knowledgeBase.embeddingModel' is set, but AWS " +
-            "makes the managed reranker unavailable on a knowledge base created with a caller-supplied " +
-            "embedding model. Both are permanent at creation time, so pick one: drop 'embeddingModel' to " +
-            "keep managed reranking, or use RERANKING_NONE (or leave 'rerankingModelType' unset) to keep " +
-            "your own embedding model.");
+        return errorWithDetail(
+            "'rerankingModelType' RERANKING_MANAGED cannot be used with 'knowledgeBase.embeddingModel'. " +
+            "Drop 'embeddingModel', or use RERANKING_NONE.",
+            "AWS makes the managed reranker unavailable on a knowledge base created with a caller-supplied " +
+            "embedding model, and both are permanent at creation time.");
     }
 }
 
@@ -742,10 +740,10 @@ isolated function resolveCustomDataSource(BedrockTransport controlTransport, str
         return candidates[0];
     }
     if candidates.length() == 0 {
-        return error ai:Error(
-            string `Knowledge base '${kbId}' has no 'CUSTOM' data source: 'ingest()'/'deleteByFilter()' have ` +
-            "nowhere to write. Add a CUSTOM (direct-ingestion) data source in the AWS console, or pass a " +
-            "'KnowledgeBaseDefinition' instead of a bare id so this class creates one.");
+        return errorWithDetail(
+            string `Knowledge base '${kbId}' has no 'CUSTOM' data source. Add one in the AWS console, or ` +
+            "pass a 'KnowledgeBaseDefinition' so this class creates one.",
+            "ingest() and deleteByFilter() write through a CUSTOM (direct-ingestion) data source.");
     }
     return error ai:Error(
         string `Knowledge base '${kbId}' has ${candidates.length()} 'CUSTOM' data sources ` +
@@ -826,10 +824,10 @@ isolated function validateResolvedDataSource(BedrockTransport controlTransport, 
     // first `ingest()` with an error that points nowhere near the misconfiguration.
     string effectiveType = effectiveDataSourceType(dataSource);
     if effectiveType != "CUSTOM" {
-        return error ai:Error(
-            string `Data source '${dsId}' on knowledge base '${kbId}' is of type '${effectiveType}', but ` +
-            "'ingest()'/'deleteByFilter()' write through the CUSTOM (direct-ingestion) connector only. " +
-            "Pass the id of a CUSTOM data source, or omit 'dataSourceId' to have it resolved.");
+        return errorWithDetail(
+            string `Data source '${dsId}' on knowledge base '${kbId}' is of type '${effectiveType}', not ` +
+            "CUSTOM. Pass the id of a CUSTOM data source, or omit 'dataSourceId'.",
+            "ingest() and deleteByFilter() write through the CUSTOM (direct-ingestion) connector only.");
     }
 
     map<json> vectorIngestion = asMap(dataSource["vectorIngestionConfiguration"] ?: {});
@@ -1024,12 +1022,11 @@ isolated function pollDocumentsTerminal(BedrockTransport controlTransport, strin
             break;
         }
         if time:utcDiffSeconds(deadline, time:utcNow()) <= 0d {
-            return error ai:Error(
-                string `Timed out after ${timeoutSeconds}s waiting for ${pending.length()} document(s) to ` +
-                string `reach a terminal status. Still unconfirmed (indexing, or accepted but not yet ` +
-                string `visible to 'GetKnowledgeBaseDocuments'): ${string:'join(", ", ...pending)}. Increase ` +
-                "'ingestTimeout' — indexing latency varies by an order of magnitude; do not tune against " +
-                "a fixed figure.");
+            return errorWithDetail(
+                string `Timed out after ${timeoutSeconds}s waiting for ${pending.length()} document(s) to be ` +
+                string `indexed: ${string:'join(", ", ...pending)}. Increase 'ingestTimeout'.`,
+                "These are still indexing, or accepted but not yet visible to 'GetKnowledgeBaseDocuments'. " +
+                "Indexing latency varies by an order of magnitude; do not tune against a fixed figure.");
         }
         runtime:sleep(KB_POLL_INTERVAL_SECONDS);
     }
@@ -1055,11 +1052,11 @@ isolated function assertDistinctDocumentIds(string[] documentIds) returns ai:Err
     if duplicates.length() == 0 {
         return;
     }
-    return error ai:Error(
+    return errorWithDetail(
         string `${duplicates.length()} document id(s) appear more than once in this ingest call ` +
-        string `(${string:'join(", ", ...duplicates)}). Bedrock upserts by 'customDocumentIdentifier.id', ` +
-        "so the later document would silently overwrite the earlier one. Give each document a distinct " +
-        "'ai:Metadata.id', or ingest them in separate calls if the overwrite is intended.");
+        string `(${string:'join(", ", ...duplicates)}). Give each document a distinct 'ai:Metadata.id'.`,
+        "Bedrock upserts by 'customDocumentIdentifier.id', so the later document would silently overwrite " +
+        "the earlier one. Ingest them in separate calls if the overwrite is intended.");
 }
 
 # One enumerated, retrievable document that `deleteByFilter` can potentially delete.
@@ -1776,12 +1773,11 @@ isolated function assertDefinitionMatches(string kbId, map<json> expectedCreateB
     if differences.length() == 0 {
         return;
     }
-    return error ai:Error(
+    return errorWithDetail(
         string `Knowledge base '${kbId}' matches the definition's name, but ${differences.length()} field(s) ` +
-        string `of the existing knowledge base differ from the definition: ` +
-        string:'join("; ", ...differences) +
-        ". These are fixed at creation time, so the definition passed is not the one in effect. Pass the " +
-        "knowledge base id directly to attach to it as it is, or correct the definition.");
+        string `differ: ${string:'join("; ", ...differences)}. Pass the knowledge base id to attach to it ` +
+        "as it is, or correct the definition.",
+        "These fields are fixed at creation time, so the definition passed is not the one in effect.");
 }
 
 // Paths where `expected`'s leaves disagree with `actual`. Numeric-aware, so an `int`

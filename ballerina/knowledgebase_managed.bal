@@ -258,12 +258,10 @@ isolated function resolveChunker(ai:Chunker|ai:AUTO|ai:DISABLE? configured, Chun
         return serverChunks ? ai:DISABLE : ai:AUTO;
     }
     if serverChunks && configured !is ai:DISABLE {
-        return error ai:Error(
-            string `The resolved data source chunks server-side (chunkingStrategy '${detected}'), so an ` +
-            "explicit 'chunker' (an 'ai:Chunker' or 'ai:AUTO') would double-chunk — Bedrock re-splits " +
-            "whatever is submitted, overwriting the boundaries the chunker just computed. Pass " +
-            "'chunker = ai:DISABLE', or recreate the data source with 'chunkingStrategy = NONE' to chunk " +
-            "client-side.");
+        return errorWithDetail(
+            string `The data source chunks server-side (chunkingStrategy '${detected}'), so 'chunker' must ` +
+            "be 'ai:DISABLE'. To chunk client-side, use a data source with 'chunkingStrategy = NONE'.",
+            "Bedrock re-splits whatever is submitted, overwriting the boundaries the chunker computed.");
     }
     return configured;
 }
@@ -358,10 +356,11 @@ isolated function guardRetrieveQuery(string query) returns ai:Error? {
 // groups. Total deletion is not a case to protect against with one check.
 isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters) returns ai:Error? {
     if userFilter is () || filterLeafCount(filters) == 0 {
-        return error ai:Error(
-            "deleteByFilter requires at least one metadata filter — an 'ai:MetadataFilters' with no " +
-            "leaf predicates matches every document, which would delete the entire knowledge base. " +
-            "Pass a filter that selects the documents to remove.");
+        return errorWithDetail(
+            "deleteByFilter requires at least one metadata filter. Pass a filter that selects the " +
+            "documents to remove.",
+            "An 'ai:MetadataFilters' with no leaf predicates matches every document, which would delete " +
+            "the entire knowledge base.");
     }
     return;
 }

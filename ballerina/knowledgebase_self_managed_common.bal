@@ -404,14 +404,13 @@ isolated function rerankingConfigJson(VectorRerankingConfig reranking, int numbe
 // the bound.
 isolated function validateVectorDataSource(VectorDataSourceDefinition def) returns ai:Error? {
     if def.chunkingStrategy == HIERARCHICAL || def.chunkingStrategy == SEMANTIC {
-        return error ai:Error(
-            string `chunkingStrategy '${def.chunkingStrategy}' is not supported by this module yet: it ` +
-            "requires a tuning sub-object with required members and no service-side default " +
+        return errorWithDetail(
+            string `chunkingStrategy '${def.chunkingStrategy}' is not supported in a definition. Use ` +
+            "FIXED_SIZE or NONE, or create the data source in the AWS console and pass the knowledge base id.",
+            "It requires a tuning sub-object with required members and no service-side default " +
             "(HIERARCHICAL needs 'levelConfigurations' and 'overlapTokens'; SEMANTIC needs 'maxTokens', " +
-            "'bufferSize' and 'breakpointPercentileThreshold'), and 'VectorDataSourceDefinition' has no " +
-            "way to express them. Use FIXED_SIZE, or NONE to chunk client-side with an 'ai:Chunker'. " +
-            "To use one of these strategies, create the data source in the AWS console and attach to it " +
-            "by passing the knowledge base id instead of a definition.");
+            "'bufferSize' and 'breakpointPercentileThreshold'), which 'VectorDataSourceDefinition' cannot " +
+            "express.");
     }
     // FixedSizeChunkingConfigurationMaxTokensInteger: min 1, max 8192.
     if def.maxTokens < 1 || def.maxTokens > MAX_FIXED_SIZE_CHUNK_TOKENS {
@@ -421,10 +420,10 @@ isolated function validateVectorDataSource(VectorDataSourceDefinition def) retur
     // FixedSizeChunkingConfigurationOverlapPercentageInteger: min 1, max 99 — note
     // 0 is NOT valid, despite reading like a natural "no overlap".
     if def.overlapPercentage < 1 || def.overlapPercentage > 99 {
-        return error ai:Error(
-            string `'overlapPercentage' must be between 1 and 99, got ${def.overlapPercentage}. ` +
-            "Bedrock rejects 0 — there is no 'no overlap' value on FIXED_SIZE; use " +
-            "'chunkingStrategy = NONE' if you do not want Bedrock to chunk at all.");
+        return errorWithDetail(
+            string `'overlapPercentage' must be between 1 and 99, got ${def.overlapPercentage}.`,
+            "Bedrock rejects 0: FIXED_SIZE has no 'no overlap' value. Use 'chunkingStrategy = NONE' if you " +
+            "do not want Bedrock to chunk at all.");
     }
     return;
 }
@@ -489,10 +488,10 @@ isolated function validateStorageConfiguration(StorageConfiguration storage) ret
             string other = storage?.vectorBucketArn is string
                 ? string `vectorBucketArn '${storage?.vectorBucketArn ?: ""}'`
                 : string `indexName '${storage?.indexName ?: ""}'`;
-            return error ai:Error(
-                string `S3 Vectors storage sets both 'indexArn' ('${indexArn ?: ""}') and ${other} — these ` +
-                "may name different indexes, and which one Bedrock would attach to is not documented. Pass " +
-                "exactly one of the two valid forms: 'indexArn', or 'vectorBucketArn' + 'indexName'.");
+            return errorWithDetail(
+                string `S3 Vectors storage sets both 'indexArn' and ${other}. Pass either 'indexArn', or ` +
+                "'vectorBucketArn' + 'indexName'.",
+                "The two may name different indexes, and which one Bedrock would attach to is not documented.");
         }
     }
     return;
@@ -523,12 +522,11 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
     // means an unexpected response shape rather than a non-vector knowledge base, and
     // failing construction over it would be a false positive.
     if kbType != "" && kbType != "VECTOR" {
-        return error ai:Error(
-            string `Knowledge base '${kbId}' is of type '${kbType}', but SelfManagedKnowledgeBase ` +
-            "supports only 'VECTOR' knowledge bases (the self-managed ones, backed by your own vector " +
-            "store). A 'MANAGED' knowledge base is served by a different search branch and uses a " +
-            "different reserved metadata prefix, so retrieve() and deleteByFilter() are not valid " +
-            "against it. Use ManagedKnowledgeBase instead.");
+        return errorWithDetail(
+            string `Knowledge base '${kbId}' is of type '${kbType}'; SelfManagedKnowledgeBase supports only ` +
+            "'VECTOR' knowledge bases. Use ManagedKnowledgeBase instead.",
+            "A 'MANAGED' knowledge base is served by a different search branch and uses a different " +
+            "reserved metadata prefix, so retrieve() and deleteByFilter() are not valid against it.");
     }
     return kb;
 }

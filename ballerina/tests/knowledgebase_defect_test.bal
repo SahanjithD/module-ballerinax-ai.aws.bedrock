@@ -209,7 +209,7 @@ function testTwoDocumentsSharingAnIdAreRejectedRatherThanSilentlyOverwritten() {
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
         test:assertTrue(result.message().includes("42"), result.message());
-        test:assertTrue(result.message().includes("overwrite"), result.message());
+        test:assertTrue(errorText(result).includes("overwrite"), errorText(result));
     }
 }
 

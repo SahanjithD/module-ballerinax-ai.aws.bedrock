@@ -297,7 +297,7 @@ function testManagedRerankerWithCustomEmbeddingModelIsRefused() {
     test:assertTrue(guard is ai:Error);
     if guard is ai:Error {
         test:assertTrue(guard.message().includes("embeddingModel"), guard.message());
-        test:assertTrue(guard.message().includes("managed reranker"), guard.message());
+        test:assertTrue(errorText(guard).includes("managed reranker"), errorText(guard));
     }
 }
 
