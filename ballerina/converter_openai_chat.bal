@@ -20,8 +20,22 @@ import ballerina/ai;
 // carries `system` as a `role: system` MESSAGE — that is the wire contract here,
 // so the hoisted system is re-added as the leading message.
 
-// Encodes an OpenAI Chat-Completions request body.
+// Encodes an OpenAI Chat-Completions request body for a non-OpenAI model, which
+// takes the output cap as `max_tokens`.
 isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
+        ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
+    => encodeOpenAIChatBody("max_tokens", system, messages, tools, stop, params);
+
+// The same body for an OpenAI model, which takes `max_completion_tokens`: AWS's
+// gpt-oss request schema names it, OpenAI deprecates `max_tokens` in its favour, and
+// GPT-6 rejects `max_tokens` outright.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html
+// https://github.com/openai/openai-openapi/blob/master/openapi.yaml
+isolated function encodeOpenAIModelChat(string? system, ResolvedMessage[] messages,
+        ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
+    => encodeOpenAIChatBody("max_completion_tokens", system, messages, tools, stop, params);
+
+isolated function encodeOpenAIChatBody(string maxTokensKey, string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // UNVERIFIED: no first-party source states whether Bedrock's OpenAI-compatible
     // dialects accept image content parts. Refuse rather than guess — see README.
@@ -36,7 +50,7 @@ isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
     }
 
     map<json> body = {"messages": wire};
-    setMaxTokens(body, params, "max_tokens");
+    setMaxTokens(body, params, maxTokensKey);
     setTemperature(body, params);
     string[]? stops = params.stopSequences;
     if stop is string {

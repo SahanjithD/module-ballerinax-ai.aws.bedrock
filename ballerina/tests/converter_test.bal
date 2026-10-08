@@ -617,3 +617,24 @@ function testConverseThinkingAndEffortFoldTogetherWithoutClobbering() returns er
     test:assertEquals(extra["thinking"], <json>{"type": "adaptive"});
     test:assertEquals(extra["output_config"], <json>{"effort": "high"});
 }
+
+@test:Config {}
+function testOpenAIModelsSendMaxCompletionTokensAndOthersMaxTokens() returns error? {
+    [string, ApiFamily, string, string][] cases = [
+        ["openai.gpt-oss-120b-1:0", INVOKE, "max_completion_tokens", "max_tokens"],
+        ["openai.gpt-oss-120b-1:0", CHAT_COMPLETIONS, "max_completion_tokens", "max_tokens"],
+        ["us.openai.gpt-6-sol", CHAT_COMPLETIONS, "max_completion_tokens", "max_tokens"],
+        ["qwen.qwen3-32b-v1:0", INVOKE, "max_tokens", "max_completion_tokens"],
+        ["qwen.qwen3-32b-v1:0", CHAT_COMPLETIONS, "max_tokens", "max_completion_tokens"],
+        ["google.gemma-3-12b-it", INVOKE, "max_tokens", "max_completion_tokens"]
+    ];
+    foreach [string, ApiFamily, string, string] [id, api, sent, absent] in cases {
+        Route route = check resolveRuntimeRoute(id, "us-east-1", api);
+        readonly & ModelConverter converter = check selectConverter(route);
+        RequestEncoder encode = converter.encode;
+        map<json> body = check (check encode((), [userText("Hi")], [], (), {maxTokens: 50})).ensureType();
+        string caseName = string `${id} on ${api}`;
+        test:assertEquals(body[sent], <json>50, caseName);
+        test:assertFalse(body.hasKey(absent), caseName);
+    }
+}

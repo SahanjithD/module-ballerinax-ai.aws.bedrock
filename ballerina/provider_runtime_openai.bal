@@ -36,15 +36,15 @@ public enum OpenAIRuntimeModel {
     // The GPT-6 family. CRIS-PREFIXED, unlike GPT OSS: each card says "You cannot use
     // the base model ID for in-Region calls on this endpoint". They serve Responses,
     // Chat Completions and Converse here, but NOT Invoke, and refuse the Chat
-    // Completions `max_tokens` parameter, which this module sends by default.
+    // Completions `max_tokens` parameter (they are sent `max_completion_tokens`).
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
-    # No `INVOKE`. On `CHAT_COMPLETIONS`, set `maxTokens = ()`
+    # Not available on the `INVOKE` API
     GPT_6_ASTRA = "us.openai.gpt-6-astra",
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
-    # No `INVOKE`. On `CHAT_COMPLETIONS`, set `maxTokens = ()`
+    # Not available on the `INVOKE` API
     GPT_6_SOL = "us.openai.gpt-6-sol",
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
-    # No `INVOKE`. On `CHAT_COMPLETIONS`, set `maxTokens = ()`
+    # Not available on the `INVOKE` API
     GPT_6_LUNA = "us.openai.gpt-6-luna"
 }
 

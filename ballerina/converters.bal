@@ -79,6 +79,17 @@ final readonly & ModelConverter NATIVE_CHAT_CONVERTER = {
     supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: true}
 };
 
+// Chat Completions for an OpenAI model: identical, except the output cap is sent as
+// `max_completion_tokens` (see `encodeOpenAIModelChat`).
+final readonly & ModelConverter NATIVE_OPENAI_MODEL_CHAT_CONVERTER = {
+    encode: encodeOpenAIModelChat,
+    decode: decodeOpenAIChat,
+    toolChoice: OPENAI_CHAT_TOOL_CHOICE,
+    supportsStreaming: false,
+    dialect: "OpenAI Chat Completions",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: true}
+};
+
 // Nova InvokeModel — `schemaVersion: messages-v1`; Converse-shaped response.
 // Nova's Invoke body is Converse-shaped, so it forces tools the CONVERSE way even
 // though the route family is INVOKE — see `ToolChoiceStyle`.
@@ -95,6 +106,16 @@ final readonly & ModelConverter INVOKE_NOVA_CONVERTER = {
 // dialect differs on stop_reason, tool_choice, and usage — see `converter_mistral.bal`.
 final readonly & ModelConverter INVOKE_OPENAI_CHAT_CONVERTER = {
     encode: encodeOpenAIChat,
+    decode: decodeOpenAIChat,
+    toolChoice: OPENAI_CHAT_TOOL_CHOICE,
+    supportsStreaming: false,
+    dialect: "OpenAI Chat Completions (InvokeModel)",
+    supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: true}
+};
+
+// The same InvokeModel body for an OpenAI model (gpt-oss), with `max_completion_tokens`.
+final readonly & ModelConverter INVOKE_OPENAI_MODEL_CHAT_CONVERTER = {
+    encode: encodeOpenAIModelChat,
     decode: decodeOpenAIChat,
     toolChoice: OPENAI_CHAT_TOOL_CHOICE,
     supportsStreaming: false,
@@ -150,7 +171,7 @@ isolated function selectConverter(Route route) returns readonly & ModelConverter
             return NATIVE_RESPONSES_CONVERTER;
         }
         CHAT_COMPLETIONS => {
-            return NATIVE_CHAT_CONVERTER;
+            return isOpenAIModel(route.bareModelId) ? NATIVE_OPENAI_MODEL_CHAT_CONVERTER : NATIVE_CHAT_CONVERTER;
         }
     }
     // INVOKE — the one shape whose body is the model's own, so it is keyed by the
@@ -194,6 +215,9 @@ isolated function mantlePathFor(string basePath, ApiFamily api) returns string|e
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
 isolated function usesApiKeyHeader(ApiFamily api) returns boolean => api == MESSAGES;
 
+// Whether a bare model id is OpenAI's own, which changes the output-cap field name.
+isolated function isOpenAIModel(string bareModelId) returns boolean => bareModelId.startsWith("openai.");
+
 // Picks the InvokeModel converter from the bare id's vendor prefix.
 isolated function selectInvokeConverter(string bareModelId) returns readonly & ModelConverter|error {
     if bareModelId.startsWith("anthropic.") {
@@ -220,7 +244,10 @@ isolated function selectInvokeConverter(string bareModelId) returns readonly & M
     // Invoke sample posts an OpenAI-shaped body — `{"messages": [...], "max_tokens": N}` —
     // which is exactly this converter's dialect.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
-    if bareModelId.startsWith("openai.") || bareModelId.startsWith("qwen.") ||
+    if isOpenAIModel(bareModelId) {
+        return INVOKE_OPENAI_MODEL_CHAT_CONVERTER;
+    }
+    if bareModelId.startsWith("qwen.") ||
         bareModelId.startsWith("zai.") || bareModelId.startsWith("google.") {
         return INVOKE_OPENAI_CHAT_CONVERTER;
     }
