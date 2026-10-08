@@ -20,15 +20,17 @@ import ballerina/http;
 // and no streaming, so the model provider's routing ladder collapses entirely.
 // Credentials, transport, SigV4, retry, and error mapping are reused unchanged.
 
-# Well-known Amazon Titan text-embedding model ids.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+
+# Amazon Titan text embedding model IDs.
 public enum TitanEmbeddingModel {
     TITAN_EMBED_TEXT_V2 = "amazon.titan-embed-text-v2:0",
     TITAN_EMBED_TEXT_V1 = "amazon.titan-embed-text-v1"
 }
 
-# Well-known Cohere Embed model ids.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed.html
+
+# Cohere Embed model IDs.
 public enum CohereEmbeddingModel {
     COHERE_EMBED_ENGLISH_V3 = "cohere.embed-english-v3",
     COHERE_EMBED_MULTILINGUAL_V3 = "cohere.embed-multilingual-v3",
@@ -75,9 +77,9 @@ public type TitanEmbeddingConfig record {|
     boolean normalize?;
     # Extra fields sent verbatim in the request body
     AdditionalRequestFields additionalModelRequestFields?;
-    # Retry policy.
+    # Retry settings
     RetryConfig retryConfig?;
-    # Underlying HTTP client configuration.
+    # HTTP client settings, such as timeouts and proxy
     http:ClientConfiguration httpConfig?;
 |};
 
@@ -91,7 +93,7 @@ public type CohereEmbeddingConfig record {|
     // ingests documents with `batchEmbed()`, so `embed()` sends `search_query` and
     // `batchEmbed()` sends `search_document`. Set it only to override both — e.g. when
     // ingesting a corpus one document at a time through `embed()`.
-    # Overrides the input type. Unset: `embed` sends `SEARCH_QUERY`, `batchEmbed` sends `SEARCH_DOCUMENT`
+    # Input type for every call. Unset: queries for `embed`, documents for `batchEmbed`
     CohereInputType inputType?;
 
     # How over-long inputs are truncated
@@ -104,9 +106,9 @@ public type CohereEmbeddingConfig record {|
     int dimensions?;
     # Extra fields sent verbatim in the request body
     AdditionalRequestFields additionalModelRequestFields?;
-    # Retry policy.
+    # Retry settings
     RetryConfig retryConfig?;
-    # Underlying HTTP client configuration.
+    # HTTP client settings, such as timeouts and proxy
     http:ClientConfiguration httpConfig?;
 |};
 

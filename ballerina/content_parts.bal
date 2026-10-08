@@ -455,13 +455,13 @@ isolated function hasImage(ContentPart[] parts) returns boolean {
     return false;
 }
 
-# Sends images on dialects whose image support is unconfirmed by any first-party
-# source — the OpenAI-shaped Mantle/Invoke paths and Mistral's chat dialect.
-# Defaults to `false`, which refuses them at construction. Unsupported and
-# experimental: AWS may reject these requests outright. Set in `Config.toml`:
-#
-#     [ballerinax.ai.aws.bedrock]
-#     enableUnverifiedImageRoutes = true
+// Covers the OpenAI-shaped Mantle/Invoke paths and Mistral's chat dialect, where no
+// first-party source confirms image input; AWS may reject these requests outright.
+// When `false`, images on those routes are refused before sending. In Config.toml:
+//     [ballerinax.ai.aws.bedrock]
+//     enableUnverifiedImageRoutes = true
+
+# Sends images on APIs where AWS does not document image support. Experimental.
 public configurable boolean enableUnverifiedImageRoutes = false;
 
 // Refuses a request carrying an image on a dialect that cannot express one — either

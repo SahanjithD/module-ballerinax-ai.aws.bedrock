@@ -16,69 +16,65 @@
 // Public enums.
 // ============================================================================
 
-# An API family — one of the five request/response dialects Bedrock serves. Which of
-# them a given provider class offers is expressed by the union subtypes below rather
-# than by a runtime check: the endpoint is fixed by the class, so an unreachable
-# family is unrepresentable.
-#
-# `bedrock-runtime` serves all five; `bedrock-mantle` serves only the last three and
-# has no Converse and no InvokeModel at all.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
+// Which of these a provider class offers is expressed by the union subtypes below
+// rather than a runtime check: the endpoint is fixed by the class, so an unreachable
+// API is unrepresentable. `bedrock-runtime` serves all five; `bedrock-mantle` serves
+// only the last three.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
+
+# A Bedrock API a model provider can call.
 public enum ApiFamily {
-    # `POST /model/{id}/converse` — the model-agnostic Bedrock dialect, and the only
-    # one that works without per-vendor knowledge. `bedrock-runtime` only.
+    // `POST /model/{id}/converse`. `bedrock-runtime` only.
+    # Bedrock's Converse API, one request format for every model
     CONVERSE,
-    # `POST /model/{id}/invoke` — the model's own native body. Vendor-keyed.
-    # `bedrock-runtime` only.
+    // `POST /model/{id}/invoke`, vendor-keyed. `bedrock-runtime` only.
+    # InvokeModel, in the model's own request format
     INVOKE,
-    # OpenAI Chat Completions. `/openai/v1/chat/completions` on `bedrock-runtime`;
-    # `/v1/chat/completions` or `/openai/v1/chat/completions` on `bedrock-mantle`,
-    # per model.
+    // `/openai/v1/chat/completions` on `bedrock-runtime`; `/v1/chat/completions` or
+    // `/openai/v1/chat/completions` on `bedrock-mantle`, per model.
+    # OpenAI-compatible Chat Completions API
     CHAT_COMPLETIONS,
-    # OpenAI Responses. `/openai/v1/responses` on `bedrock-runtime`.
+    // `/openai/v1/responses` on `bedrock-runtime`.
+    # OpenAI-compatible Responses API
     RESPONSES,
-    # Anthropic Messages. `/anthropic/v1/messages` on both endpoints.
+    // `/anthropic/v1/messages` on both endpoints.
+    # Anthropic-compatible Messages API
     MESSAGES
 }
 
-# The API families each vendor's models are served in on `bedrock-runtime`. One
-# alias per provider class, named for the vendor rather than for the set it happens
-# to hold today: four of them are the same union right now, but they answer
-# independent questions ("what does Qwen serve?" is not "what does Gemma serve?"),
-# so when AWS adds a shape to one vendor only that alias moves.
-#
-# Union subtypes rather than per-vendor enums so the members stay a single set: the
-# same `CONVERSE` constant is valid on every class that admits it.
-#
-# `CHAT_COMPLETIONS` is deliberately NOT OpenAI-only. AWS lists DeepSeek, Gemma 3,
-# Mistral, Qwen3, MiniMax, Moonshot, NVIDIA, Writer, xAI and Z.AI as
-# Chat-Completions-capable on `bedrock-runtime`, so restricting it to the OpenAI
-# class would drop real coverage.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
+// The APIs each vendor's models are served in on `bedrock-runtime`. One alias per
+// provider class, named for the vendor rather than for the set it holds today: four
+// are the same union right now, but when AWS adds an API to one vendor only that
+// alias moves. Union subtypes rather than per-vendor enums, so the same `CONVERSE`
+// constant is valid on every class that admits it.
+//
+// `CHAT_COMPLETIONS` is deliberately NOT OpenAI-only: AWS lists DeepSeek, Gemma 3,
+// Mistral, Qwen3 and others as Chat-Completions-capable on `bedrock-runtime`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
 
-# Anthropic on `bedrock-runtime`: Converse, InvokeModel, and the native Messages API.
+# APIs available for Anthropic models on `bedrock-runtime`.
 public type AnthropicRuntimeApi CONVERSE|INVOKE|MESSAGES;
 
-# OpenAI on `bedrock-runtime`. Both OpenAI-compatible shapes, plus Converse/Invoke.
-# Per-model gaps remain and are left for AWS to reject: GPT OSS serves Chat
-# Completions, Converse and Invoke here but NOT Responses.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+// Per-model gaps are left for AWS to reject: GPT OSS serves Chat Completions,
+// Converse and Invoke here but NOT Responses.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+
+# APIs available for OpenAI models on `bedrock-runtime`.
 public type OpenAIRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS|RESPONSES;
 
-# Amazon on `bedrock-runtime`. Nova and Titan are served on the Bedrock-native
-# dialects only — no vendor-compatible path carries them.
+# APIs available for Amazon models on `bedrock-runtime`.
 public type AmazonRuntimeApi CONVERSE|INVOKE;
 
-# Mistral on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+# APIs available for Mistral models on `bedrock-runtime`.
 public type MistralRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 
-# Qwen on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+# APIs available for Qwen models on `bedrock-runtime`.
 public type QwenRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 
-# Google (Gemma) on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+# APIs available for Google Gemma models on `bedrock-runtime`.
 public type GoogleRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 
-# DeepSeek on `bedrock-runtime`: Converse, InvokeModel and Chat Completions.
+# APIs available for DeepSeek models on `bedrock-runtime`.
 public type DeepSeekRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 
 
@@ -125,52 +121,51 @@ enum ToolChoiceStyle {
     NO_TOOL_CHOICE
 }
 
-# Fields forwarded verbatim to the model — the escape hatch for anything Bedrock
-# exposes that this module does not model (`top_p`, `top_k`, Nova `reasoningConfig`,
-# `anthropic_beta`, prompt-caching `cache_control`, …). Keys must be quoted string
-# literals, e.g. `{"top_p": 0.9}`.
+// The escape hatch for anything Bedrock exposes that this module does not model:
+// `top_p`, `top_k`, Nova `reasoningConfig`, `anthropic_beta`, `cache_control`, …
+
+# Extra request-body fields sent as-is. Quote the keys, e.g. `{"top_p": 0.9}`.
 public type AdditionalRequestFields record {
 };
 
-# How an Anthropic model allocates internal reasoning before answering.
+# How an Anthropic model thinks before answering.
 public enum ThinkingMode {
-    # The model decides when and how much to think. The recommended mode, and the only
-    # one supported by Claude Fable 5 and Opus 4.7. Pair
-    # with `effort` to steer depth.
+    // The only mode Fable 5 and Opus 4.7 support.
+    # The model decides how much to think. Recommended; steer depth with `effort`
     ADAPTIVE = "adaptive",
-    # Manual budget via `budgetTokens`. Deprecated on Opus 4.6 / Sonnet 4.6 and
-    # unsupported on the adaptive-only models above.
+    // Deprecated on Opus 4.6 / Sonnet 4.6, refused on the adaptive-only models.
+    # Thinks within a fixed `budgetTokens` budget. Older models only
     ENABLED = "enabled",
-    # No extended thinking.
+    # No extended thinking
     DISABLED = "disabled"
 }
 
-# Extended/adaptive thinking configuration for Anthropic models.
+# Extended thinking settings for Anthropic models.
 public type ThinkingConfig record {|
-    # Thinking mode. Defaults to `ADAPTIVE`, which every current Anthropic model accepts.
+    # How the model thinks. Defaults to `ADAPTIVE`
     ThinkingMode mode = ADAPTIVE;
-    # Reasoning-token budget. Valid only with `ENABLED`, minimum 1024, and must be
-    # less than `maxTokens`.
+    # Token budget for `ENABLED`: at least 1024 and less than `maxTokens`
     int budgetTokens?;
 |};
 
-# How much reasoning the model should spend. Also the only depth control available
-# on the adaptive-only models (Fable 5, Opus 4.7), where
-# `budgetTokens` is rejected.
+// The only depth control on the adaptive-only models (Fable 5, Opus 4.7), where
+// `budgetTokens` is rejected.
+
+# How much effort an Anthropic model spends on reasoning.
 public enum Effort {
-    # Minimises thinking; may skip it entirely on simple tasks.
+    # Least thinking; may skip it on simple tasks
     EFFORT_LOW = "low",
-    # Moderate thinking.
+    # Moderate thinking
     EFFORT_MEDIUM = "medium",
-    # The default. The model always thinks.
+    # Always thinks. The default
     EFFORT_HIGH = "high",
-    # Extended depth. Claude Opus 5 and Opus 4.6 ONLY — Sonnet 4.6 rejects it with
-    # `output_config.effort: Input should be 'low', 'medium', 'high' or 'max'`.
+    // Sonnet 4.6 rejects it with `output_config.effort: Input should be 'low',
+    // 'medium', 'high' or 'max'`.
+    # Deeper than `high`. Opus 5 and Opus 4.6 only
     EFFORT_XHIGH = "xhigh",
-    # No constraint on depth. NOT Opus-only: accepted on Sonnet 4.6 as well
-    # (verified live), and named as valid by the very refusal that rejects `xhigh`
-    # there. Support is still per model — the endpoint enumerates the set it accepts
-    # when it refuses one, which is the authority for any model not listed here.
+    // NOT Opus-only: accepted on Sonnet 4.6 (verified live). On refusal the endpoint
+    // lists the values it accepts, which is the authority for other models.
+    # No limit on depth. Support varies by model
     EFFORT_MAX = "max"
 }
 
@@ -191,45 +186,46 @@ public enum Effort {
 // reports its own set on refusal. The members are discoverability and typo-catching,
 // NOT a promise of acceptance.
 
-# How much reasoning an OpenAI model spends before answering. Sent in the spelling
-# the resolved route uses — a top-level `reasoning_effort` on Chat Completions,
-# `reasoning: {effort: ...}` on the Responses API.
-#
-# **Which values a given model accepts is the MODEL's contract, not this module's,
-# and no member here is accepted everywhere.** An unsupported value is rejected by
-# the endpoint with a 400; measured sets are in the comment above this enum.
+// Sent as a top-level `reasoning_effort` on Chat Completions and as
+// `reasoning: {effort: ...}` on the Responses API. Which values a model accepts is
+// the model's contract; an unsupported one is a 400 (measured sets above).
+
+# How much an OpenAI model reasons before answering. Accepted values vary by model.
 public enum ReasoningEffort {
-    # No reasoning. Accepted on gpt-5.x; REFUSED by gpt-oss.
+    # No reasoning. GPT-5.x only
     REASONING_NONE = "none",
-    # Refused by both families as of 2026-09-24, despite gpt-oss listing it as valid.
-    # Kept because the model that accepts it may yet appear.
+    // Refused by both families as of 2026-09-24, despite gpt-oss listing it as valid.
+    // Kept because a model that accepts it may yet appear.
+    # Minimal reasoning. Not accepted by current models
     REASONING_MINIMAL = "minimal",
-    # Least reasoning, lowest latency. Accepted on both families.
+    # Light reasoning, lowest latency
     REASONING_LOW = "low",
-    # Moderate reasoning. Accepted on both families.
+    # Moderate reasoning
     REASONING_MEDIUM = "medium",
-    # Deep reasoning. Accepted on both families.
+    # Deep reasoning
     REASONING_HIGH = "high",
-    # Extended depth beyond `high`. Accepted on gpt-5.x; refused by gpt-oss.
+    # Deeper than `high`. GPT-5.x only
     REASONING_XHIGH = "xhigh",
-    # No constraint on depth. Refused by gpt-oss, and by gpt-5.4 as of 2026-09-24.
+    // Refused by gpt-oss, and by gpt-5.4 as of 2026-09-24.
+    # No limit on depth. Not accepted by current models
     REASONING_MAX = "max"
 }
 
-# Converse `serviceTier` passthrough. Note there is no "standard" tier — the
-# baseline is spelled `default`.
+// There is no "standard" tier; the baseline is spelled `default`.
+
+# Bedrock processing tier.
 public enum ServiceTier {
-    # Baseline pay-per-token processing.
+    # Baseline pay-per-token processing
     TIER_DEFAULT = "default",
-    # Higher throughput, time-based commitment.
+    # Higher throughput, time-based commitment
     TIER_PRIORITY = "priority",
-    # Lower cost for non-time-sensitive work.
+    # Lower cost for non-time-sensitive work
     TIER_FLEX = "flex",
-    # Dedicated throughput, term commitment.
+    # Dedicated throughput, term commitment
     TIER_RESERVED = "reserved"
 }
 
-# How `generate()` obtains a typed result on a given route. Module-private: decided
+# How `generate` obtains a typed result on a given route. Module-private: decided
 # once at construction by `structuredOutputStyleFor`.
 enum StructuredOutputStyle {
     # Converse `outputConfig.textFormat` carrying a JSON schema — AWS validates the
@@ -243,7 +239,7 @@ enum StructuredOutputStyle {
     # opus-4-7, while the same value folded into `additionalModelRequestFields` was
     # accepted (see converter_converse.bal). Two first-party sources therefore
     # disagree about whether `outputConfig` is honoured at all, and one live call
-    # settles it. Until then `generate()` keeps the path it is known to work on.
+    # settles it. Until then `generate` keeps the path it is known to work on.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
     NATIVE_OUTPUT_CONFIG,
     # Force a single tool whose input schema is the target type, then read the

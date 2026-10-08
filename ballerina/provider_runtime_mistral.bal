@@ -28,19 +28,19 @@ import ballerinax/aws;
 // AWS still documents it as live in that region.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html
 
-# Mistral model ids served on `bedrock-runtime`.
+# Mistral model IDs on `bedrock-runtime`.
 public enum MistralRuntimeModel {
-    # Mistral Large 3 — the current flagship (675B, 256K context).
+    # The current flagship: 675B, 256K context
     MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct",
-    # Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
-    # `us-west-2` ONLY — a call in any other region is refused with "The provided
-    # model identifier is invalid".
+    // Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
+    // Any other region answers "The provided model identifier is invalid".
+    # Available in us-west-2 only
     MISTRAL_LARGE_2407 = "mistral.mistral-large-2407-v1:0",
-    # Text-completion dialect on InvokeModel (`prompt`/`outputs`) — the opposite
-    # dialect to its 24.07 sibling above, despite the shared family name.
+    // Text-completion dialect on InvokeModel (`prompt`/`outputs`) — the opposite
+    // dialect to its 24.07 sibling, despite the shared family name.
     MISTRAL_LARGE_2402 = "mistral.mistral-large-2402-v1:0",
-    # Text-completion dialect on InvokeModel; no tool-calling, so `generate()` with a
-    # typed target is unavailable on the INVOKE shape for this id.
+    // Text-completion dialect on InvokeModel, which has no tool calling.
+    # No tool calling on `INVOKE`, so `generate` can only return `string` there
     MISTRAL_7B_INSTRUCT = "mistral.mistral-7b-instruct-v0:2"
 }
 
@@ -49,11 +49,11 @@ public type MistralRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
 
-# Mistral models on the AWS Bedrock `bedrock-runtime` endpoint — AWS's recommended
-# endpoint for new applications.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// AWS's recommended endpoint for new applications. Signs as `bedrock`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Mistral models on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Runtime Mistral Model Provider"}
 public isolated distinct client class RuntimeMistralModelProvider {
     *ai:ModelProvider;
@@ -107,7 +107,7 @@ public isolated distinct client class RuntimeMistralModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

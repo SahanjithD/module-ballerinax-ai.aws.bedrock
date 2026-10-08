@@ -17,8 +17,9 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Google Gemma model ids served on `bedrock-runtime`. Gemma is the open-weight
-# family; Gemini is not on Bedrock. Gemma 4 is Mantle-only — see `GoogleMantleModel`.
+// Gemma is the open-weight family; Gemini is not on Bedrock.
+
+# Google Gemma model IDs on `bedrock-runtime`. For Gemma 4, use `MantleGoogleModelProvider`.
 public enum GoogleRuntimeModel {
     GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     GEMMA_3_12B_IT = "google.gemma-3-12b-it",
@@ -31,11 +32,11 @@ public type GoogleRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
 
-# Google models on the AWS Bedrock `bedrock-runtime` endpoint — AWS's recommended
-# endpoint for new applications.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// AWS's recommended endpoint for new applications. Signs as `bedrock`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Google models on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Runtime Google Model Provider"}
 public isolated distinct client class RuntimeGoogleModelProvider {
     *ai:ModelProvider;
@@ -89,7 +90,7 @@ public isolated distinct client class RuntimeGoogleModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

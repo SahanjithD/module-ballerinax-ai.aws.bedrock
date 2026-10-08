@@ -17,9 +17,9 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# DeepSeek model ids served on `bedrock-mantle`, on the Chat Completions path.
+# DeepSeek model IDs on `bedrock-mantle`.
 public enum DeepSeekMantleModel {
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
     MANTLE_DEEPSEEK_V3_2 = "deepseek.v3.2"
 }
 
@@ -28,12 +28,12 @@ public type DeepSeekMantleConfig record {|
     *CommonMantleConfig;
 |};
 
-# DeepSeek models on the AWS Bedrock `bedrock-mantle` endpoint.
-#
-# Signs as `bedrock-mantle` and authorizes with `bedrock-mantle:CreateInference` — a
-# SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
-# No guardrails, cross-region inference or native structured output.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
+// `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# DeepSeek models on the Bedrock Mantle endpoint.
+# Needs the `bedrock-mantle:CreateInference` IAM permission.
 @display {label: "Bedrock Mantle DeepSeek Model Provider"}
 public isolated distinct client class MantleDeepSeekModelProvider {
     *ai:ModelProvider;
@@ -85,7 +85,7 @@ public isolated distinct client class MantleDeepSeekModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

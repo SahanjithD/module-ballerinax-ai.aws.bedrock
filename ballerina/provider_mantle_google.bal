@@ -17,12 +17,12 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Google Gemma model ids served on `bedrock-mantle`.
-#
-# The two generations sit on DIFFERENT paths: Gemma 3 speaks Chat Completions on
-# `/v1/chat/completions`, Gemma 4 speaks Responses on `/openai/v1/responses`. The
-# module resolves the path per model.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
+// The two generations sit on DIFFERENT paths: Gemma 3 speaks Chat Completions on
+// `/v1/chat/completions`, Gemma 4 speaks Responses on `/openai/v1/responses`. The
+// module resolves the path per model.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
+
+# Google Gemma model IDs on `bedrock-mantle`.
 public enum GoogleMantleModel {
     // Gemma 3 sits on `/v1/chat/completions` …
     MANTLE_GEMMA_3_4B_IT = "google.gemma-3-4b-it",
@@ -31,11 +31,11 @@ public enum GoogleMantleModel {
     // … while Gemma 4 sits on `/openai/v1/responses`. One vendor prefix, two Mantle
     // path families — which is exactly why the path is per-model table data and never
     // derived from the prefix.
-    # Mantle-only.
+    # Not available on `bedrock-runtime`
     MANTLE_GEMMA_4_E2B = "google.gemma-4-e2b",
-    # Mantle-only.
+    # Not available on `bedrock-runtime`
     MANTLE_GEMMA_4_26B_A4B = "google.gemma-4-26b-a4b",
-    # Mantle-only.
+    # Not available on `bedrock-runtime`
     MANTLE_GEMMA_4_31B = "google.gemma-4-31b"
 }
 
@@ -44,12 +44,12 @@ public type GoogleMantleConfig record {|
     *CommonMantleConfig;
 |};
 
-# Google models on the AWS Bedrock `bedrock-mantle` endpoint.
-#
-# Signs as `bedrock-mantle` and authorizes with `bedrock-mantle:CreateInference` — a
-# SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
-# No guardrails, cross-region inference or native structured output.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
+// `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Google models on the Bedrock Mantle endpoint.
+# Needs the `bedrock-mantle:CreateInference` IAM permission.
 @display {label: "Bedrock Mantle Google Model Provider"}
 public isolated distinct client class MantleGoogleModelProvider {
     *ai:ModelProvider;
@@ -101,7 +101,7 @@ public isolated distinct client class MantleGoogleModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

@@ -17,13 +17,13 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# DeepSeek model ids served on `bedrock-runtime`.
+# DeepSeek model IDs on `bedrock-runtime`.
 public enum DeepSeekRuntimeModel {
-    # The CRIS (cross-region) profile id — the bare `deepseek.r1-v1:0` is not
-    # callable in any region. Pass a raw string for a different geo profile.
+    // The bare `deepseek.r1-v1:0` is not callable in any region.
+    # Cross-region ID. For another geography, pass the ID as a string
     DEEPSEEK_R1 = "us.deepseek.r1-v1:0",
-    # DeepSeek V3.2 — the current flagship. Unlike R1, the bare id is callable
-    # directly, no CRIS prefix needed.
+    // Unlike R1, the bare id is callable directly.
+    # The current flagship
     DEEPSEEK_V3_2 = "deepseek.v3.2"
 }
 
@@ -32,11 +32,11 @@ public type DeepSeekRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
 
-# DeepSeek models on the AWS Bedrock `bedrock-runtime` endpoint — AWS's recommended
-# endpoint for new applications.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// AWS's recommended endpoint for new applications. Signs as `bedrock`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# DeepSeek models on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Runtime DeepSeek Model Provider"}
 public isolated distinct client class RuntimeDeepSeekModelProvider {
     *ai:ModelProvider;
@@ -90,7 +90,7 @@ public isolated distinct client class RuntimeDeepSeekModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

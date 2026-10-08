@@ -32,15 +32,13 @@ public type BedrockCommonConfig record {|
 //
 // An unknown id is NOT an error: it goes on the wire as-is and AWS answers for it,
 // which is what keeps a model AWS ships tomorrow usable without a module release.
+//
+// Reaches every model Bedrock serves on Converse, including vendors with no dedicated
+// class here. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
 
-# Any Bedrock model, on the `bedrock-runtime` Converse API.
-#
-# Vendor-agnostic: takes a model id as a plain `string` and reaches every model
-# Bedrock serves on Converse, including vendors with no dedicated class here. Use a
-# `Runtime<Vendor>ModelProvider` for the other API families.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
+# Any Bedrock model, through the Converse API on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Common Model Provider"}
 public isolated distinct client class CommonModelProvider {
     *ai:ModelProvider;
@@ -53,7 +51,7 @@ public isolated distinct client class CommonModelProvider {
     private final map<string> & readonly extraHeaders;
     private final StructuredOutputStyle structuredOutput;
 
-    # + model - A model model id, or any id string the endpoint serves
+    # + model - Any Bedrock model ID, inference profile ID or ARN
     # + auth - AWS credentials or a Bedrock API key; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
@@ -90,7 +88,7 @@ public isolated distinct client class CommonModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

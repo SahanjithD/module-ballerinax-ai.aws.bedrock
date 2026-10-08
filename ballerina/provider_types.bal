@@ -22,10 +22,11 @@ import ballerinax/aws.auth;
 // (https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html)
 // ============================================================================
 
-# A Bedrock API key (bearer token) — first-class on both endpoints.
+# A Bedrock API key.
 public type BearerToken record {|
-    # The Bedrock API key, sent as `Authorization: Bearer` — or as `x-api-key` on a
-    # Mantle Messages path, where the two headers are mutually exclusive.
+    // Sent as `Authorization: Bearer`, or as `x-api-key` on a Mantle Messages path,
+    // where the two headers are mutually exclusive.
+    # The Bedrock API key
     string apiKey;
 |};
 
@@ -41,24 +42,29 @@ public type BedrockAuthConfig auth:AuthConfig|BearerToken;
 // Guardrails / retry.
 // ============================================================================
 
-# Guardrail configuration. Placement is route-specific: Converse body field,
-# Invoke headers, and a construction error on Mantle.
+// Sent as the Converse `guardrailConfig` body field, or as the
+// `X-Amzn-Bedrock-GuardrailIdentifier`/`-GuardrailVersion` headers on InvokeModel.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GuardrailConfiguration.html
+
+# A Bedrock guardrail applied to every request.
 public type GuardrailConfig record {|
-    # `guardrailIdentifier` (Converse body / `X-Amzn-Bedrock-GuardrailIdentifier`).
+    # Guardrail ID or ARN
     string guardrailIdentifier;
-    # `guardrailVersion`.
+    # Guardrail version, e.g. `1` or `DRAFT`
     string guardrailVersion;
 |};
 
-# Retry policy for the transport's throttling/warm-up backoff.
+// Retried statuses: 408, 429, 500, 502, 503 and 504.
+
+# Retry settings for throttled and transient failures.
 public type RetryConfig record {|
-    # Max retry attempts for retryable errors (408/429/500/502/503/504).
+    # Maximum number of retries
     int maxRetries = 3;
-    # Initial backoff delay, seconds.
+    # Delay before the first retry, in seconds
     decimal initialDelay = 1.0;
-    # Backoff ceiling, seconds.
+    # Longest delay between retries, in seconds
     decimal maxDelay = 20.0;
-    # Exponential backoff multiplier.
+    # Factor the delay grows by after each retry
     decimal backoffFactor = 2.0;
 |};
 
@@ -67,8 +73,7 @@ public type RetryConfig record {|
 // only its vendor-specific fields.
 // ============================================================================
 
-# Everything that is not the model's identity, shared by every
-# `Runtime*ModelProvider` and by `CommonModelProvider`.
+# Options shared by the `bedrock-runtime` model providers.
 // NOTE `api` and `endpoint` are NOT here. Both are routing/transport decisions
 // a caller makes at the same moment they choose the model and the region, so they sit
 // directly on `init` alongside those rather than one level down in this record —
@@ -76,64 +81,54 @@ public type RetryConfig record {|
 // when reading a call site.
 public type CommonRuntimeConfig record {|
     // --- Inference ---
-    # Provider-level stop sequences; a per-call `stop` overrides these.
+    # Sequences that stop generation. A `stop` passed to `chat` overrides them
     string[] stopSequences?;
 
     // --- Passthrough ---
-    # Forwarded VERBATIM into the request body on every route: Converse's
-    # `additionalModelRequestFields`, and the top level of each Invoke/Mantle vendor
-    # dialect. The escape hatch for anything Bedrock exposes that this module does not
-    # model, and the reason it is spliced untouched — the module never rewrites,
-    # renames or reshapes what you put here.
-    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    // Spliced verbatim: Converse's `additionalModelRequestFields`, and the top level
+    // of each Invoke dialect. The module never rewrites, renames or reshapes it.
+    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    # Extra fields sent as-is in the request body, for options this module does not cover
     AdditionalRequestFields additionalModelRequestFields?;
 
-    # Processing tier for the request. Carried as the `serviceTier` body field on
-    # Converse and the `X-Amzn-Bedrock-Service-Tier` request header on Invoke.
-    # NOT available on `bedrock-mantle` — setting it on a Mantle-resolved model is a
-    # construction error rather than a silent drop.
+    // Converse `serviceTier` body field; `X-Amzn-Bedrock-Service-Tier` header on Invoke.
+    # Processing tier for each request
     ServiceTier serviceTier?;
 
-    # Request latency-optimized inference — a speed/cost dial only, same output.
-    # Carried as the `performanceConfig` body field on Converse and the
-    # `X-Amzn-Bedrock-PerformanceConfig-Latency` request header on Invoke. NOT
-    # available on `bedrock-mantle`, where setting it is a construction error rather
-    # than a silent drop. Support is per model and region; unsupported combinations
-    # are rejected by AWS.
-    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+    // Converse `performanceConfig` body field; `X-Amzn-Bedrock-PerformanceConfig-Latency`
+    // header on Invoke. Same output, only speed and cost change. Support is per model
+    // and region, and AWS rejects unsupported combinations.
+    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+    # Use latency-optimized inference, where the model and region support it
     boolean latencyOptimized?;
 
     // --- Cross-cutting ---
-    # Guardrail; construction error on a MANTLE route.
+    # Guardrail applied to every request
     GuardrailConfig guardrail?;
-    # Retry policy.
+    # Retry settings
     RetryConfig retryConfig?;
-    # Underlying HTTP client configuration.
+    # HTTP client settings, such as timeouts and proxy
     http:ClientConfiguration httpConfig?;
 |};
 
-# The `bedrock-mantle` counterpart of `CommonRuntimeConfig`.
-#
-# Three fields are absent rather than refused: `guardrail`, `serviceTier` and
-# `latencyOptimized`. Guardrails are a bedrock-runtime feature and Mantle carries no
-# Bedrock request-option headers at all, so on the Mantle classes these are a COMPILE
-# error instead of the construction-time refusal they used to be — the payoff of
-# splitting the surface by endpoint.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// No `guardrail`, `serviceTier` or `latencyOptimized`: guardrails are a
+// bedrock-runtime feature and Mantle carries no Bedrock request-option headers, so
+// leaving the fields out makes them a compile error rather than a runtime refusal.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Options shared by the `bedrock-mantle` model providers.
 public type CommonMantleConfig record {|
-    # Provider-level stop sequences; a per-call `stop` overrides these.
+    # Sequences that stop generation. A `stop` passed to `chat` overrides them
     string[] stopSequences?;
 
-    # Forwarded VERBATIM into the top level of the vendor dialect's request body. The
-    # escape hatch for anything the endpoint exposes that this module does not model,
-    # and the reason it is spliced untouched — the module never rewrites, renames or
-    # reshapes what you put here.
+    // Spliced verbatim into the top level of the request body, never rewritten.
+    # Extra fields sent as-is in the request body, for options this module does not cover
     AdditionalRequestFields additionalModelRequestFields?;
 
-    # Retry behaviour for throttled and transient responses.
+    # Retry settings
     RetryConfig retryConfig?;
 
-    # Underlying HTTP client configuration (timeouts, proxy, connection pooling).
+    # HTTP client settings, such as timeouts and proxy
     http:ClientConfiguration httpConfig?;
 |};
 

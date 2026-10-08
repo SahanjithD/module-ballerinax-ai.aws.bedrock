@@ -17,28 +17,26 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Anthropic model ids for `bedrock-mantle`, in their BARE form — Mantle takes no
-# cross-region prefix, because it has no cross-region inference.
-#
-# All of them are dual-homed (also on `bedrock-runtime`). Prefer the runtime class
-# unless you need something only Mantle has: guardrails, cross-region inference and
-# structured output are all runtime-only, and `generate()` with a typed target
-# returns an error here.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+// BARE ids: Mantle has no cross-region inference, so takes no geo prefix. Every one
+// is also on `bedrock-runtime`, which adds guardrails, cross-region inference and
+// typed `generate()`, so the runtime class is the better default.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+
+# Anthropic model IDs on `bedrock-mantle`.
 public enum AnthropicMantleModel {
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
     MANTLE_CLAUDE_OPUS_5_5 = "anthropic.claude-opus-5-5",
     MANTLE_CLAUDE_OPUS_5 = "anthropic.claude-opus-5",
     MANTLE_CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
     MANTLE_CLAUDE_OPUS_4_7 = "anthropic.claude-opus-4-7",
     MANTLE_CLAUDE_SONNET_5 = "anthropic.claude-sonnet-5",
     MANTLE_CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
-    # Both Fable ids need an account-level data-retention opt-in (`aws_review`) before
-    # any call succeeds — see the model cards.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    # Needs an account opt-in: set the data retention mode to `aws_review` first
     MANTLE_CLAUDE_FABLE_5 = "anthropic.claude-fable-5",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    # Needs the Fable 5 opt-in
     MANTLE_CLAUDE_FABLE_5_1 = "anthropic.claude-fable-5-1"
 }
 
@@ -46,21 +44,22 @@ public enum AnthropicMantleModel {
 public type AnthropicMantleConfig record {|
     *CommonMantleConfig;
 
-    # Extended/adaptive thinking. A typed record rather than raw `json`: the wire
-    # spelling and the mode/budget pairing rules are enforced at construction.
+    // A typed record rather than raw `json`, so the mode/budget pairing rules are
+    // checked at construction.
+    # Extended thinking settings
     ThinkingConfig thinking?;
 
-    # Reasoning depth, emitted as `output_config.effort`. The ONLY depth control on
-    # the adaptive-only models (Fable 5, Opus 4.7).
+    // Sent as `output_config.effort`.
+    # Reasoning effort. The only depth control on Fable 5 and Opus 4.7
     Effort effort?;
 |};
 
-# Anthropic models on the AWS Bedrock `bedrock-mantle` endpoint.
-#
-# Signs as `bedrock-mantle` and authorizes with `bedrock-mantle:CreateInference` — a
-# SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
-# No guardrails, cross-region inference or native structured output.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
+// `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Anthropic models on the Bedrock Mantle endpoint. `generate` can only return `string` here.
+# Needs the `bedrock-mantle:CreateInference` IAM permission.
 @display {label: "Bedrock Mantle Anthropic Model Provider"}
 public isolated distinct client class MantleAnthropicModelProvider {
     *ai:ModelProvider;
@@ -117,7 +116,7 @@ public isolated distinct client class MantleAnthropicModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

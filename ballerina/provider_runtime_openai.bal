@@ -17,35 +17,34 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# OpenAI model ids served on `bedrock-runtime`.
-#
-# Only the open-weight GPT OSS models are listed. The GPT-5.x ids are on
-# `bedrock-mantle` in this module's verified per-card data — see
-# `OpenAIMantleModel`. NOTE: AWS's endpoint-availability page has since listed some
-# GPT-5.6 ids on both endpoints, which contradicts those model cards; rather than
-# pick a side silently, this enum keeps the per-card reading and any id can still be
-# passed as a raw string.
-#
-# GPT OSS serves Chat Completions, Converse and Invoke here but NOT Responses.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+// The GPT-5.x ids are on `bedrock-mantle` in this module's verified per-card data —
+// see `OpenAIMantleModel`. AWS's endpoint-availability page has since listed some
+// GPT-5.6 ids on both endpoints, which contradicts those cards; rather than pick a
+// side silently, this enum keeps the per-card reading, and any id can still be passed
+// as a string. GPT OSS serves Chat Completions, Converse and Invoke here but NOT
+// Responses.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+
+# OpenAI model IDs on `bedrock-runtime`.
 public enum OpenAIRuntimeModel {
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    # Not available on the `RESPONSES` API
     GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html
+    # Not available on the `RESPONSES` API
     GPT_OSS_20B = "openai.gpt-oss-20b-1:0",
-    # The GPT-6 family. CRIS-PREFIXED, unlike the GPT OSS ids above: each card's
-    # Programmatic Access table gives "Not supported" for the In-Region endpoint URL
-    # and says in as many words "You cannot use the base model ID for in-Region calls
-    # on this endpoint", listing `us.`/`global.` as the way in. These serve Responses,
-    # Chat Completions and Converse here — but NOT Invoke.
-    #
-    # They also refuse the Chat Completions `max_tokens` parameter, which this module
-    # emits by default: pass `maxTokens = ()` to omit it.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    // The GPT-6 family. CRIS-PREFIXED, unlike GPT OSS: each card says "You cannot use
+    // the base model ID for in-Region calls on this endpoint". They serve Responses,
+    // Chat Completions and Converse here, but NOT Invoke, and refuse the Chat
+    // Completions `max_tokens` parameter, which this module sends by default.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    # No `INVOKE`. On `CHAT_COMPLETIONS`, set `maxTokens = ()`
     GPT_6_ASTRA = "us.openai.gpt-6-astra",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    # No `INVOKE`. On `CHAT_COMPLETIONS`, set `maxTokens = ()`
     GPT_6_SOL = "us.openai.gpt-6-sol",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+    # No `INVOKE`. On `CHAT_COMPLETIONS`, set `maxTokens = ()`
     GPT_6_LUNA = "us.openai.gpt-6-luna"
 }
 
@@ -53,17 +52,17 @@ public enum OpenAIRuntimeModel {
 public type OpenAIRuntimeConfig record {|
     *CommonRuntimeConfig;
 
-    # How much reasoning the model spends. Emitted in the spelling the resolved
-    # shape uses — top-level `reasoning_effort` on Chat Completions, nested
-    # `reasoning.effort` on Responses.
+    // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
+    // Responses.
+    # How much the model reasons before answering
     ReasoningEffort reasoningEffort?;
 |};
 
-# OpenAI models on the AWS Bedrock `bedrock-runtime` endpoint — AWS's recommended
-# endpoint for new applications.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// AWS's recommended endpoint for new applications. Signs as `bedrock`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# OpenAI models on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Runtime OpenAI Model Provider"}
 public isolated distinct client class RuntimeOpenAIModelProvider {
     *ai:ModelProvider;
@@ -118,7 +117,7 @@ public isolated distinct client class RuntimeOpenAIModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

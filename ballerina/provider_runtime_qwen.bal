@@ -17,7 +17,7 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Qwen model ids served on `bedrock-runtime`.
+# Qwen model IDs on `bedrock-runtime`.
 public enum QwenRuntimeModel {
     QWEN3_32B = "qwen.qwen3-32b-v1:0",
     // The card lists this exact id, In-Region, in us-east-1 among nine other regions,
@@ -27,7 +27,7 @@ public enum QwenRuntimeModel {
     // which is why one can succeed while the other does not.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
 
-    # Qwen3 Coder 480B A35B — the flagship coding model (MoE, 480B/35B active).
+    # Coding model: 480B mixture of experts, 35B active
     QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
 
@@ -35,15 +35,16 @@ public enum QwenRuntimeModel {
 public type QwenRuntimeConfig record {|
     *CommonRuntimeConfig;
 
-    # Qwen3 hybrid thinking. Forwarded as `enable_thinking` in the request body.
+    // Sent as `enable_thinking` in the request body.
+    # Turns Qwen3 thinking on or off. Unset uses the model's default
     boolean enableThinking?;
 |};
 
-# Qwen models on the AWS Bedrock `bedrock-runtime` endpoint — AWS's recommended
-# endpoint for new applications.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// AWS's recommended endpoint for new applications. Signs as `bedrock`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Qwen models on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Runtime Qwen Model Provider"}
 public isolated distinct client class RuntimeQwenModelProvider {
     *ai:ModelProvider;
@@ -105,7 +106,7 @@ public isolated distinct client class RuntimeQwenModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

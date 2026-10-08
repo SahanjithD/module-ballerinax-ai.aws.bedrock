@@ -17,16 +17,16 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Qwen model ids served on `bedrock-mantle`, on the Chat Completions path. Both are
-# published under a different id on each endpoint; pass the runtime-shaped id here
-# and the module substitutes the Mantle one.
+// Both are published under a different id on each endpoint. These constants carry
+// the runtime-shaped id and the module puts the Mantle one on the wire.
+
+# Qwen model IDs on `bedrock-mantle`.
 public enum QwenMantleModel {
-    # Published under a DIFFERENT id per endpoint (`qwen.qwen3-32b` on Mantle); the
-    # module puts the Mantle id on the wire for you.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
+    // `qwen.qwen3-32b` on Mantle.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
     MANTLE_QWEN3_32B = "qwen.qwen3-32b-v1:0",
-    # Likewise published as `qwen.qwen3-coder-480b-a35b-instruct` on Mantle.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+    // `qwen.qwen3-coder-480b-a35b-instruct` on Mantle.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
     MANTLE_QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
 
@@ -34,16 +34,17 @@ public enum QwenMantleModel {
 public type QwenMantleConfig record {|
     *CommonMantleConfig;
 
-    # Qwen3 hybrid thinking. Forwarded as `enable_thinking` in the request body.
+    // Sent as `enable_thinking` in the request body.
+    # Turns Qwen3 thinking on or off. Unset uses the model's default
     boolean enableThinking?;
 |};
 
-# Qwen models on the AWS Bedrock `bedrock-mantle` endpoint.
-#
-# Signs as `bedrock-mantle` and authorizes with `bedrock-mantle:CreateInference` — a
-# SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
-# No guardrails, cross-region inference or native structured output.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
+// `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Qwen models on the Bedrock Mantle endpoint.
+# Needs the `bedrock-mantle:CreateInference` IAM permission.
 @display {label: "Bedrock Mantle Qwen Model Provider"}
 public isolated distinct client class MantleQwenModelProvider {
     *ai:ModelProvider;
@@ -103,7 +104,7 @@ public isolated distinct client class MantleQwenModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

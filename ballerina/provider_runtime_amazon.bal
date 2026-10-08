@@ -17,10 +17,12 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Amazon Nova model ids. Nova and Titan are served on the Bedrock-native dialects
-# only — there is no vendor-compatible path for them and no Amazon model on
-# `bedrock-mantle`, which is why this vendor has no Mantle class.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+// Nova and Titan are served on the Bedrock-native APIs only — there is no
+// vendor-compatible path for them and no Amazon model on `bedrock-mantle`, which is
+// why this vendor has no Mantle class.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+
+# Amazon Nova model IDs.
 public enum AmazonRuntimeModel {
     NOVA_PRO = "amazon.nova-pro-v1:0",
     NOVA_LITE = "amazon.nova-lite-v1:0",
@@ -32,11 +34,11 @@ public type AmazonRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
 
-# Amazon models on the AWS Bedrock `bedrock-runtime` endpoint — AWS's recommended
-# endpoint for new applications.
-#
-# Signs as `bedrock` and authorizes with `bedrock:InvokeModel`.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// AWS's recommended endpoint for new applications. Signs as `bedrock`.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# Amazon models on the Bedrock Runtime endpoint.
+# Needs the `bedrock:InvokeModel` IAM permission.
 @display {label: "Bedrock Runtime Amazon Model Provider"}
 public isolated distinct client class RuntimeAmazonModelProvider {
     *ai:ModelProvider;
@@ -90,7 +92,7 @@ public isolated distinct client class RuntimeAmazonModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling

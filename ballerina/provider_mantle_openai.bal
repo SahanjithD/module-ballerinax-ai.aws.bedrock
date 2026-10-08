@@ -17,29 +17,30 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# OpenAI model ids served on `bedrock-mantle`. The GPT-5.x models are reachable
-# ONLY here; `generate()` with a typed target therefore returns an error for them.
+// The GPT-5.x models are reachable only here.
+
+# OpenAI model IDs on `bedrock-mantle`.
 public enum OpenAIMantleModel {
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
     MANTLE_GPT_5_5 = "openai.gpt-5.5",
     MANTLE_GPT_5_4 = "openai.gpt-5.4",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
     MANTLE_GPT_5_6_SOL = "openai.gpt-5.6-sol",
     MANTLE_GPT_5_6_TERRA = "openai.gpt-5.6-terra",
     MANTLE_GPT_5_6_LUNA = "openai.gpt-5.6-luna",
-    # Published under a DIFFERENT id per endpoint — `-1:0` on bedrock-runtime, bare
-    # here. The module puts the Mantle id on the wire for you.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    // Published under a DIFFERENT id per endpoint — `-1:0` on bedrock-runtime, bare
+    // here. The module puts the Mantle id on the wire.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     MANTLE_GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
-    # The GPT-6 family. Bare here, and on `/openai/v1` — each card states it
-    # explicitly ("On `bedrock-mantle`, both APIs use the `/openai/v1` base path. Do
-    # not use `/v1`."). Regions differ per model on this endpoint: Astra is us-west-2
-    # only, Sol and Luna are us-east-1.
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    // The GPT-6 family. Bare here, and on `/openai/v1` — each card states it
+    // explicitly ("On `bedrock-mantle`, both APIs use the `/openai/v1` base path. Do
+    // not use `/v1`."). Sol and Luna are in us-east-1.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    # Available in us-west-2 only
     MANTLE_GPT_6_ASTRA = "openai.gpt-6-astra",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
     MANTLE_GPT_6_SOL = "openai.gpt-6-sol",
-    # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
     MANTLE_GPT_6_LUNA = "openai.gpt-6-luna"
 }
 
@@ -47,18 +48,18 @@ public enum OpenAIMantleModel {
 public type OpenAIMantleConfig record {|
     *CommonMantleConfig;
 
-    # How much reasoning the model spends. Emitted in the spelling the resolved
-    # shape uses — top-level `reasoning_effort` on Chat Completions, nested
-    # `reasoning.effort` on Responses.
+    // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
+    // Responses.
+    # How much the model reasons before answering
     ReasoningEffort reasoningEffort?;
 |};
 
-# OpenAI models on the AWS Bedrock `bedrock-mantle` endpoint.
-#
-# Signs as `bedrock-mantle` and authorizes with `bedrock-mantle:CreateInference` — a
-# SEPARATE IAM namespace, so `bedrock-runtime` credentials can still be denied here.
-# No guardrails, cross-region inference or native structured output.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+// Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
+// `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+
+# OpenAI models on the Bedrock Mantle endpoint.
+# Needs the `bedrock-mantle:CreateInference` IAM permission.
 @display {label: "Bedrock Mantle OpenAI Model Provider"}
 public isolated distinct client class MantleOpenAIModelProvider {
     *ai:ModelProvider;
@@ -111,7 +112,7 @@ public isolated distinct client class MantleOpenAIModelProvider {
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }
 
-    # Sends a chat request. Opens an observe span and closes it on every path.
+    # Sends a chat request to the model.
     #
     # + messages - Chat messages or a single user message
     # + tools - Tool definitions for function calling
