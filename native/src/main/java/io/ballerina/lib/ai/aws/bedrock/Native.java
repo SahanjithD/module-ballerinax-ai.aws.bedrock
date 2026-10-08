@@ -23,6 +23,7 @@ import io.ballerina.runtime.api.creators.TypeCreator;
 import io.ballerina.runtime.api.creators.ValueCreator;
 import io.ballerina.runtime.api.types.AnnotatableType;
 import io.ballerina.runtime.api.types.ArrayType;
+import io.ballerina.runtime.api.types.FiniteType;
 import io.ballerina.runtime.api.types.JsonType;
 import io.ballerina.runtime.api.types.PredefinedTypes;
 import io.ballerina.runtime.api.types.ReferenceType;
@@ -37,6 +38,7 @@ import io.ballerina.runtime.api.values.BMap;
 import io.ballerina.runtime.api.values.BString;
 import io.ballerina.runtime.api.values.BTypedesc;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static io.ballerina.runtime.api.creators.ValueCreator.createMapValue;
@@ -74,6 +76,19 @@ public final class Native {
     private Native() {
     }
 
+    /**
+     * Whether the expected type is exactly {@code string} (aliases and {@code readonly}
+     * included). An enum, a string-literal union or {@code string:Char} is also a
+     * {@code typedesc<string>} in Ballerina, but free model text is not a member of
+     * those types, so they must take the schema path instead of the plain-text one.
+     *
+     * @param td the expected type
+     * @return true only for plain {@code string}
+     */
+    public static boolean isPlainString(BTypedesc td) {
+        return TypeUtils.getImpliedType(td.getDescribingType()).getTag() == TypeTags.STRING_TAG;
+    }
+
     public static Object generateJsonSchemaForTypedescNative(BTypedesc td) {
         try {
             return generateJsonSchemaForType(td.getDescribingType());
@@ -84,6 +99,14 @@ public final class Native {
 
     private static Object generateJsonSchemaForType(Type t) throws BError {
         Type impliedType = TypeUtils.getImpliedType(t);
+        // Before the simple-type check: an enum is a union of string singletons, so its
+        // basic type is plain `string` and it would otherwise lose its value set.
+        if (impliedType instanceof UnionType unionType) {
+            List<FiniteType> finiteMembers = finiteMembersOf(unionType);
+            if (finiteMembers != null) {
+                return createFiniteUnionSchema(finiteMembers);
+            }
+        }
         if (isSimpleType(impliedType)) {
             return createSimpleTypeSchema(impliedType);
         }
@@ -106,6 +129,58 @@ public final class Native {
     private static BMap<BString, Object> createSimpleTypeSchema(Type type) {
         BMap<BString, Object> schemaMap = createMapValue(TypeCreator.createMapType(PredefinedTypes.TYPE_JSON));
         schemaMap.put(StringUtils.fromString("type"), StringUtils.fromString(getStringRepresentation(type)));
+        // A singleton or finite type (one enum member, a literal) keeps its allowed
+        // values. Without them the model sees a bare `{"type": "string"}`, answers off
+        // the value set, and the result fails to bind.
+        if (type instanceof FiniteType finiteType) {
+            schemaMap.put(StringUtils.fromString("enum"), enumValues(List.of(finiteType)));
+        }
+        return schemaMap;
+    }
+
+    // The members of a union that consists ONLY of finite types, or null otherwise.
+    private static List<FiniteType> finiteMembersOf(UnionType unionType) {
+        List<FiniteType> finiteMembers = new ArrayList<>();
+        for (Type memberType : unionType.getMemberTypes()) {
+            if (!(TypeUtils.getImpliedType(memberType) instanceof FiniteType finiteType)) {
+                return null;
+            }
+            finiteMembers.add(finiteType);
+        }
+        return finiteMembers.isEmpty() ? null : finiteMembers;
+    }
+
+    private static BArray enumValues(List<FiniteType> finiteTypes) {
+        List<Object> values = new ArrayList<>();
+        for (FiniteType finiteType : finiteTypes) {
+            values.addAll(finiteType.getValueSpace());
+        }
+        BArray array = ValueCreator.createArrayValue(TypeCreator.createArrayType(PredefinedTypes.TYPE_JSON));
+        for (Object value : values) {
+            array.append(value);
+        }
+        return array;
+    }
+
+    // An enum or a literal union (`"a"|"b"`) arrives as a union of finite types. It is
+    // emitted as ONE `enum` schema rather than an `anyOf` of single-value schemas,
+    // which is the form JSON-schema consumers (and the models) handle best. The `type`
+    // is kept only when every value shares one JSON type.
+    private static BMap<BString, Object> createFiniteUnionSchema(List<FiniteType> finiteTypes) {
+        BMap<BString, Object> schemaMap = createMapValue(TypeCreator.createMapType(PredefinedTypes.TYPE_JSON));
+        String sharedType = null;
+        boolean mixed = false;
+        for (FiniteType finiteType : finiteTypes) {
+            String memberType = isSimpleType(finiteType) ? getStringRepresentation(finiteType) : null;
+            if (memberType == null || (sharedType != null && !sharedType.equals(memberType))) {
+                mixed = true;
+            }
+            sharedType = memberType;
+        }
+        if (!mixed && sharedType != null) {
+            schemaMap.put(StringUtils.fromString("type"), StringUtils.fromString(sharedType));
+        }
+        schemaMap.put(StringUtils.fromString("enum"), enumValues(finiteTypes));
         return schemaMap;
     }
 

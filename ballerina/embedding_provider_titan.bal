@@ -92,12 +92,12 @@ public distinct isolated client class TitanEmbeddingProvider {
     # + chunk - The chunk to convert; must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embedding vector, or an `ai:Error`
     isolated remote function embed(ai:Chunk chunk) returns ai:Embedding|ai:Error
-        => runEmbed("Amazon", self.wireModelId, self.converter, self.transport, self.params, chunk);
+        => runEmbed(self.wireModelId, self.converter, self.transport, self.params, chunk);
 
     # Converts a batch of chunks into vector embeddings, preserving input order.
     #
     # + chunks - The chunks to convert; each must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embeddings in input order, or an `ai:Error`
     isolated remote function batchEmbed(ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error
-        => runBatchEmbed("Amazon", self.wireModelId, self.converter, self.transport, self.params, chunks);
+        => runBatchEmbed(self.wireModelId, self.converter, self.transport, self.params, chunks);
 }

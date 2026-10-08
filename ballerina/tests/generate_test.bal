@@ -368,7 +368,9 @@ function testABindFailureCarriesTheOffendingJsonAndItsOrigin() {
             string `the arguments of the '${RESULT_TOOL}' tool call`);
     test:assertTrue(bound is ai:Error);
     if bound is ai:Error {
-        string message = bound.message();
+        // Item 3: the short message names the type; the detail lives in the cause.
+        test:assertTrue(bound.message().includes("Review"), bound.message());
+        string message = errorText(bound);
         test:assertTrue(message.includes(RESULT_TOOL),
                 "the message must say which path produced the JSON; got: " + message);
         test:assertTrue(message.includes("\"sentiment\":\"positive\""),
@@ -389,7 +391,7 @@ function testALongBindFailureTruncatesTheJson() {
     anydata|ai:Error bound = bindJson({"sentiment": filler}, Review, "the model response");
     test:assertTrue(bound is ai:Error);
     if bound is ai:Error {
-        string message = bound.message();
+        string message = errorText(bound);
         test:assertTrue(message.includes("(truncated)"),
                 "an oversized payload must be cut, not pasted whole; got length " +
                 message.length().toString());

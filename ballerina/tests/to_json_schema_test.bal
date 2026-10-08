@@ -148,3 +148,38 @@ function testNilableArrayDoesNotMakeItsMembersNilable() returns error? {
             },
             "int[]? must not push 'null' down into its items schema");
 }
+
+enum SchemaProbeColour {
+    RED,
+    GREEN
+}
+
+type SchemaProbeSize "small"|"large";
+
+@test:Config {}
+function testAnEnumTargetKeepsItsAllowedValues() returns error? {
+    // Without `enum` the model sees a bare string, answers off the value set, and
+    // the result cannot bind.
+    map<json> schema = check generateJsonSchemaForTypedescAsJson(SchemaProbeColour);
+    test:assertEquals(schema["type"], "string");
+    string[] values = check schema["enum"].cloneWithType();
+    test:assertEquals(values.sort(), ["GREEN", "RED"]);
+}
+
+@test:Config {}
+function testALiteralUnionTargetKeepsItsAllowedValues() returns error? {
+    map<json> schema = check generateJsonSchemaForTypedescAsJson(SchemaProbeSize);
+    string[] values = check schema["enum"].cloneWithType();
+    test:assertEquals(values.sort(), ["large", "small"]);
+}
+
+@test:Config {}
+function testOnlyPlainStringTakesThePlainTextPath() {
+    // Every one of these is a `typedesc<string>`, but only plain `string` can hold
+    // arbitrary model text.
+    test:assertTrue(isPlainStringType(string));
+    test:assertFalse(isPlainStringType(SchemaProbeColour));
+    test:assertFalse(isPlainStringType(SchemaProbeSize));
+    test:assertFalse(isPlainStringType(string:Char));
+    test:assertFalse(isPlainStringType(SchemaProbe));
+}

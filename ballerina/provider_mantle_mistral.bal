@@ -94,7 +94,7 @@ public isolated distinct client class MantleMistralModelProvider {
     isolated remote function chat(ai:ChatMessage[]|ai:ChatUserMessage messages,
             ai:ChatCompletionFunctions[] tools = [], string? stop = ())
             returns ai:ChatAssistantMessage|ai:Error
-        => runChat("Mistral", self.api, self.wireModelId, self.converter, self.transport,
+        => runChat(self.api, self.wireModelId, self.converter, self.transport,
             self.extraHeaders, self.params, messages, tools, stop);
 
     # Generates a value of the expected type.

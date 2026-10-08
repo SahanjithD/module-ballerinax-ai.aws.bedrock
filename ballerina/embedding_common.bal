@@ -68,27 +68,15 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockCredentials 
     }
 }
 
-// The only thing `runBatchEmbed` needs of a transport: one window in, one response
-// out. `BedrockTransport` satisfies it structurally.
-//
-// Named as a type rather than taking the concrete class so the reassembly loop below
-// can be driven without live AWS. That loop enforces the ORDER contract, and order
-// bugs are invisible from the outside — every vector present and well-formed, merely
-// attached to the wrong chunk — so it must be tested, and it cannot be tested through
-// a transport that hardcodes https.
-type EmbedTransport isolated object {
-    isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error;
-};
-
 // The shared `batchEmbed` implementation. Windows the texts
 // by `converter.maxBatchSize` (Titan → n windows of 1; Cohere → ceil(n/96)) and
 // reassembles BY INDEX — order is the contract, and index-based reassembly keeps a
 // future concurrent implementation from becoming a correctness change.
-isolated function runBatchEmbed(string providerName, string wireModelId,
-        readonly & EmbeddingConverter converter, EmbedTransport transport,
+isolated function runBatchEmbed(string wireModelId,
+        readonly & EmbeddingConverter converter, ModelTransport transport,
         readonly & EmbeddingParams params, ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error {
     observe:EmbeddingSpan span = observe:createEmbeddingSpan(wireModelId);
-    span.addProvider(providerName);
+    span.addProvider(BEDROCK_PROVIDER_NAME);
 
     // The scope boundary is the contract's, not ours: ai:Chunk carries text.
     if !isAllTextChunks(chunks) {
@@ -151,11 +139,11 @@ isolated function runBatchEmbed(string providerName, string wireModelId,
 }
 
 // `embed` is just `batchEmbed([chunk])[0]` — exactly one code path.
-isolated function runEmbed(string providerName, string wireModelId, readonly & EmbeddingConverter converter,
-        EmbedTransport transport, readonly & EmbeddingParams params, ai:Chunk chunk)
+isolated function runEmbed(string wireModelId, readonly & EmbeddingConverter converter,
+        ModelTransport transport, readonly & EmbeddingParams params, ai:Chunk chunk)
         returns ai:Embedding|ai:Error {
     ai:Embedding[] embeddings =
-        check runBatchEmbed(providerName, wireModelId, converter, transport, params, [chunk]);
+        check runBatchEmbed(wireModelId, converter, transport, params, [chunk]);
     if embeddings.length() == 0 {
         return error ai:LlmInvalidResponseError("No embedding was generated for the provided chunk");
     }

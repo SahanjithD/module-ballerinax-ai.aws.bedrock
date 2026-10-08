@@ -94,7 +94,7 @@ public distinct isolated client class CohereEmbeddingProvider {
     # + chunk - The chunk to convert; must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embedding vector, or an `ai:Error`
     isolated remote function embed(ai:Chunk chunk) returns ai:Embedding|ai:Error
-        => runEmbed("Cohere", self.wireModelId, self.converter, self.transport, self.params, chunk);
+        => runEmbed(self.wireModelId, self.converter, self.transport, self.params, chunk);
 
     // Sends up to 96 texts per request (Cohere's `texts` limit).
     # Converts a batch of chunks into vector embeddings, preserving input order.
@@ -102,5 +102,5 @@ public distinct isolated client class CohereEmbeddingProvider {
     # + chunks - The chunks to convert; each must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embeddings in input order, or an `ai:Error`
     isolated remote function batchEmbed(ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error
-        => runBatchEmbed("Cohere", self.wireModelId, self.converter, self.transport, self.params, chunks);
+        => runBatchEmbed(self.wireModelId, self.converter, self.transport, self.params, chunks);
 }

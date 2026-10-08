@@ -186,6 +186,14 @@ type InferenceParams record {|
 // because the span/guardrail/retry all need `usage` + `stopReason`.
 // ============================================================================
 
+// The only thing `chat()`, `generate()` and the embedding loop need of a transport:
+// one request body in, one response out. `BedrockTransport` satisfies it
+// structurally. Named as a type rather than taking the concrete class so these paths
+// can be driven in tests by an in-process mock, without live AWS or a local port.
+type ModelTransport isolated object {
+    isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error;
+};
+
 # Normalized token usage. Module-private — only reachable via `DecodedResponse`.
 type TokenUsage record {|
     # Prompt tokens consumed.

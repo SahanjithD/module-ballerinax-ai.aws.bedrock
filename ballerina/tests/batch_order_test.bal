@@ -124,7 +124,7 @@ isolated function assertInInputOrder(ai:Embedding[] embeddings, int expectedCoun
 @test:Config {}
 function testTitanBatchEmbedReturnsResultsInInputOrder() returns error? {
     MockEmbedTransport mock = new ("titan");
-    ai:Embedding[] embeddings = check runBatchEmbed("Titan", "amazon.titan-embed-text-v2:0",
+    ai:Embedding[] embeddings = check runBatchEmbed("amazon.titan-embed-text-v2:0",
             TITAN_EMBED_CONVERTER, mock, {}, probeTexts(100));
     assertInInputOrder(embeddings, 100);
     test:assertEquals(mock.requestCount(), 100, "Titan embeds one text per request (maxBatchSize 1)");
@@ -135,7 +135,7 @@ function testCohereBatchEmbedReturnsResultsInInputOrderAcrossWindows() returns e
     // The interesting case: 100 texts span TWO windows, so the second window's
     // results must land at absolute indices 96..99, not back at 0.
     MockEmbedTransport mock = new ("cohere");
-    ai:Embedding[] embeddings = check runBatchEmbed("Cohere", "cohere.embed-english-v3",
+    ai:Embedding[] embeddings = check runBatchEmbed("cohere.embed-english-v3",
             COHERE_EMBED_V3_CONVERTER, mock, {inputType: SEARCH_DOCUMENT},
             probeTexts(100));
     assertInInputOrder(embeddings, 100);
@@ -147,7 +147,7 @@ function testCohereBatchEmbedReturnsResultsInInputOrderAcrossWindows() returns e
 function testCohereBatchEmbedHandlesAnExactWindowBoundary() returns error? {
     // 96 must be ONE window, not 96 + an empty trailing one.
     MockEmbedTransport mock = new ("cohere");
-    ai:Embedding[] embeddings = check runBatchEmbed("Cohere", "cohere.embed-english-v3",
+    ai:Embedding[] embeddings = check runBatchEmbed("cohere.embed-english-v3",
             COHERE_EMBED_V3_CONVERTER, mock, {inputType: SEARCH_DOCUMENT},
             probeTexts(96));
     assertInInputOrder(embeddings, 96);

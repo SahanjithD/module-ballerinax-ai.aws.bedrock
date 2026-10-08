@@ -25,10 +25,15 @@ import ballerinax/aws.auth;
 // route-specific header. Only the model enum, the API-family subtype, the config
 // extras and the params assembly differ per vendor.
 
+// The OpenTelemetry `gen_ai.provider.name` well-known value for AWS Bedrock — the same
+// on every span this module opens, whichever vendor's model sits behind it.
+// https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
+const BEDROCK_PROVIDER_NAME = "aws.bedrock";
+
 // The full `chat()` implementation, shared by every vendor facade.
 // Opens an observe span and closes it on every path.
-isolated function runChat(string providerName, ApiFamily api, string wireModelId,
-        readonly & ModelConverter converter, BedrockTransport transport, map<string> & readonly extraHeaders,
+isolated function runChat(ApiFamily api, string wireModelId,
+        readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:ChatMessage[]|ai:ChatUserMessage messages,
         ai:ChatCompletionFunctions[] tools, string? stop) returns ai:ChatAssistantMessage|ai:Error {
     ai:ChatMessage[] msgs;
@@ -39,7 +44,7 @@ isolated function runChat(string providerName, ApiFamily api, string wireModelId
     }
 
     observe:ChatSpan span = observe:createChatSpan(wireModelId);
-    span.addProvider(providerName);
+    span.addProvider(BEDROCK_PROVIDER_NAME);
     if stop is string {
         span.addStopSequence(stop);
     }
@@ -72,25 +77,42 @@ isolated function runChat(string providerName, ApiFamily api, string wireModelId
         span.close(encoded);
         return encoded;
     }
-    // Converse and InvokeModel name the model in the URL; the three vendor-native
-    // shapes name it in the body, on both endpoints.
-    json body = isPathAddressed(api) ? encoded : injectModel(encoded, wireModelId);
-
-    TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
-    if response is ai:Error {
-        span.close(response);
-        return response;
-    }
-
-    ResponseDecoder decode = converter.decode;
-    DecodedResponse|ai:Error decoded = decode(response.body);
+    DecodedResponse|ai:Error decoded = sendAndDecode(span, api, wireModelId, converter, transport,
+            extraHeaders, encoded);
     if decoded is ai:Error {
         span.close(decoded);
         return decoded;
     }
+    span.addOutputMessages(decoded.message);
+    span.addOutputType(observe:TEXT);
+    span.close();
+    return decoded.message;
+}
+
+// One round trip shared by `chat()` and every `generate()` path: names the model in
+// the body where the dialect needs it, sends, decodes, and records the response on
+// the caller's span (token counts, finish reason, response id). The caller still owns
+// opening and closing the span; `()` only in tests that drive the generate paths
+// directly.
+isolated function sendAndDecode(observe:LlmSpan? span, ApiFamily api, string wireModelId,
+        readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
+        json encoded) returns DecodedResponse|ai:Error {
+    // Converse and InvokeModel name the model in the URL; the three vendor-native
+    // shapes name it in the body, on both endpoints.
+    json body = isPathAddressed(api) ? encoded : injectModel(encoded, wireModelId);
+    TransportResponse response = check transport.execute(body, extraHeaders);
+    ResponseDecoder decode = converter.decode;
+    DecodedResponse decoded = check decode(response.body);
     // Surface the request id from the response headers.
     augmentFromHeaders(decoded, response.headers);
+    if span is observe:LlmSpan {
+        recordResponse(span, decoded);
+    }
+    return decoded;
+}
 
+// Records a decoded response on a chat or generate span.
+isolated function recordResponse(observe:LlmSpan span, DecodedResponse decoded) {
     span.addInputTokenCount(decoded.usage.inputTokens);
     span.addOutputTokenCount(decoded.usage.outputTokens);
     // A fired guardrail must never be silently dropped — that is the whole
@@ -115,9 +137,6 @@ isolated function runChat(string providerName, ApiFamily api, string wireModelId
     if responseId is string {
         span.addResponseId(responseId);
     }
-    span.addOutputMessages(decoded.message);
-    span.close();
-    return decoded.message;
 }
 
 // Assembles the resolved `InferenceParams` once at construction.
@@ -526,9 +545,14 @@ isolated function messagesForSpan(string? system, ResolvedMessage[] messages) re
         if m is ResolvedUserMessage {
             out.push({role: m.role, content: partsForSpan(m.parts)});
         } else if m is ai:ChatAssistantMessage {
-            out.push({role: m.role, content: m.content});
+            // The tool calls ARE the assistant turn in an agent loop; dropping them
+            // left the trace showing an empty reply followed by an unexplained result.
+            ai:FunctionCall[]? toolCalls = m.toolCalls;
+            out.push(toolCalls is ai:FunctionCall[]
+                ? {role: m.role, content: m.content, toolCalls: toolCalls.toJson()}
+                : {role: m.role, content: m.content});
         } else {
-            out.push({role: m.role, content: m.content, name: m.name});
+            out.push({role: m.role, content: m.content, name: m.name, id: m.id});
         }
     }
     return out;
