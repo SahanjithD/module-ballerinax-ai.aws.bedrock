@@ -19,11 +19,9 @@ import ballerina/test;
 // forced tool and parses the tool-call arguments back into the record; the routes
 // with no structured-output path refuse cleanly.
 //
-// The two halves are tested either side of the transport, which is covered
-// separately (`transport_path_test.bal`) and cannot be intercepted here because it
-// hardcodes https. The guard paths ARE driven through `structuredGenerate` itself,
-// since they must return before any I/O — constructing a `BedrockTransport` opens
-// no connection.
+// The guard paths are driven through `structuredGenerate` itself with an in-process
+// `CannedTransport` (test_utils.bal), so they run offline and can assert that a
+// refusal happened before any request was sent.
 
 type Review record {|
     string sentiment;
@@ -194,11 +192,16 @@ function testExtractJsonSignalsAbsenceWithAnError() {
 
 // ---- Routes with no structured-output path refuse cleanly, before any I/O ----
 
-function mantleTransport(string path = "/anthropic/v1/messages") returns BedrockTransport|error =>
-    new (check resolveCredentials(TEST_CREDS), "us-east-1",
-        {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`,
-            host: "bedrock-mantle.us-east-1.api.aws", path,
-            signingService: SIGNING_BEDROCK_MANTLE});
+// Canned replies in the two dialects these tests reach: Anthropic Messages and Converse.
+final readonly & json MESSAGES_OK = {
+    id: "msg_1", 'type: "message", role: "assistant",
+    content: [{'type: "text", text: "OK"}],
+    stop_reason: "end_turn", usage: {input_tokens: 3, output_tokens: 1}
+};
+final readonly & json CONVERSE_OK = {
+    output: {message: {role: "assistant", content: [{text: "OK"}]}},
+    stopReason: "end_turn", usage: {inputTokens: 3, outputTokens: 1}
+};
 
 // ---- `structuredOutputStyleFor` decides the mechanism, once, at construction ----
 
@@ -255,10 +258,11 @@ function testNativeOutputConfigIsImplementedButNotYetSelected() {
 function testMantleMessagesRefusesStructuredOutputNamingTheModel() returns error? {
     // The one route with no typed-generation path at all. It must fail locally,
     // before any I/O, and the message must name the model and the dialect.
-    BedrockTransport transport = check mantleTransport();
+    CannedTransport transport = new (MESSAGES_OK);
     anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, MESSAGES,
             NATIVE_MESSAGES_CONVERTER, transport, "anthropic.claude-opus-5", {}, GEN_PARAMS,
             `Rate this`, Review);
+    test:assertEquals(transport.requests().length(), 0, "the refusal must happen before any I/O");
     test:assertTrue(result is ai:Error, "a typed target on Mantle Messages must be a clean error");
     if result is ai:Error {
         string message = result.message();
@@ -274,23 +278,19 @@ function testMantleMessagesRefusesStructuredOutputNamingTheModel() returns error
 @test:Config {}
 function testAStringTargetIsNeverRefusedEvenWithNoStructuredOutput() returns error? {
     // `string` needs no structure, so the guard must not fire — it is checked before
-    // any route capability. Reaching the transport (and failing there, with no
-    // credentials that AWS would accept) proves the refusal did NOT happen locally.
-    BedrockTransport transport = check mantleTransport();
-    anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, MESSAGES,
+    // any route capability. The text coming back proves the refusal did NOT happen.
+    CannedTransport transport = new (MESSAGES_OK);
+    anydata result = check structuredGenerate(NO_STRUCTURED_OUTPUT, MESSAGES,
             NATIVE_MESSAGES_CONVERTER, transport, "anthropic.claude-opus-5", {}, GEN_PARAMS,
             `Say OK`, string);
-    if result is ai:Error {
-        test:assertFalse(result.message().includes("target type must be 'string'"),
-                "a string target must not hit the structured-output refusal: " + result.message());
-    }
+    test:assertEquals(result, "OK");
 }
 
 @test:Config {}
 function testMistralTextDialectRefusesStructuredOutput() returns error? {
     // INVOKE on bedrock-runtime, so the endpoint carries structured output — the
     // refusal must come from the CONVERTER having no tool-calling at all.
-    BedrockTransport transport = check mantleTransport();
+    CannedTransport transport = new (CONVERSE_OK);
     anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, INVOKE,
             INVOKE_MISTRAL_TEXT_CONVERTER, transport,
             "mistral.mistral-7b-instruct-v0:2", {}, GEN_PARAMS, `Rate this`, Review);
@@ -334,9 +334,10 @@ function testForcedToolRefusalIsKeyedOnTheBareIdAcrossBothEndpoints() {
 function testOpus55RefusesTypedGenerateBeforeAnyIo() returns error? {
     // The route resolves to TOOL_FORCING like any other Converse model; the refusal
     // is the MODEL's, so it has to fire here rather than as a 400 about `toolChoice`.
-    BedrockTransport transport = check mantleTransport();
+    CannedTransport transport = new (CONVERSE_OK);
     anydata|ai:Error result = structuredGenerate(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER,
             transport, "us.anthropic.claude-opus-5-5", {}, GEN_PARAMS, `Rate this`, Review);
+    test:assertEquals(transport.requests().length(), 0, "the refusal must happen before any I/O");
     test:assertTrue(result is ai:Error, "a typed target on a model that refuses forced tools must error");
     if result is ai:Error {
         string message = result.message();
@@ -349,15 +350,11 @@ function testOpus55RefusesTypedGenerateBeforeAnyIo() returns error? {
 
 @test:Config {}
 function testOpus55StillAnswersAStringTarget() returns error? {
-    // `string` needs no tool at all, so the guard must not fire. Reaching the
-    // transport proves the refusal did not happen locally.
-    BedrockTransport transport = check mantleTransport();
-    anydata|ai:Error result = structuredGenerate(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER,
+    // `string` needs no tool at all, so the guard must not fire.
+    CannedTransport transport = new (CONVERSE_OK);
+    anydata result = check structuredGenerate(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER,
             transport, "us.anthropic.claude-opus-5-5", {}, GEN_PARAMS, `Say OK`, string);
-    if result is ai:Error {
-        test:assertFalse(result.message().includes("forced tool"),
-                "a string target must not hit the forced-tool guard: " + result.message());
-    }
+    test:assertEquals(result, "OK");
 }
 
 // ---- N8: a bind failure says what came back and where it came from ----
