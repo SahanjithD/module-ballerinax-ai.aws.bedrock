@@ -14,20 +14,11 @@
 
 import ballerina/ai;
 import ballerina/http;
-import ballerinax/aws.auth;
 
 // Public surface for `ManagedKnowledgeBase`: configuration, the
 // find-or-create definition, and the chunking-strategy enum. See
 // knowledgebase_common.bal for the resolution spine and knowledgebase_managed.bal
 // for the public class.
-
-// SigV4 only, deliberately excluding `BearerToken`: Bedrock API keys cannot be used
-// with the Agents for Amazon Bedrock APIs (`bedrock-agent`/`bedrock-agent-runtime`),
-// which back knowledge bases.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html
-
-# AWS credentials for a Bedrock knowledge base.
-public type KnowledgeBaseCredentials auth:AuthConfig;
 
 // Set on `CreateDataSource` and fixed for the life of the data source.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html

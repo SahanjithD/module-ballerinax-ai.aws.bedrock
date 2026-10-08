@@ -23,7 +23,7 @@ import ballerinax/aws.auth;
 // The shared spine `ManagedKnowledgeBase` is built over: two agent-plane
 // transports, find-or-create, data-source resolution, chunking-strategy detection,
 // and the document/knowledge-base wire calls both `ingest()` and `deleteByFilter()`
-// need. `SelfManagedKnowledgeBase` (knowledgebase_vector.bal) is built over the
+// need. `SelfManagedKnowledgeBase` (knowledgebase_self_managed.bal) is built over the
 // same spine, with its own request bodies where the self-managed API family differs.
 
 // Bedrock's `_source_uri` metadata attribute — injected on every retrieval result,
@@ -173,7 +173,7 @@ type KbSpine record {|
 // The shared construction spine: transports -> find-or-create -> data-source
 // resolution -> chunking detection. Every failure surfaces here, before any method
 // is callable.
-isolated function resolveKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
+isolated function resolveKbSpine(string providerName, auth:AuthConfig credentials, string region,
         aws:EndpointConfig? endpointConfig, string|KnowledgeBaseDefinition knowledgeBase,
         string? dataSourceIdOverride, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig,
         RerankingModelType? rerankingModelType = ())
@@ -588,7 +588,7 @@ isolated function failureReasonsOf(map<json> details) returns string {
 // "Custom" source is really `MANAGED_KNOWLEDGE_BASE_CONNECTOR` with the real type
 // nested in `connectorParameters` (established by calling the live API; not
 // documented). A self-managed (VECTOR) knowledge base takes the plain form instead
-// — see `createVectorDataSourceRequestBody` in knowledgebase_vector_common.bal.
+// — see `createVectorDataSourceRequestBody` in knowledgebase_self_managed_common.bal.
 // The `CreateDataSource` request body. Pure, so the two things the live API demands
 // — `connectorParameters.version`, and the ABSENCE of `vectorIngestionConfiguration`
 // — are assertable without AWS.
@@ -1194,12 +1194,12 @@ isolated function retrievalResultIdentifies(json result, string documentId, stri
 // exactly the kind of cutoff the reachability pass exists to see past), and no
 // `overrideSearchType`/`rerankingModelType` shortcuts either — see
 // `managedDeleteRetrieve` (below) and `vectorDeleteRetrieve`
-// (knowledgebase_vector_common.bal), the two values ever passed for this parameter.
+// (knowledgebase_self_managed_common.bal), the two values ever passed for this parameter.
 type DeleteRetrieveCaller isolated function (BedrockTransport dataTransport, string kbId, json? filter,
         int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error;
 
 // The MANAGED adapter for `DeleteRetrieveCaller` — the vector counterpart,
-// `vectorDeleteRetrieve`, lives in knowledgebase_vector_common.bal next to
+// `vectorDeleteRetrieve`, lives in knowledgebase_self_managed_common.bal next to
 // `callVectorRetrieve`.
 isolated function managedDeleteRetrieve(BedrockTransport dataTransport, string kbId, json? filter,
         int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error

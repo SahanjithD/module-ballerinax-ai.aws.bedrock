@@ -17,8 +17,8 @@ import ballerina/http;
 
 // Public surface for `SelfManagedKnowledgeBase` — the SELF-MANAGED knowledge base
 // (`KnowledgeBaseConfiguration.type = VECTOR`), where the vector store belongs to the
-// caller rather than to Bedrock. See knowledgebase_vector_common.bal for the
-// resolution spine and knowledgebase_vector.bal for the public class.
+// caller rather than to Bedrock. See knowledgebase_self_managed_common.bal for the
+// resolution spine and knowledgebase_self_managed.bal for the public class.
 //
 // Deliberately kept separate from knowledgebase_types.bal: the two knowledge base
 // types share no configuration record. MANAGED has no `storageConfiguration` and no

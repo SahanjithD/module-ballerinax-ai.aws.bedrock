@@ -537,7 +537,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 // Everything the spine needs beyond the resource itself is read off `config` here
 // rather than being passed alongside it — one source of truth, so a future field
 // cannot be wired at one call site and forgotten at another.
-isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
+isolated function resolveVectorKbSpine(string providerName, auth:AuthConfig credentials, string region,
         aws:EndpointConfig? endpointConfig, string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
         SelfManagedKnowledgeBaseConfig config)
         returns KbSpine|ai:Error {

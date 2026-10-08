@@ -16,7 +16,7 @@ import ballerina/ai;
 import ballerina/test;
 
 // Golden-file tests for the PURE request-body builders in
-// knowledgebase_vector_common.bal. No listener, no transport: these assert the exact
+// knowledgebase_self_managed_common.bal. No listener, no transport: these assert the exact
 // JSON the module would put on the wire, so every shape is checkable without AWS.
 //
 // Required members per backend come from each type's own API reference page,
