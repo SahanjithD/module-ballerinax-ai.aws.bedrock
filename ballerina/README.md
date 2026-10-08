@@ -189,7 +189,7 @@ final ai:ModelProvider claude =
 > Bedrock and Amazon Bedrock Runtime actions" and cannot be used with *"Agents for Amazon Bedrock or
 > Agents for Amazon Bedrock Runtime API operations"* — and both knowledge base planes
 > (`bedrock-agent`, `bedrock-agent-runtime`) are exactly those. `ManagedKnowledgeBase`
-> therefore takes `auth:AuthConfig` (SigV4 only), so a bearer token is rejected at
+> therefore takes `KnowledgeBaseCredentials` (SigV4 only), so a bearer token is rejected at
 > **compile time** rather than becoming an opaque runtime 403.
 
 ### Step 3: Invoke chat completion

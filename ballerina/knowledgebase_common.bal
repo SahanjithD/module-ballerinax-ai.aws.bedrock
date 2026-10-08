@@ -173,7 +173,7 @@ type KbSpine record {|
 // The shared construction spine: transports -> find-or-create -> data-source
 // resolution -> chunking detection. Every failure surfaces here, before any method
 // is callable.
-isolated function resolveKbSpine(string providerName, auth:AuthConfig credentials, string region,
+isolated function resolveKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
         aws:EndpointConfig? endpointConfig, string|KnowledgeBaseDefinition knowledgeBase,
         string? dataSourceIdOverride, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig,
         RerankingModelType? rerankingModelType = ())

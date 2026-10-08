@@ -15,7 +15,6 @@
 import ballerina/ai;
 import ballerina/http;
 import ballerina/test;
-import ballerinax/aws.auth;
 
 // `ManagedKnowledgeBase` construction-error scenarios, each against a small
 // stubbed bedrock-agent on its own local listener: an ambiguous knowledge base
@@ -23,9 +22,9 @@ import ballerinax/aws.auth;
 
 // Separate from the model providers' `TEST_CREDS`, which is a `BedrockCredentials`
 // and so admits a `BearerToken`. The knowledge base classes take
-// `auth:AuthConfig` (SigV4 only) because Bedrock API keys do not work on
+// `KnowledgeBaseCredentials` (SigV4 only) because Bedrock API keys do not work on
 // the agent planes — passing `TEST_CREDS` here must NOT compile.
-final auth:AuthConfig KB_TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
+final KnowledgeBaseCredentials KB_TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
 
 // ---- ambiguous name: two knowledge bases share it ----
 

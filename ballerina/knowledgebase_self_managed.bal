@@ -15,7 +15,6 @@
 import ballerina/ai;
 import ballerina/ai.observe;
 import ballerinax/aws;
-import ballerinax/aws.auth;
 
 // A Bedrock self-managed knowledge base (`KnowledgeBaseConfiguration.type = VECTOR`)
 // — your own vector store rather than Bedrock's — exposed through `ai:KnowledgeBase`.
@@ -49,11 +48,10 @@ public distinct isolated client class SelfManagedKnowledgeBase {
     private final readonly & VectorRerankingConfig? rerankingConfiguration;
 
     // The vector store a definition names must already exist. `credentials` is SigV4
-    // only — Bedrock API keys are not accepted on the agent planes
-    // (https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html).
-    // `endpoint` is derived from the region when `()`, which is correct in every
-    // partition; a `customEndpoint` is a GLOBAL override with the same semantics as the
-    // AWS SDK's `AWS_ENDPOINT_URL`, applying to every service this client talks to.
+    // only — Bedrock API keys are not accepted on the agent planes. `endpoint` is derived
+    // from the region when `()`, which is correct in every partition; a `customEndpoint`
+    // is a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`,
+    // applying to every service this client talks to.
 
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
     # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
@@ -63,7 +61,7 @@ public distinct isolated client class SelfManagedKnowledgeBase {
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Knowledge Base"} string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
-            @display {label: "AWS Credentials"} auth:AuthConfig credentials,
+            @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *SelfManagedKnowledgeBaseConfig config)
