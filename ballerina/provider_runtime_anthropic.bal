@@ -29,9 +29,9 @@ import ballerinax/aws;
 # Anthropic model IDs on `bedrock-runtime`, with the `us.` cross-region prefix.
 # For another geography, pass the ID as a string, e.g. `eu.anthropic.claude-sonnet-5`.
 public enum AnthropicRuntimeModel {
-    // Refuses a FORCED tool choice.
+    // Refuses a FORCED tool choice, so typed `generate()` offers its tool unforced.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
-    # 1M context. `generate` can only return `string` on this model
+    # 1M context; adaptive thinking always on
     CLAUDE_OPUS_5_5 = "us.anthropic.claude-opus-5-5",
     # 1M context; adaptive thinking on by default
     CLAUDE_OPUS_5 = "us.anthropic.claude-opus-5",
@@ -52,9 +52,9 @@ public enum AnthropicRuntimeModel {
     # Needs an account opt-in: set the data retention mode to `aws_review` first
     CLAUDE_FABLE_5 = "us.anthropic.claude-fable-5",
     // Inherits Opus 5.5's restrictions: thinking cannot be disabled, and a FORCED
-    // tool choice is refused.
+    // tool choice is refused, so typed `generate()` offers its tool unforced.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
-    # Needs the Fable 5 opt-in. `generate` can only return `string` on this model
+    # Needs the Fable 5 opt-in
     CLAUDE_FABLE_5_1 = "us.anthropic.claude-fable-5-1"
 }
 

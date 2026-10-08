@@ -92,19 +92,12 @@ isolated function structuredGenerate(StructuredOutputStyle structuredOutput, Api
             return generateByOutputConfig(api, converter, transport, wireModelId, extraHeaders,
                     params, prompt, td, span);
         }
-        TOOL_FORCING if refusesForcedToolChoice(wireModelId) => {
-            // Named up front rather than relayed as a raw 400 about `toolChoice` —
-            // see `FORCED_TOOL_UNSUPPORTED` for the models and the source.
-            return generationError(
-                string `Model '${wireModelId}' does not support forced tool use, so generate() can only ` +
-                string `return 'string' on it. Use a model that supports forced tool calling.`,
-                "generate() obtains a typed result by forcing a single tool whose input schema is the " +
-                "expected type; this model rejects a forced tool_choice with a 400. Claude Opus 5 and " +
-                "Claude Sonnet 5 accept one. Alternatively call chat() and parse the reply yourself.");
-        }
         TOOL_FORCING => {
+            // Where forcing the tool is a 400, the tool is still offered but the model
+            // chooses; the result is then checked against the type like any other.
+            boolean forceTool = !refusesForcedToolChoice(wireModelId) && !thinkingEnabled(params);
             return generateByToolForcing(api, converter, transport, wireModelId, extraHeaders,
-                    params, prompt, td, span);
+                    params, prompt, td, span, forceTool);
         }
     }
     return generationError(
@@ -192,12 +185,16 @@ isolated function sendGenerateRequest(observe:LlmSpan? span, ApiFamily api, stri
     return sendAndDecode(span, api, wireModelId, converter, transport, extraHeaders, encoded);
 }
 
-// Tier 1 — force a single tool whose schema is the expected type; parse the
-// tool-call arguments back into the record.
+// Asks for the result tool when it cannot be forced.
+const RESULT_TOOL_INSTRUCTION = "Respond only by calling the " + RESULT_TOOL +
+    " tool, with the result as its arguments.";
+
+// Tier 1 — offer a single tool whose schema is the expected type, forced unless
+// `forceTool` is false, and parse the tool-call arguments back into the record.
 isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter converter,
         ModelTransport transport, string wireModelId, map<string> & readonly extraHeaders,
-        readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td, observe:LlmSpan? span)
-        returns anydata|ai:Error {
+        readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td, observe:LlmSpan? span,
+        boolean forceTool = true) returns anydata|ai:Error {
     [map<json>, boolean] [schema, wrapped] = check wireSchemaFor(td);
     ai:ChatCompletionFunctions tool = {
         name: RESULT_TOOL,
@@ -206,10 +203,10 @@ isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter
     };
     ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
     RequestEncoder encode = converter.encode;
-    json encoded = check encode((), [userMsg], [tool], (), params);
-    json forced = applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL);
+    json encoded = check encode(forceTool ? () : RESULT_TOOL_INSTRUCTION, [userMsg], [tool], (), params);
+    json body = forceTool ? applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL) : encoded;
     DecodedResponse decoded = check sendGenerateRequest(span, api, wireModelId, converter, transport,
-            extraHeaders, userMsg, forced);
+            extraHeaders, userMsg, body);
     ai:FunctionCall[]? toolCalls = decoded.message.toolCalls;
     if toolCalls is ai:FunctionCall[] && toolCalls.length() > 0 {
         return bindResult(toolCalls[0].arguments ?: {}, wrapped, td,

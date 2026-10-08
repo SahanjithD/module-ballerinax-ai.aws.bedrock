@@ -310,7 +310,7 @@ function testMistralTextDialectRejectsToolsRatherThanDroppingThem() {
     test:assertTrue(encoded is ai:Error, "tools on a dialect with no tool support must fail loudly");
 }
 
-// ---- M1: models that refuse a forced tool choice are named, not relayed ----
+// ---- M1: where a forced tool is a 400, the tool is offered unforced ----
 
 @test:Config {}
 function testForcedToolRefusalIsKeyedOnTheBareIdAcrossBothEndpoints() {
@@ -330,22 +330,60 @@ function testForcedToolRefusalIsKeyedOnTheBareIdAcrossBothEndpoints() {
     }
 }
 
+// Sends one typed generate() and returns the request body that went out.
+function sentGenerateBody(ApiFamily api, readonly & ModelConverter converter, string modelId,
+        readonly & InferenceParams params, json reply) returns map<json>|error {
+    CannedTransport transport = new (reply);
+    anydata result = check generateLlmResponse(TOOL_FORCING, api, converter, transport, modelId, {}, params,
+            `Give me a point.`, MatrixPoint);
+    test:assertEquals(result, <MatrixPoint>{x: 1, y: 2});
+    return (<json>transport.requests()[0]).ensureType();
+}
+
 @test:Config {}
-function testOpus55RefusesTypedGenerateBeforeAnyIo() returns error? {
-    // The route resolves to TOOL_FORCING like any other Converse model; the refusal
-    // is the MODEL's, so it has to fire here rather than as a 400 about `toolChoice`.
-    CannedTransport transport = new (CONVERSE_OK);
-    anydata|ai:Error result = structuredGenerate(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER,
-            transport, "us.anthropic.claude-opus-5-5", {}, GEN_PARAMS, `Rate this`, Review);
-    test:assertEquals(transport.requests().length(), 0, "the refusal must happen before any I/O");
-    test:assertTrue(result is ai:Error, "a typed target on a model that refuses forced tools must error");
-    if result is ai:Error {
-        string message = result.message();
-        test:assertTrue(message.includes("us.anthropic.claude-opus-5-5"),
-                "the error must name the model; got: " + message);
-        test:assertTrue(message.includes("forced tool"),
-                "the error must name the cause; got: " + message);
-    }
+function testOpus55OffersTheToolUnforcedAndStillReturnsTheType() returns error? {
+    // Opus 5.5 rejects a forced tool choice, so the tool is offered without one and
+    // the reply is type-checked like any other.
+    map<json> body = check sentGenerateBody(CONVERSE, CONVERSE_CONVERTER, "us.anthropic.claude-opus-5-5",
+            GEN_PARAMS, converseReply((), RESULT_TOOL, {x: 1, y: 2}));
+    map<json> toolConfig = check body["toolConfig"].ensureType();
+    test:assertFalse(toolConfig.hasKey("toolChoice"), "the tool must not be forced");
+    test:assertTrue(body.toJsonString().includes(RESULT_TOOL_INSTRUCTION), "the model is asked to use the tool");
+}
+
+@test:Config {}
+function testThinkingOffersTheToolUnforcedOnEveryAnthropicApi() returns error? {
+    // Anthropic accepts only `auto` or `none` as the tool choice while thinking is on.
+    readonly & InferenceParams thinking = {maxTokens: 4000, thinking: {mode: ADAPTIVE}};
+    map<json> invoke = check sentGenerateBody(INVOKE, INVOKE_ANTHROPIC_CONVERTER, "us.anthropic.claude-sonnet-4-6",
+            thinking, anthropicReply((), RESULT_TOOL, {x: 1, y: 2}));
+    test:assertFalse(invoke.hasKey("tool_choice"), "InvokeModel must not force the tool");
+    map<json> messages = check sentGenerateBody(MESSAGES, NATIVE_MESSAGES_CONVERTER, "us.anthropic.claude-sonnet-4-6",
+            thinking, anthropicReply((), RESULT_TOOL, {x: 1, y: 2}));
+    test:assertFalse(messages.hasKey("tool_choice"), "Messages must not force the tool");
+    map<json> converse = check sentGenerateBody(CONVERSE, CONVERSE_CONVERTER, "us.anthropic.claude-sonnet-4-6",
+            thinking, converseReply((), RESULT_TOOL, {x: 1, y: 2}));
+    map<json> converseTools = check converse["toolConfig"].ensureType();
+    test:assertFalse(converseTools.hasKey("toolChoice"), "Converse must not force the tool");
+}
+
+@test:Config {}
+function testThinkingSetThroughThePassthroughAlsoUnforcesTheTool() returns error? {
+    readonly & InferenceParams params = {maxTokens: 4000,
+        additionalModelRequestFields: {"thinking": {"type": "enabled", "budget_tokens": 2000}}};
+    map<json> body = check sentGenerateBody(CONVERSE, CONVERSE_CONVERTER, "us.anthropic.claude-sonnet-4-6",
+            params, converseReply((), RESULT_TOOL, {x: 1, y: 2}));
+    map<json> toolConfig = check body["toolConfig"].ensureType();
+    test:assertFalse(toolConfig.hasKey("toolChoice"));
+}
+
+@test:Config {}
+function testDisabledThinkingStillForcesTheTool() returns error? {
+    readonly & InferenceParams params = {maxTokens: 4000, thinking: {mode: DISABLED}};
+    map<json> body = check sentGenerateBody(INVOKE, INVOKE_ANTHROPIC_CONVERTER, "us.anthropic.claude-sonnet-4-6",
+            params, anthropicReply((), RESULT_TOOL, {x: 1, y: 2}));
+    test:assertEquals(body["tool_choice"], <json>{"type": "tool", "name": RESULT_TOOL});
+    test:assertFalse(body.toJsonString().includes(RESULT_TOOL_INSTRUCTION), "no extra instruction when forced");
 }
 
 @test:Config {}

@@ -162,10 +162,9 @@ final readonly & map<MantleEntry> MANTLE_CAPABLE = {
 // class accepts any id and an unknown one simply goes on the wire. Mantle needs a
 // table only because a Mantle request path is not derivable from a model id.
 
-// Models that REFUSE a forced tool choice. `generate()` obtains a typed result by
-// forcing a single result tool (`generateByToolForcing`), so on these models that
-// mechanism is a hard 400 and the module reports it up front instead of relaying
-// whatever AWS says about `toolChoice`.
+// Models that REFUSE a forced tool choice. `generate()` normally forces a single
+// result tool (`generateByToolForcing`); on these models that is a hard 400, so the
+// tool is offered unforced instead and the reply is type-checked as usual.
 //
 // Anthropic states it for Claude Opus 5.5 and, in the same breath, for Claude Fable
 // 5.1 ("The first three also apply on Claude Fable 5.1"):
@@ -193,4 +192,27 @@ final readonly & string[] FORCED_TOOL_UNSUPPORTED = [
 isolated function refusesForcedToolChoice(string wireModelId) returns boolean {
     [string, string?] [bareId, _] = normalizeModelId(wireModelId);
     return FORCED_TOOL_UNSUPPORTED.indexOf(bareId) is int;
+}
+
+// Whether the request turns Anthropic thinking on, through `thinking` or through a
+// `thinking` key in the passthrough. With thinking on, Anthropic accepts only `auto`
+// or `none` as the tool choice, on every API that reaches the model:
+//
+//   Tool use with thinking only supports tool_choice: {"type": "auto"} (the default)
+//   or {"type": "none"}. Providing tool_choice: {"type": "any"} or
+//   tool_choice: {"type": "tool", "name": "..."} will result in an error.
+//
+// https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+isolated function thinkingEnabled(InferenceParams params) returns boolean {
+    ThinkingConfig? thinking = params?.thinking;
+    if thinking is ThinkingConfig {
+        return thinking.mode != DISABLED;
+    }
+    AdditionalRequestFields? extra = params?.additionalModelRequestFields;
+    json passthrough = extra is AdditionalRequestFields ? extra["thinking"] : ();
+    if passthrough is map<json> {
+        json kind = passthrough["type"];
+        return kind is string && kind != "disabled";
+    }
+    return false;
 }

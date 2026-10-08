@@ -224,16 +224,14 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 > tool-calling at all. That only bites when you pass `apiType = INVOKE` for those ids — the default
 > Converse shape supports typed generation for every Mistral model.
 
-> **Two models refuse a forced tool choice, so `generate()` can only return `string` on them.**
-> `CLAUDE_OPUS_5_5` and `CLAUDE_FABLE_5_1` (and their `MANTLE_` twins) reject `tool_choice` of type
-> `tool` or `any` with a 400 — Anthropic documents it as a breaking change — and forcing a single result
-> tool is exactly how this module obtains a typed value. The module detects those ids before any network
-> call and returns an `ai:Error` naming the model and the cause, rather than relaying a 400 about
-> `toolChoice` that says nothing about the `generate()` you actually wrote. `chat()` with tools is
-> unaffected: the tools are still offered, just not forced. Use `CLAUDE_OPUS_5` or `CLAUDE_SONNET_5` for
-> typed generation, or call `chat()` and parse the reply yourself.
-> Detection is by model id, so it cannot fire for a provisioned-model or inference-profile ARN, which
-> hides the id — AWS answers for those.
+> **With thinking on, the result tool is offered rather than forced.** Anthropic accepts only an
+> `auto` tool choice while thinking is on, and `CLAUDE_OPUS_5_5` and `CLAUDE_FABLE_5_1` (and their
+> `MANTLE_` twins) reject a forced tool on every request. In those cases `generate()` offers the result
+> tool, asks the model to call it, and checks the reply against the expected type. A model that answers
+> in plain text instead returns an `ai:LlmInvalidGenerationError`. This applies when `thinking` is set
+> to `ADAPTIVE` or `ENABLED`, or when a `thinking` object is passed in `additionalModelRequestFields`.
+> Opus 5.5 and Fable 5.1 are recognised by model id, so a provisioned-model or inference-profile ARN
+> for them still gets a forced tool, and AWS answers for it.
 
 ### Step 5: Generate embeddings
 
