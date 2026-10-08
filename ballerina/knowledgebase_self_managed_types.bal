@@ -380,7 +380,7 @@ public type VectorDataSourceDefinition record {|
 // API has no equivalent of the console's "Quick create a new vector store". Provision
 // it with Terraform/CDK/the console first, then pass its ARNs here.
 //
-// `name` must match `([0-9a-zA-Z][_-]?){1,100}`. `roleArn` needs permissions on the
+// `name` must match `([0-9a-zA-Z][_-]?){1,100}`. `serviceRoleArn` needs permissions on the
 // vector store as well as on Bedrock (see `kb-permissions` in the AWS user guide), and
 // `bedrock:InvokeModel` on `embeddingModelArn`. There is no service-managed embedding
 // model on this path, so `embeddingModelArn` is required.
@@ -390,18 +390,20 @@ public type VectorDataSourceDefinition record {|
 public type SelfManagedKnowledgeBaseDefinition record {|
     # Knowledge base name, also used to find an existing one
     string name;
-    # IAM role Bedrock assumes to manage the knowledge base
-    string roleArn;
     # Knowledge base description
     string description?;
+    # ARN of the IAM role Bedrock uses to manage this knowledge base
+    @display {label: "Service Role ARN"}
+    string serviceRoleArn;
+    # The data source created with the knowledge base
+    VectorDataSourceDefinition dataSource = {name: "ballerina-custom-source"};
     # ARN of the embedding model
+    @display {label: "Embedding Model ARN"}
     string embeddingModelArn;
     # Embedding model settings. Defaults to the model's own
     VectorEmbeddingModelConfig embeddingModel?;
     # The existing vector store to use
     StorageConfiguration storageConfiguration;
-    # The data source created with the knowledge base
-    VectorDataSourceDefinition dataSource = {name: "ballerina-custom-source"};
     # Seconds to wait for a new knowledge base to become ready
     decimal readyTimeout = 300;
 |};

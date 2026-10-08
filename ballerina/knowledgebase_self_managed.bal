@@ -26,7 +26,7 @@ import ballerinax/aws;
 // The vector store named by `storageConfiguration` must already exist; this class
 // never provisions one. `ingest()` additionally needs `bedrock:StartIngestionJob`
 // and `bedrock:IngestKnowledgeBaseDocuments` on the caller's credentials, and the
-// knowledge base's own `roleArn` needs permissions on the vector store itself.
+// knowledge base's own `serviceRoleArn` needs permissions on the vector store itself.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
 
 # A Bedrock knowledge base backed by your own vector store.
@@ -47,26 +47,26 @@ public distinct isolated client class SelfManagedKnowledgeBase {
     // such treatment — it is an enum, and so already immutable.
     private final readonly & VectorRerankingConfig? rerankingConfiguration;
 
-    // The vector store a definition names must already exist. `credentials` is SigV4
+    // The vector store a definition names must already exist. `auth` is SigV4
     // only — Bedrock API keys are not accepted on the agent planes. `endpoint` is derived
     // from the region when `()`, which is correct in every partition; a `customEndpoint`
     // is a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`,
     // applying to every service this client talks to.
 
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
-    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
+    # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + config - Data source, chunking, retrieval and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Knowledge Base"} string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
-            @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials,
+            @display {label: "Authentication"} KnowledgeBaseAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *SelfManagedKnowledgeBaseConfig config)
             returns ai:Error? {
-        KbSpine spine = check resolveVectorKbSpine(VECTOR_KB_PROVIDER, credentials, region, endpoint,
+        KbSpine spine = check resolveVectorKbSpine(VECTOR_KB_PROVIDER, auth, region, endpoint,
             knowledgeBase, config);
         self.controlTransport = spine.controlTransport;
         self.dataTransport = spine.dataTransport;

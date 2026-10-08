@@ -282,9 +282,9 @@ function testDeleteByFilterRefusesAFilterSetThatConstrainsNothing() {
 
 @test:Config {}
 function testAttachingByDefinitionRejectsAKnowledgeBaseWhoseRoleArnDiffers() {
-    KnowledgeBaseDefinition def = {
+    ManagedKnowledgeBaseDefinition def = {
         name: "kb",
-        roleArn: "arn:aws:iam::111122223333:role/service-role/RealKbRole"
+        serviceRoleArn: "arn:aws:iam::111122223333:role/service-role/RealKbRole"
     };
     map<json> actual = {
         knowledgeBaseId: "KB12345678",
@@ -299,16 +299,16 @@ function testAttachingByDefinitionRejectsAKnowledgeBaseWhoseRoleArnDiffers() {
     ai:Error? result = assertDefinitionMatches("KB12345678", createKnowledgeBaseRequestBody(def), actual);
     test:assertTrue(result is ai:Error);
     if result is ai:Error {
-        test:assertTrue(result.message().includes("roleArn"), result.message());
+        test:assertTrue(result.message().includes("serviceRoleArn"), result.message());
         test:assertTrue(result.message().includes("DummyKbRole"), result.message());
     }
 }
 
 @test:Config {}
 function testAttachingByDefinitionRejectsAMismatchedEmbeddingModel() {
-    KnowledgeBaseDefinition def = {
+    ManagedKnowledgeBaseDefinition def = {
         name: "kb",
-        roleArn: "arn:aws:iam::111122223333:role/KbRole",
+        serviceRoleArn: "arn:aws:iam::111122223333:role/KbRole",
         embeddingModel: {embeddingModelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"}
     };
     map<json> actual = {
@@ -330,9 +330,9 @@ function testAttachingByDefinitionRejectsAMismatchedEmbeddingModel() {
 
 @test:Config {}
 function testAttachingByDefinitionAcceptsAMatchAndIgnoresCosmeticDrift() {
-    KnowledgeBaseDefinition def = {
+    ManagedKnowledgeBaseDefinition def = {
         name: "kb",
-        roleArn: "arn:aws:iam::111122223333:role/KbRole",
+        serviceRoleArn: "arn:aws:iam::111122223333:role/KbRole",
         description: "the description in the definition"
     };
     map<json> actual = {
@@ -365,7 +365,7 @@ function testDefinitionComparisonTreatsJsonNumbersOfDifferentBallerinaTypesAsEqu
 
 @test:Config {}
 function testTheClientTokenIsDeterministicAndSatisfiesTheBedrockClientTokenShape() {
-    KnowledgeBaseDefinition def = {name: "kb", roleArn: "arn:aws:iam::111122223333:role/KbRole"};
+    ManagedKnowledgeBaseDefinition def = {name: "kb", serviceRoleArn: "arn:aws:iam::111122223333:role/KbRole"};
     string first = idempotencyToken(createKnowledgeBaseRequestBody(def));
     string second = idempotencyToken(createKnowledgeBaseRequestBody(def));
     // Two racing `init()` calls with the same definition must send the SAME token,
@@ -373,7 +373,7 @@ function testTheClientTokenIsDeterministicAndSatisfiesTheBedrockClientTokenShape
     test:assertEquals(first, second);
 
     // A genuinely different definition must NOT collapse onto the same resource.
-    KnowledgeBaseDefinition other = {name: "kb", roleArn: "arn:aws:iam::111122223333:role/OtherRole"};
+    ManagedKnowledgeBaseDefinition other = {name: "kb", serviceRoleArn: "arn:aws:iam::111122223333:role/OtherRole"};
     test:assertNotEquals(first, idempotencyToken(createKnowledgeBaseRequestBody(other)));
 
     // ClientToken: min 33, max 256, pattern `[a-zA-Z0-9](-*[a-zA-Z0-9]){0,256}`.

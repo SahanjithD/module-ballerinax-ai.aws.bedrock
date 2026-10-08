@@ -26,8 +26,8 @@ import ballerinax/aws.auth;
 // which back knowledge bases.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html
 
-# AWS credentials for a Bedrock knowledge base.
-public type KnowledgeBaseCredentials auth:AuthConfig;
+# Authentication for a Bedrock knowledge base: AWS credentials only, no API key.
+public type KnowledgeBaseAuthConfig auth:AuthConfig;
 
 // Set on `CreateDataSource` and fixed for the life of the data source.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html
@@ -55,7 +55,7 @@ public enum RerankingModelType {
 }
 
 // The `CUSTOM` direct-ingestion data source created alongside a knowledge base in
-// the find-or-create (`KnowledgeBaseDefinition`) path.
+// the find-or-create (`ManagedKnowledgeBaseDefinition`) path.
 
 # The data source created with a new knowledge base.
 public type DataSourceDefinition record {|
@@ -75,7 +75,8 @@ public type DataSourceDefinition record {|
 
 # Your own embedding model for a new managed knowledge base.
 public type ManagedEmbeddingModel record {|
-    # Embedding model ARN
+    # ARN of the embedding model
+    @display {label: "Embedding Model ARN"}
     string embeddingModelArn;
     # Vector dimensions. Must be 1024
     int dimensions = 1024;
@@ -87,21 +88,25 @@ public type ManagedEmbeddingModel record {|
 // it, no match creates it, more than one is a construction error. `name` must match
 // `([0-9a-zA-Z][_-]?){1,100}`. Leaving `embeddingModel` unset uses Bedrock's
 // service-managed model (no extra cost, chunking fixed at 300 tokens / 20% overlap);
-// setting it is permanent — read `ManagedEmbeddingModel` first.
+// setting it is permanent — read `ManagedEmbeddingModel` first. `serviceRoleArn` is
+// sent as the API's `roleArn`; `kmsKeyArn` as `serverSideEncryptionConfiguration`.
 
 # A managed knowledge base to find or create by name.
-public type KnowledgeBaseDefinition record {|
+public type ManagedKnowledgeBaseDefinition record {|
     # Knowledge base name, also used to find an existing one
     string name;
-    # IAM role Bedrock assumes to manage the knowledge base
-    string roleArn;
     # Knowledge base description
     string description?;
+    # ARN of the IAM role Bedrock uses to manage this knowledge base
+    @display {label: "Service Role ARN"}
+    string serviceRoleArn;
     # The data source created with the knowledge base
     DataSourceDefinition dataSource = {name: "ballerina-custom-source"};
     # Your own embedding model. Defaults to Bedrock's managed model
     ManagedEmbeddingModel embeddingModel?;
-    # KMS key ARN for the vector store. Defaults to an AWS-owned key
+    # ARN of your own AWS KMS key to encrypt the knowledge base's stored data.
+    # Unset uses a key AWS owns and manages
+    @display {label: "KMS Key ARN"}
     string kmsKeyArn?;
     # Seconds to wait for a new knowledge base to become ready
     decimal readyTimeout = 300;

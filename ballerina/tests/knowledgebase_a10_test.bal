@@ -30,7 +30,7 @@ const string A10_KB_ID = "KBA10TEST1";
 const string A10_EXISTING_ID = "KBA10EXIST";
 const string A10_ROLE_ARN = "arn:aws:iam::111122223333:role/service-role/RealKbRole";
 const string A10_KB_NAME = "a10-test-kb";
-final KnowledgeBaseDefinition A10_DEF = {name: A10_KB_NAME, roleArn: A10_ROLE_ARN};
+final ManagedKnowledgeBaseDefinition A10_DEF = {name: A10_KB_NAME, serviceRoleArn: A10_ROLE_ARN};
 
 // Not `isolated`: `KB_TEST_CREDS` (knowledgebase_construction_test.bal) is `final`
 // but not `readonly`, so referencing it from an `isolated function` does not compile

@@ -179,8 +179,8 @@ type KbSpine record {|
 // The shared construction spine: transports -> find-or-create -> data-source
 // resolution -> chunking detection. Every failure surfaces here, before any method
 // is callable.
-isolated function resolveKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
-        aws:EndpointConfig? endpointConfig, string|KnowledgeBaseDefinition knowledgeBase,
+isolated function resolveKbSpine(string providerName, KnowledgeBaseAuthConfig credentials, string region,
+        aws:EndpointConfig? endpointConfig, string|ManagedKnowledgeBaseDefinition knowledgeBase,
         string? dataSourceIdOverride, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig,
         RerankingModelType? rerankingModelType = ())
         returns KbSpine|ai:Error {
@@ -226,7 +226,7 @@ isolated function resolveKbSpine(string providerName, KnowledgeBaseCredentials c
 // Find-or-create.
 // ============================================================================
 
-# Outcome of resolving `string|KnowledgeBaseDefinition` to a concrete knowledge
+# Outcome of resolving `string|ManagedKnowledgeBaseDefinition` to a concrete knowledge
 # base. `createdDataSourceId` is set ONLY when a new knowledge base (and its
 # `CUSTOM` data source) was just created — in every other case (a bare id, or an
 # existing knowledge base found by name) data-source resolution still has to run.
@@ -238,14 +238,14 @@ type KbAttachResult record {|
     string? createdDataSourceId;
 |};
 
-// `string` -> verify and attach (no writes). `KnowledgeBaseDefinition` -> find by
+// `string` -> verify and attach (no writes). `ManagedKnowledgeBaseDefinition` -> find by
 // name; exactly one match attaches, no match creates (knowledge base + its `CUSTOM`
 // data source), more than one match is a construction error — `CreateKnowledgeBase`
 // has no upsert, and while knowledge base NAMES ARE UNIQUE PER ACCOUNT (measured
 // live 2026-09-08: a sequential duplicate-name create is rejected with a 409), a
 // race window at AWS's own layer means more than one can still exist — see A10
 // below. Guessing which one was meant would risk attaching to the wrong one.
-isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string|KnowledgeBaseDefinition knowledgeBase)
+isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string|ManagedKnowledgeBaseDefinition knowledgeBase)
         returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
         map<json> _ = check verifyKnowledgeBaseUsable(controlTransport, knowledgeBase);
@@ -380,7 +380,7 @@ isolated function getKnowledgeBase(BedrockTransport controlTransport, string kbI
 // would mean the knowledge base was already built with the wrong combination and has
 // to be rebuilt. Only checkable on the CREATE path: attaching by id says nothing
 // about how the knowledge base was configured.
-isolated function guardEmbeddingModelAgainstReranker(string|KnowledgeBaseDefinition knowledgeBase,
+isolated function guardEmbeddingModelAgainstReranker(string|ManagedKnowledgeBaseDefinition knowledgeBase,
         RerankingModelType? rerankingModelType) returns ai:Error? {
     if knowledgeBase is string || rerankingModelType != RERANKING_MANAGED {
         return;
@@ -403,7 +403,7 @@ isolated function guardEmbeddingModelAgainstReranker(string|KnowledgeBaseDefinit
 // or embeddingModelConfiguration. When using CUSTOM, both fields are required."
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ManagedKnowledgeBaseConfiguration.html
-isolated function createKnowledgeBaseRequestBody(KnowledgeBaseDefinition def) returns map<json> {
+isolated function createKnowledgeBaseRequestBody(ManagedKnowledgeBaseDefinition def) returns map<json> {
     ManagedEmbeddingModel? embeddingModel = def?.embeddingModel;
     map<json> managedConfig;
     if embeddingModel is ManagedEmbeddingModel {
@@ -426,7 +426,7 @@ isolated function createKnowledgeBaseRequestBody(KnowledgeBaseDefinition def) re
     }
     map<json> body = {
         name: def.name,
-        roleArn: def.roleArn,
+        roleArn: def.serviceRoleArn,
         knowledgeBaseConfiguration: {
             'type: "MANAGED",
             managedKnowledgeBaseConfiguration: managedConfig
@@ -463,7 +463,7 @@ type KbCreateOutcome record {|
 // that has not been observed; more than one: a genuinely concurrent creation, §2b's
 // territory instead, which this function cannot distinguish from here).
 isolated function createKnowledgeBaseRecoveringFromConflict(BedrockTransport controlTransport,
-        KnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
+        ManagedKnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
     map<json> body = createKnowledgeBaseRequestBody(def);
     body["clientToken"] = idempotencyToken(body);
     TransportResponse|ConflictError|ai:Error response =
@@ -538,8 +538,8 @@ isolated function concurrentDuplicateMessage(string name, string[] matches, stri
         // EVERY later `init()` passing a definition with this name fails too — see
         // `nameAmbiguityMessage`. Say so here: this error is where a caller actually
         // is when it happens, and the remedy is not obvious from the symptom.
-        "Until then, every 'init()' passing a 'KnowledgeBaseDefinition' with this name will fail, " +
-        "because the name no longer identifies one knowledge base. 'KnowledgeBaseDefinition' is a " +
+        "Until then, every 'init()' passing a 'ManagedKnowledgeBaseDefinition' with this name will fail, " +
+        "because the name no longer identifies one knowledge base. 'ManagedKnowledgeBaseDefinition' is a " +
         "find-or-create convenience suited to a single instance or a first-time setup; if more than " +
         "one process can start at once, provision the knowledge base once and pass its ID to 'init()' " +
         "instead — that path creates nothing and cannot race.";
@@ -742,7 +742,7 @@ isolated function resolveCustomDataSource(BedrockTransport controlTransport, str
     if candidates.length() == 0 {
         return errorWithDetail(
             string `Knowledge base '${kbId}' has no 'CUSTOM' data source. Add one in the AWS console, or ` +
-            "pass a 'KnowledgeBaseDefinition' so this class creates one.",
+            "pass a 'ManagedKnowledgeBaseDefinition' so this class creates one.",
             "ingest() and deleteByFilter() write through a CUSTOM (direct-ingestion) data source.");
     }
     return error ai:Error(
@@ -1745,9 +1745,9 @@ isolated function idempotencyToken(json canonical) returns string
 
 // A name match attaches to a knowledge base the caller DESCRIBED but did not create.
 // Only the name was ever used to find it, so every other field of the definition —
-// `roleArn`, the embedding model, the KMS key, a self-managed store's
+// `serviceRoleArn`, the embedding model, the KMS key, a self-managed store's
 // `storageConfiguration` — was previously discarded: constructing with the correct
-// name but a `roleArn` from an entirely different account succeeded silently, leaving
+// name but a `serviceRoleArn` from an entirely different account succeeded silently, leaving
 // the real role in effect and giving the caller no way to learn that the definition it
 // passed is not the definition in force.
 //
@@ -1768,7 +1768,8 @@ isolated function assertDefinitionMatches(string kbId, map<json> expectedCreateB
         if expected is () {
             continue;
         }
-        differences.push(...jsonDiffPaths(expected, actual[comparable] ?: (), comparable));
+        string label = comparable == "roleArn" ? "serviceRoleArn" : comparable;
+        differences.push(...jsonDiffPaths(expected, actual[comparable] ?: (), label));
     }
     if differences.length() == 0 {
         return;

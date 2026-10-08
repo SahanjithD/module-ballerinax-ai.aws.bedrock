@@ -22,9 +22,9 @@ import ballerina/test;
 
 // Separate from the model providers' `TEST_CREDS`, which is a `BedrockAuthConfig`
 // and so admits a `BearerToken`. The knowledge base classes take
-// `KnowledgeBaseCredentials` (SigV4 only) because Bedrock API keys do not work on
+// `KnowledgeBaseAuthConfig` (SigV4 only) because Bedrock API keys do not work on
 // the agent planes — passing `TEST_CREDS` here must NOT compile.
-final KnowledgeBaseCredentials KB_TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
+final KnowledgeBaseAuthConfig KB_TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
 
 // ---- ambiguous name: two knowledge bases share it ----
 
@@ -49,7 +49,7 @@ function testAmbiguousKnowledgeBaseNameFailsAtConstruction() returns error? {
     check mockListener.'start();
 
     ManagedKnowledgeBase|ai:Error kb = new (
-        {name: "dup-kb", roleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb"},
+        {name: "dup-kb", serviceRoleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb"},
         KB_TEST_CREDS, "us-east-1", endpoint = {customEndpoint: string `http://localhost:${port}`});
     check mockListener.gracefulStop();
 
@@ -239,14 +239,14 @@ function testVectorKnowledgeBaseIsRefusedAtConstruction() returns error? {
 
 const string TITAN_EMBED_ARN = "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0";
 
-isolated function managedKbConfigOf(KnowledgeBaseDefinition def) returns map<json> {
+isolated function managedKbConfigOf(ManagedKnowledgeBaseDefinition def) returns map<json> {
     map<json> body = createKnowledgeBaseRequestBody(def);
     return <map<json>>(<map<json>>body["knowledgeBaseConfiguration"])["managedKnowledgeBaseConfiguration"];
 }
 
 @test:Config {}
 function testDefaultUsesServiceManagedEmbeddingAndSendsNoArn() {
-    map<json> managed = managedKbConfigOf({name: "kb", roleArn: "arn:aws:iam::1:role/r"});
+    map<json> managed = managedKbConfigOf({name: "kb", serviceRoleArn: "arn:aws:iam::1:role/r"});
     test:assertEquals(managed["embeddingModelType"], "MANAGED");
     // Sending either of these alongside MANAGED is rejected by AWS.
     test:assertFalse(managed.hasKey("embeddingModelArn"));
@@ -257,7 +257,7 @@ function testDefaultUsesServiceManagedEmbeddingAndSendsNoArn() {
 function testCallerSuppliedEmbeddingModelSendsArnAndConfiguration() {
     map<json> managed = managedKbConfigOf({
         name: "kb",
-        roleArn: "arn:aws:iam::1:role/r",
+        serviceRoleArn: "arn:aws:iam::1:role/r",
         embeddingModel: {embeddingModelArn: TITAN_EMBED_ARN}
     });
     test:assertEquals(managed["embeddingModelType"], "CUSTOM");
@@ -271,11 +271,11 @@ function testCallerSuppliedEmbeddingModelSendsArnAndConfiguration() {
 
 @test:Config {}
 function testKmsKeyIsSentOnlyWhenConfigured() {
-    map<json> without = managedKbConfigOf({name: "kb", roleArn: "arn:aws:iam::1:role/r"});
+    map<json> without = managedKbConfigOf({name: "kb", serviceRoleArn: "arn:aws:iam::1:role/r"});
     test:assertFalse(without.hasKey("serverSideEncryptionConfiguration"));
     map<json> with = managedKbConfigOf({
         name: "kb",
-        roleArn: "arn:aws:iam::1:role/r",
+        serviceRoleArn: "arn:aws:iam::1:role/r",
         kmsKeyArn: "arn:aws:kms:us-east-1:1:key/abc"
     });
     map<json> sse = <map<json>>with["serverSideEncryptionConfiguration"];
@@ -286,9 +286,9 @@ function testKmsKeyIsSentOnlyWhenConfigured() {
 
 @test:Config {}
 function testManagedRerankerWithCustomEmbeddingModelIsRefused() {
-    KnowledgeBaseDefinition def = {
+    ManagedKnowledgeBaseDefinition def = {
         name: "kb",
-        roleArn: "arn:aws:iam::1:role/r",
+        serviceRoleArn: "arn:aws:iam::1:role/r",
         embeddingModel: {embeddingModelArn: TITAN_EMBED_ARN}
     };
     // Both choices are permanent at creation time, so this must fail before any I/O —
@@ -303,12 +303,12 @@ function testManagedRerankerWithCustomEmbeddingModelIsRefused() {
 
 @test:Config {}
 function testRerankerGuardAllowsEveryOtherCombination() {
-    KnowledgeBaseDefinition custom = {
+    ManagedKnowledgeBaseDefinition custom = {
         name: "kb",
-        roleArn: "arn:aws:iam::1:role/r",
+        serviceRoleArn: "arn:aws:iam::1:role/r",
         embeddingModel: {embeddingModelArn: TITAN_EMBED_ARN}
     };
-    KnowledgeBaseDefinition managed = {name: "kb", roleArn: "arn:aws:iam::1:role/r"};
+    ManagedKnowledgeBaseDefinition managed = {name: "kb", serviceRoleArn: "arn:aws:iam::1:role/r"};
     test:assertTrue(guardEmbeddingModelAgainstReranker(custom, RERANKING_NONE) is ());
     test:assertTrue(guardEmbeddingModelAgainstReranker(custom, ()) is ());
     test:assertTrue(guardEmbeddingModelAgainstReranker(managed, RERANKING_MANAGED) is ());

@@ -377,7 +377,7 @@ const string TEST_EMBEDDING_ARN = "arn:aws:bedrock:us-east-1::foundation-model/a
 function testCreateVectorKnowledgeBaseBodyShape() {
     SelfManagedKnowledgeBaseDefinition def = {
         name: "my-vector-kb",
-        roleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
+        serviceRoleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
         embeddingModelArn: TEST_EMBEDDING_ARN,
         storageConfiguration: TEST_STORAGE
     };
@@ -406,7 +406,7 @@ function testCreateVectorKnowledgeBaseBodyShape() {
 function testCreateVectorKnowledgeBaseBodyCarriesEmbeddingModelConfiguration() {
     SelfManagedKnowledgeBaseDefinition def = {
         name: "my-vector-kb",
-        roleArn: "arn:aws:iam::123456789012:role/service-role/kb",
+        serviceRoleArn: "arn:aws:iam::123456789012:role/service-role/kb",
         embeddingModelArn: TEST_EMBEDDING_ARN,
         embeddingModel: {dimensions: 1024, embeddingDataType: EMBEDDING_BINARY},
         storageConfiguration: TEST_STORAGE,

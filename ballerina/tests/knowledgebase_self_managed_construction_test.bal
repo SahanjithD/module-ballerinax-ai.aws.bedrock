@@ -217,7 +217,7 @@ function testFindOrCreateSendsVectorBodiesOnTheWire() returns error? {
 
     SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
-        roleArn: VEC_ROLE_ARN,
+        serviceRoleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE
     };
@@ -253,7 +253,7 @@ function testFindOrCreateSendsVectorBodiesOnTheWire() returns error? {
 function testInvalidS3VectorsStorageFailsBeforeAnyRequest() returns error? {
     SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
-        roleArn: VEC_ROLE_ARN,
+        serviceRoleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         // Neither `indexArn` nor `vectorBucketArn` + `indexName`.
         storageConfiguration: <S3VectorsStorage>{
@@ -280,7 +280,7 @@ function testInvalidS3VectorsStorageFailsBeforeAnyRequest() returns error? {
 function testDataSourceValidationIsWiredIntoConstruction() returns error? {
     SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
-        roleArn: VEC_ROLE_ARN,
+        serviceRoleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE,
         dataSource: {name: "ds", maxTokens: 0}
@@ -299,7 +299,7 @@ function testDataSourceValidationIsWiredIntoConstruction() returns error? {
 function testUnsupportedChunkingStrategyIsWiredIntoConstruction() returns error? {
     SelfManagedKnowledgeBaseDefinition def = {
         name: "vec-kb",
-        roleArn: VEC_ROLE_ARN,
+        serviceRoleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE,
         dataSource: {name: "ds", chunkingStrategy: HIERARCHICAL}
@@ -352,7 +352,7 @@ function testAmbiguousVectorKnowledgeBaseNameFailsAtConstruction() returns error
 
     SelfManagedKnowledgeBaseDefinition def = {
         name: "dup-vec-kb",
-        roleArn: VEC_ROLE_ARN,
+        serviceRoleArn: VEC_ROLE_ARN,
         embeddingModelArn: VEC_EMBEDDING_ARN,
         storageConfiguration: VEC_TEST_STORAGE
     };

@@ -249,7 +249,7 @@ isolated function createVectorKnowledgeBaseRequestBody(SelfManagedKnowledgeBaseD
     }
     map<json> body = {
         name: def.name,
-        roleArn: def.roleArn,
+        roleArn: def.serviceRoleArn,
         knowledgeBaseConfiguration: {
             'type: "VECTOR",
             vectorKnowledgeBaseConfiguration: vectorConfig
@@ -540,7 +540,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 // Everything the spine needs beyond the resource itself is read off `config` here
 // rather than being passed alongside it — one source of truth, so a future field
 // cannot be wired at one call site and forgotten at another.
-isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseCredentials credentials, string region,
+isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthConfig credentials, string region,
         aws:EndpointConfig? endpointConfig, string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
         SelfManagedKnowledgeBaseConfig config)
         returns KbSpine|ai:Error {

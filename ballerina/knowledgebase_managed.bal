@@ -19,7 +19,7 @@ import ballerinax/aws;
 // A Bedrock managed knowledge base (`KnowledgeBaseConfiguration.type = MANAGED` —
 // Bedrock owns the vector store) exposed through `ai:KnowledgeBase`.
 //
-// Pass an existing knowledge base id to attach to it, or a `KnowledgeBaseDefinition`
+// Pass an existing knowledge base id to attach to it, or a `ManagedKnowledgeBaseDefinition`
 // to find-or-create one by name. `ingest()`/`retrieve()`/`deleteByFilter()` need the
 // knowledge base to have a `CUSTOM` (direct-ingestion) data source; a definition
 // creates one, and attaching by id fails construction, naming why, if it lacks one.
@@ -41,26 +41,26 @@ public distinct isolated client class ManagedKnowledgeBase {
     private final int? numberOfResults;
     private final RerankingModelType? rerankingModelType;
 
-    // `credentials` is SigV4 only — Bedrock API keys are not accepted on the agent
+    // `auth` is SigV4 only — Bedrock API keys are not accepted on the agent
     // planes. `endpoint` is derived from the region when `()`, which is correct in every
     // partition; a `customEndpoint` is a GLOBAL override with the same semantics as the
     // AWS SDK's `AWS_ENDPOINT_URL`, applying to every service this client talks to.
 
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
-    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
+    # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + config - Data source, chunking, retrieval and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Knowledge Base"} string|KnowledgeBaseDefinition knowledgeBase,
-            @display {label: "AWS Credentials"} KnowledgeBaseCredentials credentials,
+            @display {label: "Knowledge Base"} string|ManagedKnowledgeBaseDefinition knowledgeBase,
+            @display {label: "Authentication"} KnowledgeBaseAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *ManagedKnowledgeBaseConfig config)
             returns ai:Error? {
         check validateManagedRetrievalConfig(config);
-        KbSpine spine = check resolveKbSpine(MANAGED_KB_PROVIDER, credentials, region,
+        KbSpine spine = check resolveKbSpine(MANAGED_KB_PROVIDER, auth, region,
             endpoint, knowledgeBase, config?.dataSourceId, config?.httpConfig, config?.retryConfig,
             config?.rerankingModelType);
         self.controlTransport = spine.controlTransport;

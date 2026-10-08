@@ -190,7 +190,7 @@ final ai:ModelProvider claude =
 > Bedrock and Amazon Bedrock Runtime actions" and cannot be used with *"Agents for Amazon Bedrock or
 > Agents for Amazon Bedrock Runtime API operations"* — and both knowledge base planes
 > (`bedrock-agent`, `bedrock-agent-runtime`) are exactly those. `ManagedKnowledgeBase`
-> therefore takes `KnowledgeBaseCredentials` (SigV4 only), so a bearer token is rejected at
+> therefore takes `KnowledgeBaseAuthConfig` (SigV4 only), so a bearer token is rejected at
 > **compile time** rather than becoming an opaque runtime 403.
 
 ### Step 3: Invoke chat completion
@@ -590,14 +590,14 @@ ai:QueryMatch[] matches = check kb.retrieve("What is our refund policy?", 5);
 construction fails, naming why, if it does not have one; add one in the console, or use the
 find-or-create path below.
 
-**Create and own it end to end** — pass a `KnowledgeBaseDefinition`. This class creates the knowledge
+**Create and own it end to end** — pass a `ManagedKnowledgeBaseDefinition`. This class creates the knowledge
 base and a `CUSTOM` data source, and every document flows through `ingest()`:
 
 ```ballerina
 ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase(
     {
         name: "support-docs",
-        roleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb-execution-role"
+        serviceRoleArn: "arn:aws:iam::123456789012:role/service-role/bedrock-kb-execution-role"
     },
     creds, "us-east-1");
 
@@ -612,10 +612,10 @@ the order of a minute, since a customer-owned store has to be provisioned; both 
 and pass it as a `string` instead.
 
 > **A name match is VERIFIED against the rest of the definition.** The name is only the lookup key.
-> On a match, `init` compares the definition's `roleArn`, embedding-model configuration, KMS key and
+> On a match, `init` compares the definition's `serviceRoleArn`, embedding-model configuration, KMS key and
 > (for a self-managed knowledge base) `storageConfiguration` against what the knowledge base actually
 > has, and fails construction naming each field that differs. Otherwise a definition carrying, say, a
-> `roleArn` from an entirely different account would attach silently and leave the real role in
+> `serviceRoleArn` from an entirely different account would attach silently and leave the real role in
 > effect, with no way for the caller to learn the definition it passed is not the one in force. Pass
 > the knowledge base id directly to attach to it as it is. `description` is deliberately not compared
 > — it is a mutable, non-behavioural label.
@@ -644,14 +644,14 @@ and pass it as a `string` instead.
 >
 > **The duplicate persists, and it blocks later startups too.** This is an accepted limitation, not a
 > transient warning, so it is worth being precise about what it costs. Once two knowledge bases share
-> a name, *every* subsequent `init()` that passes a `KnowledgeBaseDefinition` with that name also
+> a name, *every* subsequent `init()` that passes a `ManagedKnowledgeBaseDefinition` with that name also
 > fails — not just the two that raced — because the name no longer identifies one knowledge base and
 > construction refuses to guess which was meant. Startup stays broken until someone deletes one, using
 > the command the error names. The module could instead pick a winner silently, but that trades a
 > visible, one-command fix for an orphan quietly consuming a knowledge base quota slot that nobody
 > is told about.
 >
-> **So pass an id in anything that starts more than once.** `KnowledgeBaseDefinition` is a
+> **So pass an id in anything that starts more than once.** `ManagedKnowledgeBaseDefinition` is a
 > find-or-create convenience, and find-or-create is a read-then-write: it suits a single instance, a
 > local run, or a first-time setup. For a service with replicas, a restart loop, or any deployment
 > where two processes can boot at the same moment, provision the knowledge base once — console, CLI,
@@ -662,13 +662,13 @@ and pass it as a `string` instead.
 
 A `CUSTOM` data source's `chunkingStrategy` is fixed for its lifetime. **`FIXED_SIZE`** (the default
 when this class creates one) means Bedrock chunks server-side — pass `chunkingStrategy: NONE` on
-`KnowledgeBaseDefinition.dataSource` to chunk client-side with an `ai:Chunker` instead:
+`ManagedKnowledgeBaseDefinition.dataSource` to chunk client-side with an `ai:Chunker` instead:
 
 ```ballerina
 ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase(
     {
         name: "support-docs",
-        roleArn: "arn:...:role/service-role/bedrock-kb-execution-role",
+        serviceRoleArn: "arn:...:role/service-role/bedrock-kb-execution-role",
         dataSource: {name: "custom-source", chunkingStrategy: bedrock:NONE}
     },
     creds, "us-east-1",
@@ -821,7 +821,7 @@ final bedrock:SelfManagedKnowledgeBase kb = check new ("KB1234ABCD");
 // The VECTOR STORE ITSELF MUST ALREADY EXIST — see the callout below.
 final bedrock:SelfManagedKnowledgeBase kb = check new ({
     name: "support-articles",
-    roleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
+    serviceRoleArn: "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_1",
     embeddingModelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
     storageConfiguration: <bedrock:OpenSearchServerlessStorage>{
         collectionArn: "arn:aws:aoss:us-east-1:123456789012:collection/abcdefghij1234567890",
@@ -879,7 +879,7 @@ authoritative here, so nothing is defaulted.
 
 Same as the managed class: `bedrock:StartIngestionJob` **and**
 `bedrock:IngestKnowledgeBaseDocuments`. Granting the one named in the first `AccessDenied` fails again
-on the other. Separately, the knowledge base's own `roleArn` needs permissions on **your** vector store
+on the other. Separately, the knowledge base's own `serviceRoleArn` needs permissions on **your** vector store
 (`aoss:APIAccessAll`, `es:ESHttp*`, `rds-data:*`, `neptune-graph:*`, `s3vectors:*`, or
 `secretsmanager:GetSecretValue` depending on backend). Those belong to that role, not to this client's
 credentials.
