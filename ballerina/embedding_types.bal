@@ -86,11 +86,13 @@ public type TitanEmbeddingConfig record {|
 
 # Cohere-specific embedding configuration.
 public type CohereEmbeddingConfig record {|
-    // Required on the wire. Defaults to `SEARCH_DOCUMENT` — the ingest path is the
-    // higher-volume one. Construct a second provider with `SEARCH_QUERY` for the
-    // query side.
-    # `SEARCH_DOCUMENT` for the corpus, `SEARCH_QUERY` for queries
-    CohereInputType inputType = SEARCH_DOCUMENT;
+    // Required on the wire. When unset it follows the `ai:EmbeddingProvider` call
+    // pattern: `ai:VectorKnowledgeBase` embeds a retrieval query with `embed()` and
+    // ingests documents with `batchEmbed()`, so `embed()` sends `search_query` and
+    // `batchEmbed()` sends `search_document`. Set it only to override both — e.g. when
+    // ingesting a corpus one document at a time through `embed()`.
+    # Overrides the input type. Unset: `embed` sends `SEARCH_QUERY`, `batchEmbed` sends `SEARCH_DOCUMENT`
+    CohereInputType inputType?;
 
     # How over-long inputs are truncated
     Truncate truncate?;

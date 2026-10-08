@@ -19,9 +19,11 @@ import ballerinax/aws;
 
 const string COHERE_EMBED_PREFIX = "cohere.embed";
 
-// `inputType` is fixed at construction and matters. Embed the corpus with
-// `SEARCH_DOCUMENT` and queries with `SEARCH_QUERY`, using one provider per
-// role — getting it backwards degrades retrieval silently, with no error.
+// `input_type` matters: a corpus embedded as queries (or the reverse) degrades
+// retrieval silently, with no error. Unless the caller fixes it in config, it follows
+// the method — `embed()` is a query, `batchEmbed()` is a corpus — which is exactly how
+// `ai:VectorKnowledgeBase` calls an embedding provider (`retrieve` → `embed`,
+// `ingest` → `batchEmbed`).
 
 # Cohere Embed text embeddings on AWS Bedrock.
 @display {label: "Bedrock Cohere Embedding Provider"}
@@ -31,7 +33,9 @@ public distinct isolated client class CohereEmbeddingProvider {
     private final string wireModelId;
     private final readonly & EmbeddingConverter converter;
     private final BedrockTransport transport;
-    private final readonly & EmbeddingParams params;
+    // One parameter set per method; they differ only in `inputType`.
+    private final readonly & EmbeddingParams queryParams;
+    private final readonly & EmbeddingParams documentParams;
 
     # + model - A Cohere Embed model id, or any id string the endpoint serves
     # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
@@ -58,9 +62,9 @@ public distinct isolated client class CohereEmbeddingProvider {
         self.converter = isV4 ? COHERE_EMBED_V4_CONVERTER : COHERE_EMBED_V3_CONVERTER;
         self.transport = transport;
 
-        // `inputType` always has a value (defaults to SEARCH_DOCUMENT) — Cohere
-        // requires it on every request.
-        EmbeddingParams params = {inputType: config.inputType};
+        // Cohere requires `input_type` on every request; `inputType` is filled in per
+        // method below unless the caller fixed it.
+        EmbeddingParams params = {};
         Truncate? truncate = config?.truncate;
         if truncate is Truncate {
             params.truncate = truncate;
@@ -86,7 +90,13 @@ public distinct isolated client class CohereEmbeddingProvider {
         if additional != () {
             params.additionalModelRequestFields = additional;
         }
-        self.params = params.cloneReadOnly();
+        CohereInputType? inputType = config?.inputType;
+        EmbeddingParams queryParams = params.clone();
+        queryParams.inputType = inputType ?: SEARCH_QUERY;
+        EmbeddingParams documentParams = params.clone();
+        documentParams.inputType = inputType ?: SEARCH_DOCUMENT;
+        self.queryParams = queryParams.cloneReadOnly();
+        self.documentParams = documentParams.cloneReadOnly();
     }
 
     # Converts the given chunk into a vector embedding.
@@ -94,7 +104,7 @@ public distinct isolated client class CohereEmbeddingProvider {
     # + chunk - The chunk to convert; must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embedding vector, or an `ai:Error`
     isolated remote function embed(ai:Chunk chunk) returns ai:Embedding|ai:Error
-        => runEmbed(self.wireModelId, self.converter, self.transport, self.params, chunk);
+        => runEmbed(self.wireModelId, self.converter, self.transport, self.queryParams, chunk);
 
     // Sends up to 96 texts per request (Cohere's `texts` limit).
     # Converts a batch of chunks into vector embeddings, preserving input order.
@@ -102,5 +112,5 @@ public distinct isolated client class CohereEmbeddingProvider {
     # + chunks - The chunks to convert; each must be an `ai:TextChunk` or `ai:TextDocument`
     # + return - The embeddings in input order, or an `ai:Error`
     isolated remote function batchEmbed(ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error
-        => runBatchEmbed(self.wireModelId, self.converter, self.transport, self.params, chunks);
+        => runBatchEmbed(self.wireModelId, self.converter, self.transport, self.documentParams, chunks);
 }
