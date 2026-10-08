@@ -122,6 +122,23 @@ function testResponsesEncodesNormallyWithNoStop() returns error? {
 }
 
 @test:Config {}
+function testResponsesNeverAsksBedrockToStoreTheConversation() returns error? {
+    // `store` defaults to true on the Responses API, which retains input and output
+    // for 30 days. The module resends full history, so every request opts out.
+    map<json> body = check encodeResponses((), [userText("hi")], [], (),
+            {temperature: 0.5, maxTokens: 100}).ensureType();
+    test:assertEquals(body["store"], false);
+}
+
+@test:Config {}
+function testACallerCanStillOptBackIntoStoredResponses() returns error? {
+    // The passthrough is applied after `store`, so it stays the caller's escape hatch.
+    map<json> body = check encodeResponses((), [userText("hi")], [], (),
+            {maxTokens: 100, additionalModelRequestFields: {"store": true}}).ensureType();
+    test:assertEquals(body["store"], true);
+}
+
+@test:Config {}
 function testResponsesReplaysAssistantToolCallAsFunctionCallItem() returns error? {
     // REGRESSION (live 400, 2026-08-03): an assistant tool-call turn was encoded as an
     // empty `output_text`, dropping the `function_call`. The Responses API then rejected

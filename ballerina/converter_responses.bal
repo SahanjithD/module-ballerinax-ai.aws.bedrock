@@ -69,6 +69,13 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     if reasoningEffort is ReasoningEffort {
         body["reasoning"] = {"effort": reasoningEffort};
     }
+    // `store` defaults to TRUE on the Responses API, and AWS then retains the input and
+    // output for 30 days. This module resends the full history every turn, pairs tool
+    // results by `call_id`, and never uses `previous_response_id`, so storing buys
+    // nothing and only retains the caller's data. Set before the passthrough so a
+    // caller who wants stored responses can still send `"store": true`.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+    body["store"] = false;
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
