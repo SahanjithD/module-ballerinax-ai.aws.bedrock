@@ -224,7 +224,7 @@ isolated function selectInvokeConverter(string bareModelId) returns readonly & M
         bareModelId.startsWith("zai.") || bareModelId.startsWith("google.") {
         return INVOKE_OPENAI_CHAT_CONVERTER;
     }
-    return error(string `no InvokeModel converter for '${bareModelId}'; use 'api = CONVERSE'`);
+    return error(string `no InvokeModel converter for '${bareModelId}'; use 'apiType = CONVERSE'`);
 }
 
 // Mistral ids that speak the `prompt`/`outputs` TEXT-completion dialect on
@@ -234,7 +234,7 @@ isolated function selectInvokeConverter(string bareModelId) returns readonly & M
 // two are told apart only by exact id — `mistral-large-2402` is text-completion
 // while `mistral-large-2407` is chat-completion, same family, four months apart.
 // New ids therefore default to chat, and a wrong guess surfaces as a Bedrock
-// `ValidationException` the caller can act on; `api = CONVERSE` is the escape
+// `ValidationException` the caller can act on; `apiType = CONVERSE` is the escape
 // hatch, since Converse is model-agnostic and sidesteps the dialect split entirely.
 //
 // text:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html

@@ -139,6 +139,11 @@ isolated function recordResponse(observe:LlmSpan span, DecodedResponse decoded) 
     }
 }
 
+// A short, actionable error, with the reasoning behind it carried as the cause so a
+// caller who needs it can unwrap it.
+isolated function errorWithDetail(string message, string detail) returns ai:Error
+    => error ai:Error(message, error(detail));
+
 // Assembles the resolved `InferenceParams` once at construction.
 // `additionalModelRequestFields` already carries any vendor extras the facade
 // folded in (Claude `thinking`, Nova `reasoningConfig`, Qwen thinking…).
@@ -203,7 +208,7 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
 // the model's vendor: the Anthropic Messages version header belongs to anything on
 // `/anthropic/v1/messages`, and the guardrail headers belong to InvokeModel and Chat
 // Completions whoever built the model.
-isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, BedrockCredentials creds,
+isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, BedrockAuthConfig creds,
         InferenceParams? params = ()) returns map<string> {
     map<string> headers = {};
     // The OpenAI-compatible Chat Completions path reuses the INVOKEMODEL header
@@ -280,26 +285,26 @@ isolated function validateParamsForRoute(string providerName, ApiFamily api,
     string dialect = converter.dialect;
 
     if params?.stopSequences is string[] && !supports.stopSequences {
-        return error ai:Error(
-            string `${providerName}: 'stopSequences' is not supported on the ${dialect} route — that ` +
-            "dialect has no stop-sequence parameter in its request schema, so the model would run past " +
-            "the text you asked it to stop at and bill you for the tokens. Remove 'stopSequences', or " +
-            "select a CONVERSE or INVOKE model with 'api'.");
+        return errorWithDetail(
+            string `${providerName}: 'stopSequences' is not supported on the ${dialect} API. Remove it, ` +
+            "or use the CONVERSE or INVOKE API.",
+            "That dialect has no stop-sequence parameter in its request schema, so the model would run " +
+            "past the text you asked it to stop at and bill you for the tokens.");
     }
     if params?.thinking is ThinkingConfig && !supports.thinking {
         return error ai:Error(
-            string `${providerName}: 'thinking' is not supported on the ${dialect} route. Remove it, or ` +
-            "select a api that carries it with 'api'.");
+            string `${providerName}: 'thinking' is not supported on the ${dialect} API. Remove it, or ` +
+            "choose an API that carries it with 'apiType'.");
     }
     if params?.effort is Effort && !supports.effort {
         return error ai:Error(
-            string `${providerName}: 'effort' is not supported on the ${dialect} route. Remove it, or ` +
-            "select a api that carries it with 'api'.");
+            string `${providerName}: 'effort' is not supported on the ${dialect} API. Remove it, or ` +
+            "choose an API that carries it with 'apiType'.");
     }
     if params?.reasoningEffort is ReasoningEffort && !supports.reasoningEffort {
         return error ai:Error(
-            string `${providerName}: 'reasoningEffort' is not supported on the ${dialect} route. Remove ` +
-            "it, or select a api that carries it with 'api'.");
+            string `${providerName}: 'reasoningEffort' is not supported on the ${dialect} API. Remove ` +
+            "it, or choose an API that carries it with 'apiType'.");
     }
 
     // `serviceTier`/`latencyOptimized` are a ROUTE-FAMILY capability, not a dialect
@@ -331,13 +336,12 @@ isolated function validateParamsForRoute(string providerName, ApiFamily api,
     // that fails silently if wrong (a tier you are not billed for). Refuse, and point
     // at the passthrough for a caller who knows their model's vocabulary.
     // There is no latency-optimization concept on bedrock-mantle at all.
-    return error ai:Error(
+    return errorWithDetail(
         string `${providerName}: ${string:'join(", ", ...unsupported)} ` +
-        string `${unsupported.length() == 1 ? "is" : "are"} not supported on the ${api} api — ` +
-        "the vendor-compatible surfaces have no Bedrock request-option headers, and they spell service " +
-        "tiers with the VENDOR's value set rather than Bedrock's, so this module will not guess a " +
-        "mapping. Use the CONVERSE or INVOKE api to set them as Bedrock defines them, or send " +
-        "the vendor's own spelling verbatim through 'additionalModelRequestFields'.");
+        string `${unsupported.length() == 1 ? "is" : "are"} not supported on the ${api} API. Use the ` +
+        "CONVERSE or INVOKE API, or send the vendor's own field through 'additionalModelRequestFields'.",
+        "The vendor-compatible APIs have no Bedrock request-option headers, and they spell service " +
+        "tiers with the vendor's value set rather than Bedrock's, so this module will not guess a mapping.");
 }
 
 // Which shapes carry `serviceTier`/`latencyOptimized`: Converse as body fields,
@@ -364,7 +368,7 @@ isolated function apiCarriesRequestOptions(ApiFamily api) returns boolean
 //
 // Only a BearerToken can populate it: with SigV4 credentials there is no api key,
 // and the signature alone must authenticate the request.
-isolated function addNativeApiKeyHeader(map<string> headers, Route route, BedrockCredentials creds) {
+isolated function addNativeApiKeyHeader(map<string> headers, Route route, BedrockAuthConfig creds) {
     if usesApiKeyHeader(route.api) && creds is BearerToken {
         headers["x-api-key"] = creds.apiKey;
     }
@@ -436,20 +440,19 @@ isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiFamily api,
     // adding the field back, or a future Mantle class that forwards one, fails loudly
     // instead of silently sending guardrail headers the endpoint ignores.
     if endpoint == MANTLE {
-        return error ai:Error("Guardrails are not supported on the bedrock-mantle endpoint. Use the " +
-            "matching Runtime*ModelProvider, or apply the standalone ApplyGuardrail API " +
-            "on bedrock-runtime.");
+        return error ai:Error("Guardrails are not supported on bedrock-mantle. Use the matching " +
+            "Runtime*ModelProvider, or call the ApplyGuardrail API.");
     }
     if api == RESPONSES {
-        return error ai:Error("Guardrails do not apply to the Responses API. Use the CONVERSE api " +
-            "to guardrail this model, or apply the standalone ApplyGuardrail API.");
+        return error ai:Error("Guardrails are not supported on the Responses API. Use the CONVERSE " +
+            "API, or call the ApplyGuardrail API.");
     }
     if api == MESSAGES {
-        return error ai:Error("Guardrails are not sent on the Anthropic Messages path: AWS documents " +
-            "guardrail parameters for Converse, InvokeModel and Chat Completions, but not for " +
-            "'/anthropic/v1/messages', so this module will not send them where it cannot confirm " +
-            "they are honoured. Use the CONVERSE or INVOKE api, or apply the standalone " +
-            "ApplyGuardrail API.");
+        return errorWithDetail("Guardrails are not supported on the Anthropic Messages API. Use the " +
+            "CONVERSE or INVOKE API, or call the ApplyGuardrail API.",
+            "AWS documents guardrail parameters for Converse, InvokeModel and Chat Completions, but not " +
+            "for '/anthropic/v1/messages', so this module will not send them where it cannot confirm " +
+            "they are honoured.");
     }
 }
 
@@ -457,7 +460,7 @@ isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiFamily api,
 // converter → transport. Every failure AWS cannot diagnose surfaces here, before any
 // I/O. Returns the resolved route (for header/param assembly), the
 // converter, and the transport.
-isolated function resolveSpine(string providerName, BedrockCredentials credentials,
+isolated function resolveSpine(string providerName, BedrockAuthConfig credentials,
         Route|error resolved, aws:EndpointConfig? endpointConfig,
         http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail)
         returns [Route, readonly & ModelConverter, BedrockTransport]|ai:Error {

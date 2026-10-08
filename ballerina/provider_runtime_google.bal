@@ -49,9 +49,9 @@ public isolated distinct client class RuntimeGoogleModelProvider {
     private final StructuredOutputStyle structuredOutput;
 
     # + model - A Google model id, or any id string the endpoint serves
-    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
+    # + auth - AWS credentials or a Bedrock API key; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
-    # + api - The API family to call. Defaults to `CONVERSE`
+    # + apiType - The Bedrock API to call. Defaults to `CONVERSE`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + maxTokens - Maximum tokens to generate. Pass `()` to omit the field entirely
     # + temperature - Sampling temperature. Unset uses the model's own default
@@ -59,17 +59,17 @@ public isolated distinct client class RuntimeGoogleModelProvider {
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} GoogleRuntimeModel|string model,
-            @display {label: "AWS Credentials"} BedrockCredentials credentials,
+            @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
-            @display {label: "API"} GoogleRuntimeApi api = CONVERSE,
+            @display {label: "API Type"} GoogleRuntimeApi apiType = CONVERSE,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *GoogleRuntimeConfig config)
             returns ai:Error? {
-        Route|error resolved = resolveRuntimeRoute(model, region, api);
+        Route|error resolved = resolveRuntimeRoute(model, region, apiType);
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("RuntimeGoogleModelProvider", credentials, resolved, endpoint,
+            check resolveSpine("RuntimeGoogleModelProvider", auth, resolved, endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
         self.api = route.api;
@@ -84,7 +84,7 @@ public isolated distinct client class RuntimeGoogleModelProvider {
         check validateParamsForRoute("RuntimeGoogleModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
-                credentials, resolvedParams).cloneReadOnly();
+                auth, resolvedParams).cloneReadOnly();
         self.structuredOutput =
             structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
     }

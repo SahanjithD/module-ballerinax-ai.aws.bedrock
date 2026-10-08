@@ -38,20 +38,20 @@ public distinct isolated client class CohereEmbeddingProvider {
     private final readonly & EmbeddingParams documentParams;
 
     # + model - A Cohere Embed model id, or any id string the endpoint serves
-    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
+    # + auth - AWS credentials or a Bedrock API key; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + config - Input type, truncation, vector size and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} CohereEmbeddingModel|string model,
-            @display {label: "AWS Credentials"} BedrockCredentials credentials,
+            @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Embedding Configuration"} *CohereEmbeddingConfig config)
             returns ai:Error? {
         [string, BedrockTransport] [wireModelId, transport] =
-            check resolveEmbeddingSpine("CohereEmbeddingProvider", credentials, model, region, endpoint,
+            check resolveEmbeddingSpine("CohereEmbeddingProvider", auth, model, region, endpoint,
                 COHERE_EMBED_PREFIX, COHERE_EMBED_ENGLISH_V3,
                 config?.httpConfig, config?.retryConfig);
 
@@ -75,10 +75,10 @@ public distinct isolated client class CohereEmbeddingProvider {
             // dropping this would be worse than a 400: the caller would index a
             // corpus at the wrong width and only discover it at query time.
             if !isV4 {
-                return error ai:Error(
-                    string `'dimensions' is not supported by Cohere Embed v3 ('${wireModelId}') — the ` +
-                    string `model has no output-size parameter and always returns 1024-dimension ` +
-                    string `vectors. Use 'cohere.embed-v4:0' if you need a configurable width.`);
+                return errorWithDetail(
+                    string `'dimensions' is not supported by Cohere Embed v3 ('${wireModelId}'). Use ` +
+                    "'cohere.embed-v4:0' for a configurable vector size.",
+                    "Embed v3 has no output-size parameter and always returns 1024-dimension vectors.");
             }
             if dimensions != 256 && dimensions != 512 && dimensions != 1024 && dimensions != 1536 {
                 return error ai:Error(

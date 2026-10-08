@@ -45,7 +45,7 @@ import ballerinax/aws.auth;
 //
 // Resolves eagerly, so a bad profile/role surfaces at construction rather than on the
 // first call. A bearer token bypasses SigV4 and needs no provider at all.
-isolated function resolveCredentials(BedrockCredentials credentials)
+isolated function resolveCredentials(BedrockAuthConfig credentials)
         returns auth:CredentialProvider|BearerToken|ai:Error {
     if credentials is BearerToken {
         return credentials;

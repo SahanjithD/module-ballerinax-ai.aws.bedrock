@@ -41,9 +41,8 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     string[]? configuredStops = params.stopSequences;
     if stop is string || (configuredStops is string[] && configuredStops.length() > 0) {
         return error ai:LlmInvalidGenerationError(
-            "Stop sequences are not supported on the bedrock-mantle Responses route: the OpenAI " +
-            "Responses API has no stop-sequence parameter. Remove 'stop'/'stopSequences', or use a " +
-            "Converse/Invoke model.");
+            "Stop sequences are not supported on the OpenAI Responses API, which has no stop-sequence " +
+            "parameter. Remove 'stop'/'stopSequences', or use the CONVERSE or INVOKE API.");
     }
 
     map<json> body = {"input": input};

@@ -26,7 +26,7 @@ import ballerinax/aws;
 // normalization still applies — Cohere Embed v4 is offered cross-region, so
 // `us.cohere.embed-v4` must strip for lookup and restore on the wire.
 // Returns the wire model id and the transport.
-isolated function resolveEmbeddingSpine(string providerName, BedrockCredentials credentials,
+isolated function resolveEmbeddingSpine(string providerName, BedrockAuthConfig credentials,
         string model, string region, aws:EndpointConfig? endpointConfig, string familyPrefix,
         string exampleId, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig)
         returns [string, BedrockTransport]|ai:Error {

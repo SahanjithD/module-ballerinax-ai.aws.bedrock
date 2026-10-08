@@ -29,11 +29,13 @@ public type BearerToken record {|
     string apiKey;
 |};
 
-# The credential union accepted by every provider. `auth:AuthConfig` covers static
-# keys, assume-role, EKS IRSA, SSO, named profiles and `credential_process`; its
-# default, `auth:DEFAULT_CREDENTIALS`, walks the full AWS credential chain so
-# nothing needs configuring on EC2, ECS, EKS or Lambda.
-public type BedrockCredentials auth:AuthConfig|BearerToken;
+// `auth:AuthConfig` covers static keys, assume-role, EKS IRSA, SSO, named profiles and
+// `credential_process`; its default, `auth:DEFAULT_CREDENTIALS`, walks the full AWS
+// credential chain so nothing needs configuring on EC2, ECS, EKS or Lambda. Named
+// `...AuthConfig` rather than `...Credentials` because it also takes an API key.
+
+# Authentication for the model and embedding providers: AWS credentials or a Bedrock API key.
+public type BedrockAuthConfig auth:AuthConfig|BearerToken;
 
 // ============================================================================
 // Guardrails / retry.

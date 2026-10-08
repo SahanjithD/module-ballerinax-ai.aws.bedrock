@@ -17,7 +17,7 @@ import ballerina/test;
 
 // Construction-error tests. `init` fails before any I/O.
 
-final BedrockCredentials TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
+final BedrockAuthConfig TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
 
 // ---------------------------------------------------------------------------
 // Guardrails. The endpoint is now fixed by the CLASS, so `guardrail` does not even
@@ -155,7 +155,7 @@ function testConverseHappyPathConstructsWithoutError() returns error? {
 
 @test:Config {}
 function testBearerTokenCredentialsConstruct() returns error? {
-    BedrockCredentials bearer = {apiKey: "bedrock-api-key"};
+    BedrockAuthConfig bearer = {apiKey: "bedrock-api-key"};
     RuntimeAnthropicModelProvider provider =
         check new ("anthropic.claude-sonnet-4-6", bearer, "us-east-1");
     test:assertTrue(provider is RuntimeAnthropicModelProvider);

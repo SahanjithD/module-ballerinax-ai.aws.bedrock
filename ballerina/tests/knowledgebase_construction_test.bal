@@ -20,7 +20,7 @@ import ballerina/test;
 // stubbed bedrock-agent on its own local listener: an ambiguous knowledge base
 // name, a knowledge base with no CUSTOM data source, and one with several.
 
-// Separate from the model providers' `TEST_CREDS`, which is a `BedrockCredentials`
+// Separate from the model providers' `TEST_CREDS`, which is a `BedrockAuthConfig`
 // and so admits a `BearerToken`. The knowledge base classes take
 // `KnowledgeBaseCredentials` (SigV4 only) because Bedrock API keys do not work on
 // the agent planes — passing `TEST_CREDS` here must NOT compile.

@@ -36,20 +36,20 @@ public distinct isolated client class TitanEmbeddingProvider {
     private final readonly & EmbeddingParams params;
 
     # + model - A Titan embedding model id, or any id string the endpoint serves
-    # + credentials - AWS credentials, or `auth:DEFAULT_CREDENTIALS` for the default chain
+    # + auth - AWS credentials or a Bedrock API key; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + config - Vector size, normalization and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Model"} TitanEmbeddingModel|string model,
-            @display {label: "AWS Credentials"} BedrockCredentials credentials,
+            @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Embedding Configuration"} *TitanEmbeddingConfig config)
             returns ai:Error? {
         [string, BedrockTransport] [wireModelId, transport] =
-            check resolveEmbeddingSpine("TitanEmbeddingProvider", credentials, model, region, endpoint,
+            check resolveEmbeddingSpine("TitanEmbeddingProvider", auth, model, region, endpoint,
                 TITAN_EMBED_PREFIX, TITAN_EMBED_TEXT_V2,
                 config?.httpConfig, config?.retryConfig);
 

@@ -483,7 +483,7 @@ isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect,
     foreach ResolvedMessage m in messages {
         if m is ResolvedUserMessage && hasImage(m.parts) {
             return error ai:Error(string `Image input is not supported on ${dialect}. ` +
-                "Use 'api = CONVERSE', or an Anthropic model — both accept images.");
+                "Use 'apiType = CONVERSE', or an Anthropic model — both accept images.");
         }
     }
 }

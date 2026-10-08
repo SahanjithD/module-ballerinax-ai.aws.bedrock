@@ -61,7 +61,7 @@ configurable boolean liveFipsEnabled = false;
 configurable boolean liveMantleEnabled = false;
 
 // Skips the whole suite when nothing is configured.
-function liveCredentials() returns BedrockCredentials? {
+function liveCredentials() returns BedrockAuthConfig? {
     if liveAccessKeyId == "" || liveSecretAccessKey == "" {
         return ();
     }
@@ -75,7 +75,7 @@ function liveCredentials() returns BedrockCredentials? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveConverseViaCrisInferenceProfileArn() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || liveConverseModelArn == "" {
         return;
     }
@@ -93,7 +93,7 @@ function testLiveConverseViaCrisInferenceProfileArn() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveConverseWithABareModelId() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -111,7 +111,7 @@ type LiveFruit record {|
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveGenerateOnConverseReturnsTheRecord() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -128,7 +128,7 @@ function testLiveGenerateOnConverseReturnsTheRecord() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveMantleChat() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveMantleEnabled {
         return;
     }
@@ -142,7 +142,7 @@ function testLiveMantleChat() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveMantleRefusesStructuredOutputButReturnsText() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveMantleEnabled {
         return;
     }
@@ -161,7 +161,7 @@ function testLiveMantleRefusesStructuredOutputButReturnsText() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveTitanEmbedding() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -176,7 +176,7 @@ function testLiveTitanEmbedding() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveCohereEmbeddingPreservesOrderAcrossWindows() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -215,7 +215,7 @@ function testLiveCohereEmbeddingPreservesOrderAcrossWindows() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveFipsEndpointAcceptsASignedRequest() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveFipsEnabled {
         return;
     }
@@ -239,7 +239,7 @@ function testLiveFipsEndpointAcceptsASignedRequest() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveDefaultAndFipsEndpointsAgree() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveFipsEnabled {
         return;
     }
@@ -264,7 +264,7 @@ function testLiveDefaultAndFipsEndpointsAgree() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveConverseEffortIsAccepted() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -296,7 +296,7 @@ function testLiveConverseEffortIsAccepted() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveAdaptiveThinkingOnTheMessagesDialect() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveMantleEnabled {
         return;
     }
@@ -335,7 +335,7 @@ function onePixelPng() returns ai:ImageDocument|error =>
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveConverseAcceptsAnImage() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -353,7 +353,7 @@ function testLiveConverseAcceptsAnImage() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveInvokeAnthropicAcceptsAnImage() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () {
         return;
     }
@@ -371,7 +371,7 @@ function testLiveInvokeAnthropicAcceptsAnImage() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveMantleResponsesImageSupportIsUnknown() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveMantleEnabled || !enableUnverifiedImageRoutes {
         return;
     }
@@ -392,7 +392,7 @@ function testLiveMantleResponsesImageSupportIsUnknown() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveMantleChatCompletionsImageSupportIsUnknown() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !liveMantleEnabled || !enableUnverifiedImageRoutes {
         return;
     }
@@ -411,7 +411,7 @@ function testLiveMantleChatCompletionsImageSupportIsUnknown() returns error? {
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}
 function testLiveInvokeMistralChatImageSupportIsContested() returns error? {
-    BedrockCredentials? creds = liveCredentials();
+    BedrockAuthConfig? creds = liveCredentials();
     if creds is () || !enableUnverifiedImageRoutes {
         return;
     }
@@ -465,7 +465,7 @@ function testLiveAssumeRoleCredentialsCanCallBedrock() returns error? {
     // Cross-account access, which the module could not express at all before this
     // migration. Also the first path where credentials EXPIRE, so it exercises
     // refresh in a way static keys never can.
-    BedrockCredentials assumed = {roleArn: liveAssumeRoleArn, stsRegion: liveRegion};
+    BedrockAuthConfig assumed = {roleArn: liveAssumeRoleArn, stsRegion: liveRegion};
     ai:ModelProvider provider = check new RuntimeAnthropicModelProvider(CLAUDE_SONNET_4_6, assumed, liveRegion);
     ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
     test:assertTrue((response.content ?: "").trim().length() > 0);
