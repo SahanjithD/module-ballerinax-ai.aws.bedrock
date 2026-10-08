@@ -9,8 +9,6 @@ repository = "https://github.com/ballerina-platform/module-ballerinax-ai.aws.bed
 license = ["Apache-2.0"]
 icon = "icon.png"
 
-visibility = "private"
-
 [build-options]
 observabilityIncluded = true
 
