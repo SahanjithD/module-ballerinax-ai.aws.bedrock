@@ -14,19 +14,14 @@
 
 import ballerina/ai;
 
-// Amazon Titan text embeddings.
-// Request:  {"inputText": string, "dimensions": int, "normalize": bool}
-// Response: {"embedding": [floats], "inputTextTokenCount": int}
-// `inputText` is a STRING, not an array — Titan embeds exactly ONE text per call,
-// which is why maxBatchSize is 1 and batchEmbed becomes n sequential calls.
+// Amazon Titan text embeddings: `{"inputText", "dimensions", "normalize"}` in,
+// `{"embedding", "inputTextTokenCount"}` out. One text per call.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 
 // Titan embeds exactly one text per InvokeModel call.
 const int TITAN_MAX_BATCH = 1;
 
-// Titan Embed V1 ids, which have NO `dimensions` parameter (V2 added it). Strips
-// any CRIS geo prefix first, for the same reason as `usesCohereEmbedV4`.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+// Titan Embed V1 has no `dimensions`. Strips a cross-region prefix first.
 isolated function isTitanEmbedV1(string modelId) returns boolean {
     [string, string?] [bareId, _] = normalizeModelId(modelId);
     return bareId.startsWith("amazon.titan-embed-text-v1");

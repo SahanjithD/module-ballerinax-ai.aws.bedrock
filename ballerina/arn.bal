@@ -19,10 +19,8 @@ type ParsedArn record {|
     string partition;
     # e.g. `bedrock`.
     string 'service;
-    # Authoritative region — overrides `config.region`. MAY be empty:
-    # foundation-model ARNs are often written globally, e.g.
-    # `arn:aws:bedrock::123456789012:foundation-model/anthropic.claude-v2`.
-    # `resolveArn` falls back to the caller's region in that case.
+    # The region; empty on global ARNs such as foundation-model ones, where the caller's
+    # region is used.
     string region;
     # The 12-digit AWS account id; may be empty.
     string accountId;
@@ -35,9 +33,7 @@ type ParsedArn record {|
 // `true` if `model` is an ARN.
 isolated function isArn(string model) returns boolean => model.startsWith("arn:");
 
-// Parses a Bedrock ARN into its segments (pure). The first five `:`
-// segments are structural; everything after the fifth colon is the resource,
-// which itself uses `/` (or, rarely, `:`) between type and id.
+// Splits an ARN: five `:` segments, then the resource (`type/id`, or rarely `type:id`).
 isolated function parseArn(string arn) returns ParsedArn|error {
     if !arn.startsWith("arn:") {
         return error(string `not an ARN: ${arn}`);
@@ -54,11 +50,7 @@ isolated function parseArn(string arn) returns ParsedArn|error {
         rest = rest.substring(idx + 1);
         count += 1;
     }
-    // fields = ["arn", partition, service, region, account]; `rest` = resource.
-    // Partition and service are structural — an empty one is a malformed ARN and
-    // must be rejected here rather than producing a nonsense host downstream.
-    // (`region` is legitimately empty on global ARNs; `resolveArn` substitutes the
-    // caller's region for those. `accountId` is empty on AWS-owned ARNs.)
+    // An empty partition or service is malformed. An empty region or account is not.
     if fields[1] == "" {
         return error(string `malformed ARN (empty partition segment): ${arn}`);
     }

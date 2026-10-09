@@ -16,16 +16,9 @@ import ballerina/ai;
 import ballerina/ai.observe;
 import ballerinax/aws;
 
-// A Bedrock managed knowledge base (`KnowledgeBaseConfiguration.type = MANAGED` —
-// Bedrock owns the vector store) exposed through `ai:KnowledgeBase`.
-//
-// Pass an existing knowledge base id to attach to it, or a `ManagedKnowledgeBaseDefinition`
-// to find-or-create one by name. `ingest()`/`retrieve()`/`deleteByFilter()` need the
-// knowledge base to have a `CUSTOM` (direct-ingestion) data source; a definition
-// creates one, and attaching by id fails construction, naming why, if it lacks one.
-//
-// Self-managed (customer vector store, `type = VECTOR`) knowledge bases are not
-// supported here — use `SelfManagedKnowledgeBase` for those.
+// Attach by knowledge base id, or find or create one by name with a definition. The
+// knowledge base needs a `CUSTOM` data source; a definition creates one. Self-managed
+// (VECTOR) knowledge bases belong to `SelfManagedKnowledgeBase`.
 
 # A Bedrock knowledge base whose vector store is managed by Bedrock.
 @display {label: "Bedrock Managed Knowledge Base"}
@@ -41,17 +34,14 @@ public distinct isolated client class ManagedKnowledgeBase {
     private final int? numberOfResults;
     private final RerankingModelType? rerankingModelType;
 
-    // `auth` is SigV4 only — Bedrock API keys are not accepted on the agent
-    // planes. `endpoint` is derived from the region when `()`, which is correct in every
-    // partition; a `customEndpoint` is a GLOBAL override with the same semantics as the
-    // AWS SDK's `AWS_ENDPOINT_URL`, applying to every service this client talks to.
+    // `auth` is SigV4 only: Bedrock API keys are not accepted for knowledge bases. A
+    // `customEndpoint` applies to every service this client calls.
 
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
     # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
-    // `dataSourceId` unset needs exactly one `CUSTOM` data source on the knowledge base.
-    // `chunker` unset follows the data source's `chunkingStrategy`: `ai:AUTO` when it is
-    // `NONE`, else `ai:DISABLE`; an explicit `ai:Chunker` against a server-chunking data
-    // source is a construction error.
+    // An unset `dataSourceId` needs exactly one `CUSTOM` data source. An unset
+    // `chunker` follows the data source: `ai:AUTO` when its strategy is `NONE`, else
+    // `ai:DISABLE`. A chunker against a data source that chunks itself is refused.
 
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset
@@ -84,17 +74,10 @@ public distinct isolated client class ManagedKnowledgeBase {
         self.rerankingModelType = rerankingModelType;
     }
 
-    // Chunks client-side first when the data source's `chunkingStrategy` is `NONE`
-    // (detected at construction — see the `chunker` parameter of `init`). Blocks until
-    // every document reaches a terminal status or `ingestTimeout` elapses, so a
-    // `retrieve()` immediately afterward sees them.
-    //
-    // Bedrock upserts by document id, and this module derives that id from
-    // `ai:Metadata.id` when the caller sets one. A document that this module chunks
-    // into more than one piece therefore submits its chunks as `<id>#0`, `<id>#1`,
-    // ...; a document that does not fan out keeps `<id>` unchanged. Two documents in
-    // one call that resolve to the SAME id are rejected rather than silently
-    // overwriting each other.
+    // Chunks client-side when the data source does not chunk, then waits until every
+    // document is indexed or `ingestTimeout` passes. Document ids come from
+    // `ai:Metadata.id`; a document split into several chunks submits `<id>#0`,
+    // `<id>#1`, and so on. Two documents with the same id in one call are refused.
 
     # Ingests documents into the knowledge base.
     #
@@ -144,9 +127,8 @@ public distinct isolated client class ManagedKnowledgeBase {
         }
     }
 
-    // Searches across every data source on the knowledge base, not just the `CUSTOM`
-    // one `ingest()` writes to, so results include anything AWS's own connectors synced
-    // in. `maxLimit = -1` is still subject to Bedrock's own relevance cutoff.
+    // Searches every data source on the knowledge base. Bedrock's relevance cut-off
+    // still applies with `maxLimit = -1`.
 
     # Retrieves relevant chunks for the given query.
     #
@@ -207,23 +189,11 @@ public distinct isolated client class ManagedKnowledgeBase {
         return matches;
     }
 
-    // Bedrock has no metadata-based delete, so this enumerates every document on this
-    // class's data source (`ListKnowledgeBaseDocuments`) and runs TWO PAGED
-    // `Retrieve` enumerations — filtered by `filters`, then unfiltered — to classify each
-    // candidate as a confirmed match, genuinely excluded, or indeterminate. See
-    // `resolveDataSourceDeletes` (knowledgebase_common.bal) for the algorithm (A17).
-    //
-    // Cost: two paged `Retrieve` enumerations (at most
-    // `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results), not one to two round trips
-    // per document. A maintenance operation, not something to put on a request path.
-    //
-    // `filters` must contain at least one leaf predicate: a filter set that constrains
-    // nothing matches every document, so "delete everything" has to be explicit.
-    //
-    // Scoped to this class's own data source, the one `ingest()` writes to. Other data
-    // sources on the same knowledge base are never touched: document ids are unique
-    // only within a data source, so a match elsewhere says nothing about a document
-    // here. Deletes that can be made still happen when some documents cannot be reached.
+    // Bedrock has no delete-by-metadata, so this lists the data source's documents and
+    // checks each against the filter through `Retrieve` (see `resolveDataSourceDeletes`).
+    // A maintenance operation, not one for a request path. `filters` must constrain
+    // something, so deleting everything is never an accident. Only this class's data
+    // source is touched.
 
     # Deletes documents that match the given metadata filters.
     #
@@ -233,10 +203,8 @@ public distinct isolated client class ManagedKnowledgeBase {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
         check guardDeleteFilter(userFilter, filters);
 
-        // Scoped to THIS class's data source — the only one `ingest()` writes to, and
-        // the one validated as CUSTOM at construction. Documents on other data sources
-        // of the same knowledge base are never touched: their ids are only unique
-        // within their own data source, and an S3 source re-syncs whatever is deleted.
+        // Only this class's data source: ids are unique per data source, and an S3
+        // source would re-sync anything deleted.
         DeletableDocument[] candidates = check listDeletableDocuments(self.controlTransport,
                 self.knowledgeBaseId, self.dataSourceId, "CUSTOM");
         if candidates.length() == 0 {
@@ -257,11 +225,9 @@ public distinct isolated client class ManagedKnowledgeBase {
 
 }
 
-// Resolves `ManagedKnowledgeBaseConfig.chunker`'s default from the DETECTED
-// data-source chunking strategy — `ai:DISABLE` when Bedrock chunks server-side
-// (every strategy but NONE), `ai:AUTO` when it is NONE. An explicit `ai:Chunker`
-// against a server-chunking data source is a construction error: Bedrock would
-// re-split whatever is submitted, silently overwriting the chunker's own boundaries.
+// The chunker: `ai:DISABLE` when Bedrock chunks, `ai:AUTO` when the strategy is `NONE`.
+// A chunker against a data source that chunks itself is refused, as Bedrock would split
+// the chunks again.
 isolated function resolveChunker(ai:Chunker|ai:AUTO|ai:DISABLE? configured, ChunkingStrategy detected)
         returns ai:Chunker|ai:AUTO|ai:DISABLE|ai:Error {
     boolean serverChunks = detected != NONE;
@@ -277,9 +243,7 @@ isolated function resolveChunker(ai:Chunker|ai:AUTO|ai:DISABLE? configured, Chun
     return configured;
 }
 
-// Duplicated from `ai:VectorKnowledgeBase`'s private `guessChunker`, which is
-// module-private in the `ai` package and so cannot be reused directly — the same
-// duplication the Azure knowledge base precedent carries.
+// A copy of `ai:VectorKnowledgeBase`'s private `guessChunker`.
 isolated function guessChunkerForKb(ai:Document|ai:Chunk doc) returns ai:Chunker {
     string? mimeType = doc.metadata?.mimeType;
     if mimeType == "text/markdown" {
@@ -309,13 +273,8 @@ type KbIngestItem record {|
     int? chunkOrdinal;
 |};
 
-// Client-side chunking, shared by both classes.
-//
-// `chunkOrdinal` is set only where it is NEEDED: on the chunks of a parent that fanned
-// out into more than one. Ballerina's chunkers copy the parent's metadata — `id`
-// included — onto every chunk, and Bedrock upserts by `customDocumentIdentifier.id`,
-// so without a per-chunk id a 20-chunk document submits 20 documents under one id and
-// keeps exactly one. See `documentIdFor`.
+// Client-side chunking for both classes. Chunks of a split document get `<id>#<n>` ids,
+// because chunkers copy the parent's `id` and Bedrock would keep only one of them.
 isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chunk|ai:Document)[] items)
         returns KbIngestItem[]|ai:Error {
     if chunker is ai:DISABLE {
@@ -327,7 +286,7 @@ isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chun
         ai:Chunker chunkerToUse = chunker is ai:Chunker ? chunker : guessChunkerForKb(item);
         ai:Chunk[] chunks = check chunkerToUse.chunk(item);
         if chunks.length() == 1 {
-            // A 1:1 chunking keeps the caller's own id — see `documentIdFor`.
+            // One chunk keeps the caller's id.
             prepared.push({item: chunks[0], chunkOrdinal: ()});
             continue;
         }
@@ -338,10 +297,7 @@ isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chun
     return prepared;
 }
 
-// `Retrieve` REJECTS an empty query: `{"text": ""}`, `{"text": " "}` and an omitted
-// `text` all return 400 "Text input is required." (The service model's
-// `KnowledgeBaseQueryTextString` declares `min: 0`, which the live API contradicts.)
-// Caught here so a trivial caller mistake never costs a signed round trip.
+// `Retrieve` rejects an empty query, so it is refused before sending.
 isolated function guardRetrieveQuery(string query) returns ai:Error? {
     if query.trim().length() == 0 {
         return error ai:Error("'query' must be a non-empty, non-whitespace string — Bedrock's 'Retrieve' " +
@@ -350,19 +306,8 @@ isolated function guardRetrieveQuery(string query) returns ai:Error? {
     return;
 }
 
-// The guard both `deleteByFilter` implementations run before touching anything.
-//
-// A filter set that constrains nothing makes every per-document probe "does this
-// document exist" — every one hits, and the whole knowledge base is deleted.
-// `ai:KnowledgeBase.deleteByFilter` takes filters as a REQUIRED argument, so a caller
-// assembling them from a collection that happened to be empty would get silent total
-// deletion. Refuse instead: "delete everything" must be explicit, never a degenerate
-// case.
-//
-// Both conditions are checked. The nil test catches an empty group; the leaf count
-// answers the question the nil test is really asking — did the caller constrain
-// anything at all? — without depending on how the wire encoder folds nested empty
-// groups. Total deletion is not a case to protect against with one check.
+// A filter that constrains nothing would delete every document, so it is refused.
+// Both an empty group and a filter with no leaves count.
 isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters) returns ai:Error? {
     if userFilter is () || filterLeafCount(filters) == 0 {
         return errorWithDetail(
@@ -374,8 +319,8 @@ isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters
     return;
 }
 
-// The shared tail of `deleteByFilter`: everything that could not be confirmed, in one
-// error, after every delete that COULD be made has been made.
+// Reports, in one error, everything that could not be confirmed, after every possible
+// delete has been made.
 isolated function deleteByFilterOutcome(UnresolvedCandidate[] indeterminate, string[] notDeleted,
         string[] refused = []) returns ai:Error? {
     string[] problems = [];
@@ -384,9 +329,7 @@ isolated function deleteByFilterOutcome(UnresolvedCandidate[] indeterminate, str
         problems.push(string `${notDeleted.length()} document(s) matched the filter but were not confirmed ` +
             string `deleted by 'DeleteKnowledgeBaseDocuments': ${string:'join(", ", ...notDeleted)}`);
     }
-    // A17: a data source refused outright — a store that does not appear to honour
-    // metadata filters — contributes NOTHING to `toDelete`, so it is reported here
-    // rather than folded into `indeterminate`.
+    // A data source refused outright (it ignores filters) is reported on its own.
     if refused.length() > 0 {
         problems.push(string:'join("; ", ...refused));
     }
@@ -397,17 +340,8 @@ isolated function deleteByFilterOutcome(UnresolvedCandidate[] indeterminate, str
         string `deleteByFilter deleted every confirmed match, but: ${string:'join("; ", ...problems)}`);
 }
 
-// A21: one line per CAUSE, not one name per document.
-//
-// Every candidate this call could not decide about used to be listed by id. That set
-// is a property of the KNOWLEDGE BASE, not of the request: a delete of 105 documents
-// that fully succeeded returned an error naming 455 unrelated ones, because those 455
-// carry no metadata this module can pin. An error that always fires and is always
-// enormous is an error callers learn to ignore — and this one sometimes matters.
-//
-// So each cause is reported once, with its count, an explanation a caller can act on,
-// and a bounded sample of ids. Nothing is suppressed: the counts are exact, and a
-// candidate that could not be checked is still declared rather than assumed excluded.
+// One line per cause with a count, a reason and a few ids, rather than every id: the
+// undecidable set belongs to the knowledge base and can be large.
 isolated function unresolvedProblems(UnresolvedCandidate[] unresolved) returns string[] {
     if unresolved.length() == 0 {
         return [];
@@ -447,8 +381,6 @@ isolated function unresolvedCause(UnresolvedReason reason) returns string {
         "unknown; they were left in place";
 }
 
-// At most `KB_REPORTED_ID_SAMPLE` ids, then a count of the remainder. The sample makes
-// the message diagnosable; the count keeps it readable.
 isolated function sampleOfIds(UnresolvedCandidate[] candidates) returns string {
     string[] shown = [];
     foreach UnresolvedCandidate candidate in candidates {
@@ -462,10 +394,7 @@ isolated function sampleOfIds(UnresolvedCandidate[] candidates) returns string {
     return remainder > 0 ? string `${listed}, and ${remainder} more` : listed;
 }
 
-// Rejects retrieve-time configuration Bedrock would reject, before any I/O. The
-// vector class's `validateVectorRetrievalConfig` is the same bound on the same
-// service-side shape, `KnowledgeBaseVectorSearchConfigurationNumberOfResultsInteger`
-// (min 1, max 100).
+// Refuses a `numberOfResults` outside 1-100 before sending.
 isolated function validateManagedRetrievalConfig(ManagedKnowledgeBaseConfig config) returns ai:Error? {
     int? numberOfResults = config?.numberOfResults;
     if numberOfResults is int && (numberOfResults < 1 || numberOfResults > KB_MAX_RESULTS_PER_CALL) {

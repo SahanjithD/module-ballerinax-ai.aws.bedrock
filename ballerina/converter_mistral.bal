@@ -14,35 +14,23 @@
 
 import ballerina/ai;
 
-// Mistral on the InvokeModel route. Mistral ships TWO mutually
-// incompatible Invoke dialects, and the model id is the only discriminator:
-//
-//   text completion  — `prompt` (a `<s>[INST]…[/INST]` template) → `outputs[].text`
-//                      Mistral 7B Instruct, Mixtral 8X7B, Mistral Large 24.02. No tools.
-//                      https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
-//   chat completion  — `messages`/`tools` → `choices[].message`
-//                      Mistral Large 24.07.
-//                      https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-chat-completion.html
-//                      https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-large-2407.html
-//
-// The chat dialect resembles OpenAI's but is NOT interchangeable with it: the stop
-// reason is `stop_reason` (not `finish_reason`), tools are forced with the bare
-// string `"any"` (not an object naming the tool), and AWS documents no `usage`
-// block at all. Routing Mistral through the OpenAI converter leaves `stopReason` empty
-// and breaks tool forcing, so both dialects get their own converter here.
+// Mistral on InvokeModel has two incompatible formats, told apart only by model id:
+//   text completion: `prompt` -> `outputs[].text`, no tools (7B, Mixtral, Large 24.02)
+//   chat completion: `messages` -> `choices[].message` (Large 24.07)
+// The chat one looks like OpenAI's but differs (`stop_reason`, `tool_choice: "any"`,
+// no usage), so both have their own converter.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-text-completion.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-chat-completion.html
 
 // ============================================================================
 // Chat completion — Mistral Large 24.07.
 // ============================================================================
 
-// Encodes a Mistral chat-completion request body. This dialect DOES carry
-// `system` as a `role: system` message — the AWS page lists `"system"` among the
-// valid roles — so the hoisted system is re-added as the leading message.
+// The system prompt goes in as a `role: system` message, which AWS lists as valid.
 isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
-    // UNVERIFIED and CONTESTED: AWS documents this dialect's `content` as a string,
-    // while Mistral's own API documents image_url chunks. Two first-party sources
-    // disagree, so per the module's ground rules this refuses rather than picking one.
+    // AWS says `content` is a string; Mistral's own API takes images. Refused until
+    // the two agree.
     check rejectImagesIn(messages, "the Mistral chat-completion dialect", true);
     json[] wire = [];
     if system is string {
@@ -55,11 +43,7 @@ isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
     map<json> body = {"messages": wire};
     setMaxTokens(body, params, "max_tokens");
     setTemperature(body, params);
-    // AWS's own page is internally inconsistent here: `stop` is absent from the
-    // chat-completion parameter list, yet the `stop_reason` description refers to
-    // "the stop sequences that you define in the stop request parameter". We emit
-    // it only when the caller asked for one, so the documented parameter set is
-    // sent verbatim by default.
+    // AWS's page does not list `stop` but refers to it, so it is sent only when set.
     string[]? stops = params.stopSequences;
     if stop is string {
         stops = [stop]; // per-call stop overrides configured stopSequences
@@ -128,9 +112,7 @@ isolated function decodeMistralChat(json response) returns DecodedResponse|ai:Er
         return error ai:LlmInvalidResponseError("Mistral chat choice was not an object", choiceResult);
     }
     map<json> choice = choiceResult;
-    // `stop_reason` per the AWS page; fall back to `finish_reason` because the
-    // live API also emits the OpenAI spelling on some ids. stopReason is a module
-    // invariant — it is never left empty.
+    // AWS documents `stop_reason`; some ids return `finish_reason` instead.
     string stopReason = strField(choice, "stop_reason") ?: strField(choice, "finish_reason") ?: "stop";
 
     string text = "";
@@ -185,9 +167,7 @@ isolated function decodeMistralChat(json response) returns DecodedResponse|ai:Er
 // Text completion — Mistral 7B Instruct, Mixtral 8X7B, Mistral Large 24.02.
 // ============================================================================
 
-// Encodes a Mistral text-completion request body. There is no `messages`
-// array on this dialect: the conversation must be flattened into one `prompt`
-// string using Mistral's instruction template.
+// No `messages` here: the conversation becomes one `prompt` in Mistral's template.
 isolated function encodeMistralText(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // Text-only by construction: a single prompt string, no content-part array.
@@ -220,19 +200,9 @@ isolated function encodeMistralText(string? system, ResolvedMessage[] messages,
     return body;
 }
 
-// Renders messages into Mistral's instruction template, per the AWS page:
-//
-//   <s>[INST] What is your favourite condiment? [/INST]
-//   Well, I'm quite partial to a good squeeze of fresh lemon juice.</s>
-//   [INST] Do you have mayonnaise recipes? [/INST]
-//
-// User text sits inside `[INST]…[/INST]`; assistant text sits outside and is
-// closed with `</s>`.
-//
-// NOTE: AWS does not document how `system` maps onto this dialect — the template
-// has no system slot. We prepend it to the first instruction block, which is what
-// Mistral's own chat template does, and it preserves the module invariant that
-// system is never emitted as a `role: system` message.
+// Mistral's instruction template: user text inside `[INST]…[/INST]`, assistant text
+// after it, closed with `</s>`. AWS gives no slot for `system`, so it is prepended to
+// the first instruction, as Mistral's own template does.
 isolated function mistralInstructPrompt(string? system, ResolvedMessage[] messages) returns string {
     // Images are rejected by the caller (`encodeMistralText`): this dialect is a single
     // prompt string with no content-part array to put one in.

@@ -17,15 +17,11 @@ import ballerina/ai.observe;
 import ballerina/http;
 import ballerinax/aws;
 
-// Shared embedding machinery. Batching lives HERE,
-// parameterized by `converter.maxBatchSize`, because the wire limits differ per
-// family (Titan 1, Cohere 96) and no converter can batch alone.
+// Shared embedding code. Batching lives here because the wire limits differ (Titan 1,
+// Cohere 96).
 
-// Builds the embedding spine. There is NO routing ladder:
-// embeddings are InvokeModel-only, so the family is forced to `INVOKE`. CRIS
-// normalization still applies — Cohere Embed v4 is offered cross-region, so
-// `us.cohere.embed-v4` must strip for lookup and restore on the wire.
-// Returns the wire model id and the transport.
+// Embeddings are InvokeModel only. A cross-region prefix is still stripped for lookup,
+// since Cohere Embed v4 has `us.` ids.
 isolated function resolveEmbeddingSpine(string providerName, BedrockAuthConfig credentials,
         string model, string region, aws:EndpointConfig? endpointConfig, string familyPrefix,
         string exampleId, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig)
@@ -68,10 +64,8 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockAuthConfig c
     }
 }
 
-// The shared `batchEmbed` implementation. Windows the texts
-// by `converter.maxBatchSize` (Titan → n windows of 1; Cohere → ceil(n/96)) and
-// reassembles BY INDEX — order is the contract, and index-based reassembly keeps a
-// future concurrent implementation from becoming a correctness change.
+// `batchEmbed`: splits the texts into wire-sized windows and puts the results back in
+// input order.
 isolated function runBatchEmbed(string wireModelId,
         readonly & EmbeddingConverter converter, ModelTransport transport,
         readonly & EmbeddingParams params, ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error {
@@ -150,9 +144,7 @@ isolated function runEmbed(string wireModelId, readonly & EmbeddingConverter con
     return embeddings[0];
 }
 
-// Splits texts into wire-sized windows. One window == one
-// InvokeModel round trip, so this function alone decides the request count:
-// 100 texts → Titan (1) 100 requests; Cohere (96) 2 requests of 96 + 4.
+// Splits texts into wire-sized windows, one request each.
 isolated function partitionTexts(string[] texts, int maxBatchSize) returns string[][] {
     string[][] windows = [];
     int index = 0;

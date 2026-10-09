@@ -12,22 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// typedesc -> JSON schema for generate()'s expected response type.
-// Ported from the reference module module-ballerinax-ai.openai (`to_json_schema.bal`)
-// so this module owns its schema generation, as its siblings do.
-//
-// Resolution order:
-//   1. the `@ai:JsonSchema` annotation ballerina/ai's compiler plugin attaches at
-//      the generate() call site (records),
-//   2. runtime generation in this module's `Native` (arrays, unions, simple types).
-// A type neither can express is an `ai:Error` — never a silently empty schema.
-//
-// The reference carries a THIRD step, a pure-Ballerina fallback gated on `Native`
-// returning nil. That step is not reproduced here because it cannot run: `Native`
-// either returns a schema or raises, and it already covers a strict superset of what
-// the fallback expressed (recursive arrays and unions, versus simple types and
-// simple-member arrays only). Keeping it would mean ~70 lines that read like a
-// safety net while being unreachable.
+// typedesc to JSON schema for generate(), ported from ai.openai's `to_json_schema.bal`.
+// Uses the `@ai:JsonSchema` annotation the `ai` compiler plugin adds for records, else
+// `Native` for arrays, unions and simple types. A type neither covers is an error.
 
 import ballerina/ai;
 import ballerina/jballerina.java;

@@ -62,9 +62,7 @@ public isolated distinct client class RuntimeMistralModelProvider {
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
-        // Params BEFORE headers: `serviceTier`/`latencyOptimized` ride InvokeModel
-        // REQUEST HEADERS, so the header builder has to see them, and the route has to
-        // be able to refuse the ones it cannot carry before any of it is stored.
+        // Parameters first: on InvokeModel some of them are sent as headers.
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier, config?.latencyOptimized, config?.guardrail);
         check validateParamsForRoute("RuntimeMistralModelProvider", route.api, converter, resolvedParams);

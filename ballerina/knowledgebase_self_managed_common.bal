@@ -17,70 +17,33 @@ import ballerina/http;
 import ballerinax/aws;
 import ballerinax/aws.auth;
 
-// The wire layer for `SelfManagedKnowledgeBase`. Deliberately SEPARATE from
-// knowledgebase_common.bal rather than branching inside it on a knowledge base type:
-// the managed class's request bodies and search branch stay untouched, so a change
-// here cannot regress it.
-//
-// Everything type-AGNOSTIC is reused from knowledgebase_common.bal unchanged and is
-// not duplicated here — `guardRegion`, `buildAgentEndpoint`, both `BedrockTransport`
-// constructions, `listKnowledgeBaseIdsByName`, `getKnowledgeBase`,
-// `pollKnowledgeBaseActive`, `failureReasonsOf`, `pollDataSourceAvailable`,
-// `getDataSource`, `listDataSources`, `resolveCustomDataSource`,
-// `effectiveDataSourceType`, `validateResolvedDataSource`, every document operation, the
-// `KB_*` constants, `asMap`/`stringField`/`partitionJson`, plus
-// knowledgebase_convert.bal and knowledgebase_filter.bal in full.
+// The wire layer for `SelfManagedKnowledgeBase`, kept apart from knowledgebase_common.bal
+// so the managed class's request bodies cannot be affected. Everything type-agnostic is
+// reused from that file.
 
-// The document-identity metadata attribute injected by Bedrock, used by
-// `deleteByFilter` to pin a probe to one document.
-//
-// SELF-MANAGED USES A DIFFERENT PREFIX FROM MANAGED. AWS documents the split:
-// "For custom knowledge bases, metadata fields prefixed with `x-amz-bedrock` are
-// reserved by the service. For fully managed knowledge bases, reserved metadata
-// fields use an underscore prefix (for example, `_source_uri`, `_data_source_id`).
-// You cannot override reserved metadata fields in either knowledge base type."
+// The source-uri attribute on a self-managed result. Reserved fields here use the
+// `x-amz-bedrock` prefix, not the managed `_` prefix, so `_source_uri` would match
+// nothing.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-test-config.html
-//
-// So `SOURCE_URI_METADATA_KEY` ("_source_uri", knowledgebase_common.bal) is the
-// MANAGED spelling and reusing it here would silently match nothing — and a
-// `deleteByFilter` that matches nothing deletes nothing, with no error.
-//
-// That page gives the PREFIX rule but not this exact key. The key itself is listed
-// under "Auto-created fields": "`x-amz-bedrock-kb-source-uri`: Original source URI
-// for filtering operations".
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-multimodal-test-and-query.html
-//
-// UNMEASURED: the key name is documented, but the live-API checks behind this
-// module all ran against a MANAGED knowledge base, never a VECTOR one. Two things
-// therefore remain assumptions rather than measurements: that Bedrock populates this
-// attribute for a CUSTOM data source on a self-managed knowledge base, and that the
-// relevance floor `deleteByFilter`'s two-probe disambiguation exists to defeat
-// behaves the same way when the scoring is your vector store's rather than Bedrock's.
 const string VECTOR_SOURCE_URI_METADATA_KEY = "x-amz-bedrock-kb-source-uri";
 
-// The reserved attribute naming the data source a SELF-MANAGED knowledge base result
-// came from — the `x-amz-bedrock` spelling, per the same prefix rule as above. The
-// constant AWS documents for filtering by data source.
+// The data source a self-managed result came from (`x-amz-bedrock` prefix).
 const string VECTOR_DATA_SOURCE_ID_METADATA_KEY = "x-amz-bedrock-kb-data-source-id";
 
-// `FixedSizeChunkingConfigurationMaxTokensInteger` in the `bedrock-agent` service
-// model (botocore `service-2.json`) is `{"min": 1, "max": 8192}`. The API reference
-// documents no maximum, so the service model is the source here.
+// `FixedSizeChunkingConfigurationMaxTokensInteger` max, from the botocore service model
+// (the API reference states none).
 const int MAX_FIXED_SIZE_CHUNK_TOKENS = 8192;
 
 // `VectorSearchBedrockRerankingConfiguration.numberOfRerankedResults`: min 1, max 100.
 const int MAX_RERANKED_RESULTS = 100;
 
 // ============================================================================
-// Pure request-body builders. No transport, so every wire shape below is
-// assertable without AWS.
+// Request-body builders, pure so every wire shape is testable without AWS.
 // ============================================================================
 
-// Encodes a `StorageConfiguration` into the `storageConfiguration` request field.
-//
-// `type` is emitted unconditionally: `API_agent_StorageConfiguration.html` marks it
-// `Required: Yes`, even though the worked example in `knowledge-base-create.html`
-// omits it. The API reference is the shape authority.
+// `type` is always sent: the API reference marks it required.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_StorageConfiguration.html
 isolated function storageConfigurationJson(StorageConfiguration storage) returns json {
     if storage is OpenSearchServerlessStorage {
         return {
@@ -112,8 +75,7 @@ isolated function storageConfigurationJson(StorageConfiguration storage) returns
         };
     }
     if storage is S3VectorsStorage {
-        // Every member is individually optional in the service model; which
-        // combination is valid is enforced by `validateStorageConfiguration`.
+        // Which combination is valid is checked in `validateStorageConfiguration`.
         map<json> s3Vectors = {};
         string? vectorBucketArn = storage?.vectorBucketArn;
         if vectorBucketArn is string {
@@ -218,14 +180,8 @@ isolated function storageConfigurationJson(StorageConfiguration storage) returns
     return {'type: storage.'type, mongoDbAtlasConfiguration: mongo};
 }
 
-// The `CreateKnowledgeBase` request body for a self-managed knowledge base.
-//
-// Differs from the managed body (`createKnowledgeBaseRequestBody`) in exactly two
-// ways: `knowledgeBaseConfiguration.type` is `VECTOR` with a
-// `vectorKnowledgeBaseConfiguration` carrying a REQUIRED `embeddingModelArn` (there
-// is no service-managed embedding model on this path), and `storageConfiguration`
-// is sent at the TOP LEVEL — it is a sibling of `knowledgeBaseConfiguration`, not a
-// child of it.
+// Unlike the managed body: type `VECTOR` with a required `embeddingModelArn`, and
+// `storageConfiguration` at the top level, beside `knowledgeBaseConfiguration`.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CreateKnowledgeBase.html
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_VectorKnowledgeBaseConfiguration.html
 isolated function createVectorKnowledgeBaseRequestBody(SelfManagedKnowledgeBaseDefinition def) returns map<json> {
@@ -241,8 +197,7 @@ isolated function createVectorKnowledgeBaseRequestBody(SelfManagedKnowledgeBaseD
         if embeddingDataType is EmbeddingDataType {
             bedrockEmbedding["embeddingDataType"] = embeddingDataType;
         }
-        // An empty `bedrockEmbeddingModelConfiguration` is meaningless — omit the
-        // whole wrapper rather than sending `{}`.
+        // Leave out an empty wrapper rather than sending `{}`.
         if bedrockEmbedding.length() > 0 {
             vectorConfig["embeddingModelConfiguration"] = {bedrockEmbeddingModelConfiguration: bedrockEmbedding};
         }
@@ -263,22 +218,10 @@ isolated function createVectorKnowledgeBaseRequestBody(SelfManagedKnowledgeBaseD
     return body;
 }
 
-// The `CreateDataSource` request body for a self-managed knowledge base.
-//
-// THE SHAPE MOST LIKELY TO BE GOT WRONG BY COPYING THE MANAGED PATH. A managed
-// knowledge base rejects a bare `{"type": "CUSTOM"}` with "Unsupported data source
-// type for MANAGED knowledge base type." and requires the
-// `MANAGED_KNOWLEDGE_BASE_CONNECTOR` wrapper with the real type nested inside
-// `connectorParameters` (established by calling the live API; not documented). A
-// SELF-MANAGED knowledge base takes the plain, direct form instead — `CUSTOM` is a
-// first-class member of `DataSourceConfiguration.type` and has no sub-configuration
-// object of its own.
+// A self-managed knowledge base takes a plain `CUSTOM` data source (the managed one
+// needs the connector wrapper), and its chunking is configurable because it always
+// brings its own embedding model.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_DataSourceConfiguration.html
-//
-// `vectorIngestionConfiguration` IS sent here, unlike on the managed path where
-// Bedrock rejects `chunkingConfiguration` against a service-managed embedding model.
-// A self-managed knowledge base always brings its own embedding model, so chunking
-// is configurable and `ChunkingStrategy` is genuinely reachable.
 isolated function createVectorDataSourceRequestBody(VectorDataSourceDefinition def) returns map<json>|ai:Error {
     map<json> body = {
         name: def.name,
@@ -294,16 +237,8 @@ isolated function createVectorDataSourceRequestBody(VectorDataSourceDefinition d
     return body;
 }
 
-// `ChunkingStrategy` -> `chunkingConfiguration`.
-//
-// Only `FIXED_SIZE` and `NONE` are reachable: `validateVectorDataSource` rejects the
-// other two before this is ever called, because neither can be emitted correctly
-// from `VectorDataSourceDefinition` as it stands. Their sub-objects carry required
-// members with no documented service-side default —
-// `HierarchicalChunkingConfiguration` requires `levelConfigurations` and
-// `overlapTokens`, `SemanticChunkingConfiguration` requires `maxTokens`,
-// `bufferSize` and `breakpointPercentileThreshold` (per the `bedrock-agent` service
-// model) — so emitting the bare strategy would send an incomplete body.
+// Only `FIXED_SIZE` and `NONE`: the other strategies need settings this record does
+// not have, and `validateVectorDataSource` refuses them.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html
 isolated function vectorChunkingConfigurationJson(VectorDataSourceDefinition def) returns json|ai:Error {
     match def.chunkingStrategy {
@@ -320,30 +255,20 @@ isolated function vectorChunkingConfigurationJson(VectorDataSourceDefinition def
             };
         }
     }
-    // Unreachable by construction — `validateVectorDataSource` rejects HIERARCHICAL
-    // and SEMANTIC before any caller reaches here. Erroring rather than falling
-    // through to the FIXED_SIZE arm means a future caller that forgets the validation
-    // gets a loud failure instead of a silently wrong request body.
+    // Unreachable after validation; an error rather than a wrong body if that changes.
     return error ai:Error(
         string `chunkingStrategy '${def.chunkingStrategy}' cannot be encoded — it must be rejected by ` +
         "'validateVectorDataSource' before reaching the request builder");
 }
 
-// The `vectorSearchConfiguration` branch of `retrievalConfiguration`.
-//
-// NOT interchangeable with the managed class's `managedSearchConfiguration`: this
-// branch has `overrideSearchType` and `implicitFilterConfiguration`, and has NO
-// `rerankingModelType` — reranking is expressed only through `rerankingConfiguration`.
+// The `vectorSearchConfiguration` branch. Reranking goes through
+// `rerankingConfiguration`; `overrideSearchType` is sent only when set, so Bedrock
+// otherwise picks one suited to the store.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_KnowledgeBaseVectorSearchConfiguration.html
-//
-// `overrideSearchType` is emitted ONLY when the caller set it. Defaulting it to
-// `HYBRID` would 400 or silently degrade on most backends; unset means Bedrock picks
-// a strategy suited to the store.
 isolated function vectorSearchConfigJson(json? filter, int numberOfResults, SearchType? overrideSearchType,
         VectorRerankingConfig? reranking) returns json {
     map<json> vectorSearch = {numberOfResults};
-    // `filter is json` would NOT reject nil — `()` is a member of `json` — and would
-    // put `"filter": null` on the wire.
+    // `()` is a `json` value, so `filter is json` would send `"filter": null`.
     if filter !is () {
         vectorSearch["filter"] = filter;
     }
@@ -356,20 +281,10 @@ isolated function vectorSearchConfigJson(json? filter, int numberOfResults, Sear
     return vectorSearch;
 }
 
-// `VectorRerankingConfig` -> `VectorSearchRerankingConfiguration`. `type` is the only
-// required member and `BEDROCK_RERANKING_MODEL` its only valid value.
+// `type` is required and `BEDROCK_RERANKING_MODEL` its only value.
+// `numberOfRerankedResults` is capped at this call's `numberOfResults`, since a small
+// `maxLimit` narrows the search after construction.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_VectorSearchRerankingConfiguration.html
-//
-// B5b: `numberOfRerankedResults` is CLAMPED to the effective `numberOfResults` this
-// call is actually making — not just construction's static config, but the per-call
-// value after `retrieve(maxLimit=...)` has narrowed it (see `retrieveInternal`).
-// `validateVectorRetrievalConfig` (B5a) can only catch the construction-time case:
-// a config with `numberOfResults` left unset (falling back to Bedrock's own default
-// of 5) still reaches the wire with `numberOfRerankedResults` uncapped, and a small
-// per-call `maxLimit` narrows the search further still. Clamping rather than erroring
-// here is deliberate: `maxLimit` is caller intent on ONE call, and erroring would make
-// a construction-time-legal config fail on a small `maxLimit` — a clamp degrades
-// gracefully to "rerank everything the search returned" instead.
 isolated function rerankingConfigJson(VectorRerankingConfig reranking, int numberOfResults) returns json {
     map<json> bedrockReranking = {modelConfiguration: {modelArn: reranking.modelArn}};
     int? numberOfRerankedResults = reranking?.numberOfRerankedResults;
@@ -381,27 +296,12 @@ isolated function rerankingConfigJson(VectorRerankingConfig reranking, int numbe
 }
 
 // ============================================================================
-// Construction-time validation.
-//
-// Everything here is decided from the caller's own configuration or from what
-// `GetKnowledgeBase` already returns, so it costs no extra API call and needs no
-// permission beyond the ones the class already uses.
-//
-// Deliberately NOT validated, because each would require querying the vector store
-// itself — credentials and network reach the calling application does not have,
-// since those permissions belong to the knowledge base's service role and the store
-// is often VPC-private: that the index dimension matches the embedding model, that
-// an OpenSearch index uses `faiss` rather than `nmslib`, that custom metadata fields
-// are `keyword`-typed, and that documents stay inside S3 Vectors' metadata caps.
-// These are covered in the README's pitfalls section instead.
+// Construction checks, from the caller's configuration alone. Checks that would need
+// access to the vector store itself (index dimension, engine, field types) are in the
+// README instead.
 // ============================================================================
 
-// Rejects a data source definition this module cannot encode faithfully, or that
-// Bedrock would reject, before any I/O.
-//
-// Ranges come from the `bedrock-agent` service model's own integer constraints —
-// catching them here turns an opaque Bedrock 400 into a message naming the field and
-// the bound.
+// Refuses a data source definition Bedrock would reject, with the field and its bound.
 isolated function validateVectorDataSource(VectorDataSourceDefinition def) returns ai:Error? {
     if def.chunkingStrategy == HIERARCHICAL || def.chunkingStrategy == SEMANTIC {
         return errorWithDetail(
@@ -417,8 +317,7 @@ isolated function validateVectorDataSource(VectorDataSourceDefinition def) retur
         return error ai:Error(
             string `'maxTokens' must be between 1 and ${MAX_FIXED_SIZE_CHUNK_TOKENS}, got ${def.maxTokens}`);
     }
-    // FixedSizeChunkingConfigurationOverlapPercentageInteger: min 1, max 99 — note
-    // 0 is NOT valid, despite reading like a natural "no overlap".
+    // 0 is not valid.
     if def.overlapPercentage < 1 || def.overlapPercentage > 99 {
         return errorWithDetail(
             string `'overlapPercentage' must be between 1 and 99, got ${def.overlapPercentage}.`,
@@ -428,7 +327,6 @@ isolated function validateVectorDataSource(VectorDataSourceDefinition def) retur
     return;
 }
 
-// Rejects retrieve-time configuration Bedrock would reject, before any I/O.
 # The retrieval settings checked at construction.
 type VectorRetrievalSettings record {|
     # Default number of results per retrieval
@@ -438,13 +336,13 @@ type VectorRetrievalSettings record {|
 |};
 
 isolated function validateVectorRetrievalConfig(VectorRetrievalSettings config) returns ai:Error? {
-    // KnowledgeBaseVectorSearchConfigurationNumberOfResultsInteger: min 1, max 100.
+    // min 1, max 100.
     int? numberOfResults = config?.numberOfResults;
     if numberOfResults is int && (numberOfResults < 1 || numberOfResults > KB_MAX_RESULTS_PER_CALL) {
         return error ai:Error(
             string `'numberOfResults' must be between 1 and ${KB_MAX_RESULTS_PER_CALL}, got ${numberOfResults}`);
     }
-    // VectorSearchBedrockRerankingConfiguration.numberOfRerankedResults: min 1, max 100.
+    // min 1, max 100.
     VectorRerankingConfig? reranking = config?.rerankingConfiguration;
     if reranking is VectorRerankingConfig {
         int? rerankedResults = reranking?.numberOfRerankedResults;
@@ -453,13 +351,8 @@ isolated function validateVectorRetrievalConfig(VectorRetrievalSettings config) 
                 string `'numberOfRerankedResults' must be between 1 and ${MAX_RERANKED_RESULTS}, ` +
                 string `got ${rerankedResults}`);
         }
-        // B5a: asking to rerank more results than the search itself returns is
-        // accepted by the service model's independent bounds (each is checked only
-        // against 1-100) but is nonsensical — Bedrock would rerank at most
-        // `numberOfResults` results regardless of what `numberOfRerankedResults` asks
-        // for. Only checkable when BOTH are set here; a `numberOfResults` left unset
-        // falls back to Bedrock's own default (5) or, per call, `maxLimit` — neither
-        // of which is visible at construction — so 4b clamps the per-call case instead.
+        // Reranking more results than the search returns is meaningless. Only checked
+        // when both are set; the per-call case is capped instead.
         if rerankedResults is int && numberOfResults is int && rerankedResults > numberOfResults {
             return error ai:Error(
                 string `'numberOfRerankedResults' (${rerankedResults}) cannot exceed 'numberOfResults' ` +
@@ -470,13 +363,9 @@ isolated function validateVectorRetrievalConfig(VectorRetrievalSettings config) 
     return;
 }
 
-// Rejects storage configurations Bedrock would reject, before any I/O.
 isolated function validateStorageConfiguration(StorageConfiguration storage) returns ai:Error? {
     if storage is S3VectorsStorage {
-        // All three members are `Required: No` INDIVIDUALLY in the service model,
-        // but a configuration naming no index at all cannot resolve to one. Bedrock
-        // answers this with a generic 400; naming the two valid combinations here is
-        // more useful.
+        // Each member is optional, but one of the two combinations must name an index.
         // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_S3VectorsConfiguration.html
         boolean hasIndexArn = storage?.indexArn is string;
         boolean hasBucketAndName = storage?.vectorBucketArn is string && storage?.indexName is string;
@@ -485,12 +374,7 @@ isolated function validateStorageConfiguration(StorageConfiguration storage) ret
                 "S3 Vectors storage needs either 'indexArn', or both 'vectorBucketArn' and 'indexName'. " +
                 "Neither was set, so there is no vector index to attach to.");
         }
-        // B4: `indexArn` and `vectorBucketArn`/`indexName` are both `Required: No`
-        // individually, so nothing in the service model stops a caller setting
-        // `indexArn` AND a `vectorBucketArn`/`indexName` naming a DIFFERENT index.
-        // `storageConfigurationJson` forwards every member it is given, so Bedrock —
-        // not this module, not the caller — would silently pick one. Refuse the
-        // ambiguity here, naming both, rather than letting the wrong index win quietly.
+        // Both forms naming possibly different indexes would let Bedrock pick one.
         if hasIndexArn && (storage?.vectorBucketArn is string || storage?.indexName is string) {
             string? indexArn = storage?.indexArn;
             string other = storage?.vectorBucketArn is string
@@ -505,17 +389,8 @@ isolated function validateStorageConfiguration(StorageConfiguration storage) ret
     return;
 }
 
-// Both that the knowledge base is `ACTIVE` and that it is actually a `VECTOR` one.
-//
-// The type check mirrors the managed class's guard, in the opposite direction and
-// for the same reason. This class sends the `vectorSearchConfiguration` branch
-// unconditionally and keys `deleteByFilter`'s probe on
-// `x-amz-bedrock-kb-source-uri`; on a MANAGED knowledge base the branch is wrong and
-// the reserved attribute is spelled `_source_uri`, so `retrieve()` and
-// `deleteByFilter()` would both misbehave — the latter silently, by matching nothing.
-// Refuse at construction rather than half-work at runtime.
-// Returns the fetched knowledge base so the attach-by-definition comparison can
-// reuse it rather than issuing a second identical `GetKnowledgeBase`.
+// Checks the knowledge base is ACTIVE and `VECTOR`; a managed one needs the other
+// search branch and reserved-field spelling. Returns it for the definition check.
 isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId)
         returns map<json>|ai:Error {
     map<json> kb = check getKnowledgeBase(controlTransport, kbId);
@@ -526,9 +401,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
             "Wait for it to finish provisioning, or check the AWS console for failure details.");
     }
     string kbType = stringField(asMap(kb["knowledgeBaseConfiguration"] ?: {}), "type") ?: "";
-    // Absent type is tolerated: it is required in the service model, so a missing one
-    // means an unexpected response shape rather than a non-vector knowledge base, and
-    // failing construction over it would be a false positive.
+    // A missing type means an unexpected response shape, not a mismatch.
     if kbType != "" && kbType != "VECTOR" {
         return errorWithDetail(
             string `Knowledge base '${kbId}' is of type '${kbType}'; SelfManagedKnowledgeBase supports only ` +
@@ -540,9 +413,7 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 }
 
 // ============================================================================
-// The construction spine: transports -> find-or-create -> data-source resolution
-// -> chunking detection. Mirrors `resolveKbSpine` step for step; only the two
-// creators and the knowledge base type guard differ.
+// Construction, mirroring `resolveKbSpine`.
 // ============================================================================
 
 isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthConfig credentials, string region,
@@ -558,7 +429,6 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthCon
         }
         Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, endpointConfig);
         Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, endpointConfig);
-        // One provider, both planes.
         auth:CredentialProvider|BearerToken resolved = check resolveCredentials(credentials);
         BedrockTransport controlTransport =
             check new (resolved, region, controlEp, httpConfig, retryConfig, true);
@@ -591,12 +461,7 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthCon
     }
 }
 
-// `string` -> verify and attach (no writes). `SelfManagedKnowledgeBaseDefinition` -> find
-// by name; exactly one match attaches, no match creates, more than one is a
-// construction error. Same reasoning as the managed path: `CreateKnowledgeBase` has
-// no upsert, and while knowledge base names ARE unique per account, AWS's own
-// enforcement has a race window — see A10 (§2a/§2b) below, mirrored from
-// `resolveKnowledgeBase` in knowledgebase_common.bal.
+// An id attaches; a definition is found by name or created, as on the managed path.
 isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
         string|SelfManagedKnowledgeBaseDefinition knowledgeBase) returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
@@ -606,8 +471,7 @@ isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
     string[] candidates = check listKnowledgeBaseIdsByName(controlTransport, knowledgeBase.name);
     if candidates.length() == 1 {
         map<json> existing = check verifyVectorKnowledgeBaseUsable(controlTransport, candidates[0]);
-        // `storageConfiguration` matters even more here than on the managed path: it
-        // names the vector store the caller believes it is reading and writing.
+        // `storageConfiguration` names the vector store the caller thinks it is using.
         check assertDefinitionMatches(candidates[0], createVectorKnowledgeBaseRequestBody(knowledgeBase),
             existing);
         return {knowledgeBaseId: candidates[0], createdDataSourceId: ()};
@@ -615,10 +479,7 @@ isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
     if candidates.length() > 1 {
         return error ai:Error(nameAmbiguityMessage(knowledgeBase.name, candidates));
     }
-    // A10: same two race windows as the managed path (knowledgebase_common.bal) —
-    // §2a (sequential 409, recovered by attaching) and §2b (genuinely concurrent
-    // in-flight creates, detected after this call's own create is ACTIVE and
-    // reported, never silently duplicated or deleted).
+    // Same duplicate-name handling as the managed path.
     KbCreateOutcome created = check createVectorKnowledgeBaseRecoveringFromConflict(controlTransport, knowledgeBase);
     if created.recovered {
         return {knowledgeBaseId: created.knowledgeBaseId, createdDataSourceId: ()};
@@ -630,8 +491,7 @@ isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
     return {knowledgeBaseId: kbId, createdDataSourceId: dsId};
 }
 
-// A10 §2a, vector counterpart of `createKnowledgeBaseRecoveringFromConflict` — same
-// recovery, using the VECTOR create body and `verifyVectorKnowledgeBaseUsable`.
+// The self-managed counterpart of `createKnowledgeBaseRecoveringFromConflict`.
 isolated function createVectorKnowledgeBaseRecoveringFromConflict(BedrockTransport controlTransport,
         SelfManagedKnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
     map<json> body = createVectorKnowledgeBaseRequestBody(def);
@@ -669,10 +529,7 @@ isolated function createVectorCustomDataSource(BedrockTransport controlTransport
     if id is () {
         return error ai:Error("CreateDataSource response carried no 'dataSourceId'");
     }
-    // AWS documents `CreateDataSource` as asynchronous ("the data source status
-    // transitions from CREATING to AVAILABLE"), so the poll is the documented
-    // behaviour rather than dead code, even though the managed path was measured
-    // returning AVAILABLE synchronously.
+    // AWS documents `CreateDataSource` as asynchronous, so poll.
     string status = stringField(dataSource, "status") ?: "";
     if status != "AVAILABLE" {
         check pollDataSourceAvailable(controlTransport, kbId, id, DEFAULT_DATA_SOURCE_READY_TIMEOUT);
@@ -684,9 +541,8 @@ isolated function createVectorCustomDataSource(BedrockTransport controlTransport
 // Retrieval.
 // ============================================================================
 
-// One `Retrieve` round trip on the VECTOR search branch. `filter` is an
-// already-built `RetrievalFilter` JSON value (knowledgebase_filter.bal) or `()` to
-// search unfiltered. Returns the raw `retrievalResults[]` plus a `nextToken`.
+// One `Retrieve` call on the vector search branch. Returns the results and the next
+// page token.
 isolated function callVectorRetrieve(BedrockTransport dataTransport, string kbId, string query, json? filter,
         int numberOfResults, SearchType? overrideSearchType, VectorRerankingConfig? reranking, string? nextToken)
         returns [json[], string?]|ai:Error {
@@ -708,13 +564,8 @@ isolated function callVectorRetrieve(BedrockTransport dataTransport, string kbId
     return [results, stringField(respBody, "nextToken")];
 }
 
-// The VECTOR adapter for `DeleteRetrieveCaller` (knowledgebase_common.bal) — A17's
-// two-enumeration `deleteByFilter` algorithm, on the `vectorSearchConfiguration`
-// branch. Neither reranking nor `overrideSearchType` is applied: reranking imposes
-// its own relevance cut, which is exactly the kind of cutoff the unfiltered
-// (reachability) enumeration exists to see past, and forcing a search type here
-// would make the enumeration's behaviour differ from the `retrieve()` the caller's
-// filter was written against.
+// The self-managed `DeleteRetrieveCaller`: no reranking and no forced search type, so
+// enumeration behaves like the `retrieve()` the filter was written for.
 isolated function vectorDeleteRetrieve(BedrockTransport dataTransport, string kbId, json? filter,
         int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error
     => callVectorRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, numberOfResults, (), (), nextToken);

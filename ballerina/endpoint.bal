@@ -14,39 +14,24 @@
 
 import ballerinax/aws;
 
-// Endpoint construction — host · path · partition · signing name.
-// L2: runs once, at construction. The model-id path segment is
-// URL-encoded HERE (single-encode): structural `/` stay literal, but the model
-// id's `:`/`/` (ARNs, `-v1:0` ids) become `%3A`/`%2F`. This is the WIRE path; the
-// transport double-encodes it for the SigV4 canonical URI (SigV4 non-S3 rule).
+// Endpoint construction: host, path, partition and signing name, once at construction.
+// The model id is single-encoded in the wire path; the transport encodes it again for
+// the SigV4 canonical URI.
 
-// SigV4 signing names, chosen by ENDPOINT rather than by wire shape. Every path on
-// `bedrock-runtime` signs as `bedrock` — including the vendor-native
-// `/openai/v1/*` and `/anthropic/v1/*` paths, per AWS's own curl
-// (`--aws-sigv4 "aws:amz:us-east-1:bedrock"`).
+// Every `bedrock-runtime` path signs as `bedrock`, the OpenAI and Anthropic paths too.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
 const SIGNING_BEDROCK = "bedrock";
-// Mantle signs under its own name, stated verbatim: "Either a SigV4 signature with
-// service name `bedrock-mantle`, or an Amazon Bedrock API key passed in the
-// `x-api-key` header."
+// "SigV4 signature with service name `bedrock-mantle`".
 // https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html
 const SIGNING_BEDROCK_MANTLE = "bedrock-mantle";
 
-// SDK endpoint-metadata service prefixes. Mantle is served from the DUALSTACK
-// suffix family, which is partition-SPECIFIC, not partition-neutral: `api.aws` in
-// the commercial and GovCloud partitions, but `api.aws.ic.gov`, `api.aws.scloud`,
-// `api.amazonwebservices.eu` and `api.amazonwebservices.com.cn` elsewhere.
-// `aws:resolveEndpoint` picks the right one per partition.
+// Mantle's hosts use the partition's dualstack suffix (`api.aws` and others), which
+// `aws:resolveEndpoint` picks.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 const RUNTIME_ENDPOINT_PREFIX = "bedrock-runtime";
 const MANTLE_ENDPOINT_PREFIX = "bedrock-mantle";
 
-// Knowledge-base control/data planes. BOTH sign as SigV4 service `bedrock` — same as
-// Converse/Invoke, NOT their own hostname — per the `signingName` field in both
-// botocore service models (bedrock-agent/2023-06-05 and
-// bedrock-agent-runtime/2023-07-26/service-2.json). The endpoint PREFIX (hostname)
-// and the SIGNING service are two different things in this service family; only the
-// former differs here.
+// Knowledge-base hosts. Both still sign as `bedrock` (botocore `signingName`).
 const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
 const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
 
@@ -63,40 +48,22 @@ type Endpoint record {|
     string signingService;
 |};
 
-// Resolves the origin for a route. A `customEndpoint` in `aws:EndpointConfig`
-// replaces the origin wholesale; otherwise the whole job is deferred to AWS SDK
-// endpoint metadata, which already covers every partition, the FIPS/dualstack
-// variants, per-service exceptions, and a standard-pattern fallback for regions
-// newer than the bundled metadata.
-//
-// `region` comes from the RESOLVED ROUTE, not the raw `region` argument, so an ARN
-// whose region segment overrides `region` still lands correctly. The signing region
-// and signing name are NOT derived from the result — a VPCE, FIPS or gateway host
-// still signs the route's own region/service scope.
+// The origin for a route: a `customEndpoint`, else the AWS SDK endpoint metadata. Uses
+// the route's region, so an ARN's region wins. The signing scope never depends on it.
 isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error {
     boolean mantle = route.endpoint == MANTLE;
     string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
-    // Mantle is served from the dualstack suffix family; without this flag the
-    // metadata falls back to `bedrock-mantle.{region}.amazonaws.com`, which does not
-    // resolve. Verified 2026-09-03 against ballerinax/aws 1.0.2 (identical on 1.0.1).
+    // Mantle is only on the dualstack host; the plain one does not resolve.
     return resolveServiceUrlCore(serviceName, route.region, endpointConfig, mantle);
 }
 
-// The core behind `resolveServiceUrl` and `buildAgentEndpoint`. `forceDualstack` is
-// the Mantle case; a caller-supplied `dualstack` is honoured on top of it.
-//
-// THE SINGLE CHOKE POINT for `dualstack`, which is why the guard lives here rather
-// than in `buildEndpoint`: every host this module dials — model routes, embedding
-// routes, and BOTH knowledge-base agent planes — is built through this function, and
-// only one of the five service names has a dualstack host at all.
+// Every host this module dials is built here, so the dualstack check lives here.
 isolated function resolveServiceUrlCore(string serviceName, string region,
         aws:EndpointConfig? endpointConfig, boolean forceDualstack) returns string|error {
     aws:EndpointConfig config = endpointConfig ?: {};
     string? custom = config?.customEndpoint;
     if custom is string {
-        // A concrete origin (PrivateLink, gateway, LocalStack) passes through
-        // untouched. Note this is a GLOBAL override with the same semantics as the
-        // SDK's `AWS_ENDPOINT_URL`: it applies to every service this client talks to.
+        // Used as given, for every service this client calls, like `AWS_ENDPOINT_URL`.
         // https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html
         return trimTrailingSlash(custom);
     }
@@ -105,29 +72,9 @@ isolated function resolveServiceUrlCore(string serviceName, string region,
             {fips: config.fips, dualstack: forceDualstack || config.dualstack}));
 }
 
-// Only `bedrock-mantle` publishes a dualstack (`.api.aws`) host in this service
-// family. Every other name in it — `bedrock-runtime` (Converse/Invoke and BOTH
-// embedding providers), `bedrock-agent` and `bedrock-agent-runtime` (the two
-// knowledge-base planes), and `bedrock` itself — has no `.api.aws` record at all.
-//
-// DNS-VERIFIED 2026-09-08, three regions each:
-//
-//   bedrock-mantle.{us-east-1,us-west-2}.api.aws          -> A records
-//   bedrock-runtime.{us-east-1,us-west-2,eu-west-1,ap-southeast-2}.api.aws -> NXDOMAIN
-//   bedrock-agent.us-east-1.api.aws                       -> NXDOMAIN
-//   bedrock-agent-runtime.{us-east-1,us-west-2}.api.aws   -> NXDOMAIN
-//   bedrock.us-east-1.api.aws                             -> NXDOMAIN
-//
-// This is the same failure mode as the China-partition and Mantle+FIPS guards above:
-// `aws:resolveEndpoint` is a string builder with a standard-pattern fallback that
-// NEVER fails, so it synthesises the unservable host happily and the mistake only
-// surfaces at call time — as a connection error after a full retry cycle, wearing the
-// same wording as a genuine network outage and naming neither the flag nor the host.
-//
-// `customEndpoint` short-circuits before this, consistent with the other host-shape
-// guards: a concrete origin means there is no derived host to validate. That is also
-// the escape hatch if AWS later publishes a dualstack host this guard does not know
-// about — pass the origin directly rather than waiting for a release.
+// Only `bedrock-mantle` has a dualstack host; the others do not resolve (checked in DNS).
+// `aws:resolveEndpoint` would still build one, which then fails as a confusing
+// connection error. A `customEndpoint` skips this check.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 isolated function guardDualstack(string serviceName, string region, boolean dualstack) returns error? {
     if !dualstack || serviceName == MANTLE_ENDPOINT_PREFIX {
@@ -140,17 +87,11 @@ isolated function guardDualstack(string serviceName, string region, boolean dual
         string `need the dualstack endpoint family, or set 'customEndpoint' to dial a specific origin.`);
 }
 
-// Trailing slash would double up against the route-derived path.
 isolated function trimTrailingSlash(string url) returns string
     => url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
 
-// Amazon Bedrock is not offered in the AWS China partition on ANY endpoint. Three
-// independent sources agree: the `aws-cn` partition carries no `bedrock` service
-// entry in the SDK endpoint metadata, the regional-availability table has no China
-// section, and `bedrock-runtime.cn-north-1.amazonaws.com` does not resolve in DNS.
-// The endpoint resolver will still happily BUILD a host there — it is a string
-// builder with a standard-pattern fallback and never fails — so without this guard a
-// China user sees a bare connection error on their first call, naming nothing.
+// Bedrock is not offered in the China partition. The resolver would still build a
+// host there, which fails only on the first call.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
 isolated function guardBedrockPartition(string partition, string region) returns error? {
     if partition == "aws-cn" {
@@ -160,23 +101,12 @@ isolated function guardBedrockPartition(string partition, string region) returns
     }
 }
 
-// Partitions that can form a `bedrock-mantle` host. HOST-SHAPE only, NOT an
-// availability oracle: within an allowed partition Mantle ships in a SUBSET of
-// regions (`us-gov-east-1` is `bedrock-runtime`-only today) and that subset grows as
-// AWS expands. Encoding the region list here would reject a newly-added Mantle region
-// until our next release — the exact staleness the routing escape hatches exist to
-// avoid — so a well-formed but not-yet-served region is left for AWS to reject at
-// call time with its own diagnosis. (DNS is no oracle either:
-// `bedrock-mantle.us-gov-east-1.api.aws` resolves even though Mantle is not served
-// there.)
-//
-// Reaching the guard in `buildEndpoint` means the caller constructed a
-// `Mantle*ModelProvider` in a region whose partition serves no Mantle host.
+// Partitions that can form a `bedrock-mantle` host. Host shape only: which regions
+// actually serve Mantle is left for AWS to answer, so new regions work.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
 isolated function mantleServedOnPartition(string partition) returns boolean
     => partition == "aws" || partition == "aws-us-gov";
 
-// Extracts the host from an origin for the `Host` header / SigV4 canonical host.
 isolated function hostOf(string baseUrl) returns string {
     string rest = baseUrl;
     foreach string scheme in ["https://", "http://"] {
@@ -189,15 +119,9 @@ isolated function hostOf(string baseUrl) returns string {
     return slash is int ? rest.substring(0, slash) : rest;
 }
 
-// Builds the endpoint for a resolved route. Pure. Fails before any I/O for the
-// host shapes AWS cannot serve: any route in the China partition, and Mantle on a
-// partition or with a FIPS variant that has no such host.
-//
-// A `customEndpoint` replaces the ORIGIN only — the route-derived path is still
-// appended, because that path differs per family (`/model/{id}/converse` vs
-// `/anthropic/v1/messages`) and is not the caller's to choose. It also SKIPS the
-// host-shape guards: those validate a host we are about to derive, and a concrete
-// origin means there is no longer one to validate.
+// The endpoint for a route. Fails before any I/O for hosts AWS cannot serve. A
+// `customEndpoint` replaces only the origin (the path still comes from the route) and
+// skips the host checks.
 isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig = ())
         returns Endpoint|error {
     boolean derived = (endpointConfig?.customEndpoint) !is string;
@@ -207,11 +131,7 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
 
     if route.endpoint == MANTLE {
         if derived && (endpointConfig?.fips ?: false) {
-            // No `bedrock-mantle-fips` host exists; `aws:resolveEndpoint` would
-            // happily synthesise `bedrock-mantle-fips.{region}.api.aws` and fail at
-            // DNS. Name the mistake here instead. Corroborated by the PrivateLink
-            // service-name list, which carries `bedrock-fips` and
-            // `bedrock-runtime-fips` but no `bedrock-mantle-fips`.
+            // There is no `bedrock-mantle-fips` host.
             // https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html
             return error("'fips' is not available on the bedrock-mantle endpoint: there is no " +
                 "bedrock-mantle FIPS host. Use a Runtime*ModelProvider for a " +
@@ -227,7 +147,6 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
         return {
             baseUrl: mantleBase,
             host: hostOf(mantleBase),
-            // Base path is per-model table data; the API family's suffix is derived.
             path: check mantlePathFor(entry.basePath, route.api),
             signingService: SIGNING_BEDROCK_MANTLE
         };
@@ -242,12 +161,8 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
     };
 }
 
-// The `bedrock-runtime` request path for a resolved API family.
-//
-// Converse and InvokeModel address the model in the URL, so their path carries the
-// single-encoded model id. The three vendor-native shapes are FIXED paths — the
-// model is named in the request body instead — and, unlike Mantle, they are uniform
-// across models: there is no `/v1` vs `/openai/v1` split on this endpoint.
+// The `bedrock-runtime` path for an API. Converse and InvokeModel carry the encoded
+// model id; the others are fixed paths with the model in the body.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
 isolated function runtimePath(Route route) returns string|error {
     match route.api {
@@ -273,9 +188,7 @@ isolated function runtimePath(Route route) returns string|error {
     return error(string `no bedrock-runtime path for api '${route.api}'`);
 }
 
-// Whether the resolved API family names the model in the URL rather than the body.
-// Converse and InvokeModel do; the three vendor-native shapes carry `model` in the
-// request body on both endpoints.
+// Whether the API names the model in the URL rather than the body.
 isolated function isPathAddressed(ApiFamily api) returns boolean
     => api == CONVERSE || api == INVOKE;
 
@@ -287,17 +200,8 @@ enum AgentPlane {
     AGENT_DATA
 }
 
-// Builds the endpoint for a knowledge-base agent plane. Unlike `buildEndpoint`, the
-// request PATH is not fixed at construction — a single `BedrockTransport` for a
-// plane serves many paths (`/knowledgebases/`, `/knowledgebases/{id}/retrieve`,
-// `/knowledgebases/{id}/datasources/{id}/documents`, …) — so `path` is left empty
-// and every call site of `BedrockTransport.executeRequest` supplies its own.
-//
-// NOTE both planes resolve from the SAME `aws:EndpointConfig`. That is correct for
-// the derived case — `bedrock-agent` and `bedrock-agent-runtime` are separate
-// service names and get separate hosts — but a `customEndpoint` applies to both, as
-// the SDK's global `AWS_ENDPOINT_URL` does. That suits a mock or a single gateway;
-// a real multi-VPCE deployment needs private DNS instead. See the README.
+// The endpoint for a knowledge-base plane. The path is left empty because one
+// transport serves many paths. A `customEndpoint` applies to both planes.
 isolated function buildAgentEndpoint(AgentPlane plane, string region,
         aws:EndpointConfig? endpointConfig = ()) returns Endpoint|error {
     if (endpointConfig?.customEndpoint) !is string {
@@ -308,7 +212,7 @@ isolated function buildAgentEndpoint(AgentPlane plane, string region,
     return {baseUrl: base, host: hostOf(base), path: "", signingService: SIGNING_BEDROCK};
 }
 
-// RFC 3986 unreserved set — the ONLY characters SigV4 leaves literal.
+// RFC 3986 unreserved characters, the only ones SigV4 leaves as is.
 // https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
 const string RFC3986_UNRESERVED =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
@@ -316,18 +220,8 @@ const string RFC3986_UNRESERVED =
 final readonly & string[] HEX_DIGITS =
     ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
 
-// Percent-encodes one path segment per RFC 3986, which is what SigV4 requires.
-//
-// `url:encode` is NOT a path-segment encoder — it applies
-// `application/x-www-form-urlencoded` rules, which differ from SigV4's on exactly
-// the characters a model id can contain: a space becomes `+` instead of `%20`, and
-// `~` is escaped even though it is unreserved. Since `getCanonicalUri` re-applies
-// this same function to build the signing input, any such character produced a
-// canonical URI AWS could not reconstruct — a `SignatureDoesNotMatch` on every
-// request, with nothing in the message pointing at the encoder.
-//
-// Total by construction: every byte either passes through or becomes `%XX`, so
-// there is no failure mode for a caller to handle.
+// Percent-encodes one path segment per RFC 3986, as SigV4 requires. Not `url:encode`,
+// which encodes a space as `+` and escapes `~`, breaking the signature.
 // https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
 isolated function encodePathSegment(string segment) returns string {
     string encoded = "";
@@ -336,7 +230,7 @@ isolated function encodePathSegment(string segment) returns string {
             encoded += ch;
             continue;
         }
-        // Percent-encode each UTF-8 byte, uppercase hex (SigV4 requires uppercase).
+        // Uppercase hex, as SigV4 requires.
         foreach byte b in ch.toBytes() {
             int value = <int>b;
             encoded += "%" + HEX_DIGITS[value / 16] + HEX_DIGITS[value % 16];

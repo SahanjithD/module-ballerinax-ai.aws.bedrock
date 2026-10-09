@@ -19,11 +19,7 @@ import ballerinax/aws;
 
 const string TITAN_EMBED_PREFIX = "amazon.titan-embed";
 
-// Titan's `inputText` is a single string, so there is no batch input at all —
-// `batchEmbed` of n chunks is n sequential round trips. That is Bedrock's
-// constraint, not ours; for large corpora AWS's own recommendation is an
-// asynchronous batch-inference job, which is outside the `ai:EmbeddingProvider`
-// contract.
+// Titan takes one text per call, so `batchEmbed` of n chunks is n requests.
 
 # Amazon Titan text embeddings on AWS Bedrock.
 @display {label: "Bedrock Titan Embedding Provider"}
@@ -60,11 +56,9 @@ public distinct isolated client class TitanEmbeddingProvider {
         EmbeddingParams params = {};
         int? dimensions = config?.dimensions;
         if dimensions is int {
-            // Fail at construction, not per call. Titan V2
-            // accepts exactly three widths; V1 has no such parameter at all.
+            // At construction. V2 takes three widths; V1 none. The id may carry a
+            // cross-region prefix.
             // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
-            // Normalize first: `wireModelId` may carry a CRIS geo prefix, and a raw
-            // `startsWith` would skip this guard for a prefixed id.
             if isTitanEmbedV1(wireModelId) {
                 return error ai:Error(
                     string `'dimensions' is not supported by Titan Embed V1 ('${wireModelId}'), which ` +

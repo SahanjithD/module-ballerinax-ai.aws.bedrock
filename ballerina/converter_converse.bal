@@ -53,34 +53,23 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
         body["toolConfig"] = {"tools": toolSpecs};
     }
 
-    // ---- passthrough — forwarded verbatim; mandatory for top_k/thinking/reasoning ----
-    // Converse does not model `thinking`, so it rides the passthrough — merged in
-    // rather than overwriting whatever the caller already put there.
+    // ---- passthrough, sent verbatim ----
+    // Converse has no `thinking` field, so it goes in the passthrough, merged with the
+    // caller's.
     AdditionalRequestFields? additionalRequest = params?.additionalModelRequestFields;
     ThinkingConfig? thinking = params?.thinking;
     if thinking is ThinkingConfig {
         additionalRequest = foldRequestFields(additionalRequest, {"thinking": thinkingBody(thinking)});
     }
-    // `effort` rides the passthrough too, not a native `outputConfig` member.
-    //
-    // Two first-party sources disagreed here: botocore models `outputConfig:
-    // {textFormat, effort}` on ConverseRequest, while AWS's adaptive-thinking page
-    // routes it through `additionalModelRequestFields: {"output_config": {"effort":
-    // ...}}`. Live-verified 2026-08-11: the native member 400s on every model tried
-    // (opus-4-8, sonnet-4-6, and — decisively — opus-4-7, which IS on Anthropic's
-    // adaptive-only list, ruling out "wrong model") with "This model doesn't support
-    // the effort field"; the identical value folded into
-    // additionalModelRequestFields.output_config.effort is accepted (opus-4-7,
-    // controlled pair against the same 400). AWS's docs were right; botocore's
-    // modelled member is not honoured on the wire.
+    // `effort` also goes in the passthrough: the native `outputConfig.effort` member is
+    // rejected on the wire (verified live 2026-08-11), as AWS's adaptive-thinking page
+    // implies.
     Effort? effort = params?.effort;
     if effort is Effort {
         additionalRequest = foldRequestFields(additionalRequest, {"output_config": {"effort": effort}});
     }
-    // `reasoning_effort` has no native Converse member either, so it rides the
-    // passthrough down to the model's own parser — which is the vendor's Chat
-    // Completions parser, hence the Chat Completions spelling here and the nested
-    // `reasoning.effort` in the Responses converter.
+    // No Converse field either; the model's own parser reads the Chat Completions
+    // spelling.
     ReasoningEffort? reasoningEffort = params?.reasoningEffort;
     if reasoningEffort is ReasoningEffort {
         additionalRequest = foldRequestFields(additionalRequest, {"reasoning_effort": reasoningEffort});
@@ -91,17 +80,13 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
     }
     ServiceTier? tier = params.serviceTier;
     if tier is ServiceTier {
-        // An OBJECT, not a bare string: the Converse request syntax is
-        // `"serviceTier": { "type": "string" }`. Emitting the string 400s.
+        // An object, not a string.
         // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         body["serviceTier"] = {"type": tier};
     }
     boolean? latencyOptimized = params.latencyOptimized;
     if latencyOptimized == true {
-        // `"performanceConfig": { "latency": "optimized" }` — an object, like
-        // serviceTier. Only `optimized` is worth emitting; `standard` is the default,
-        // so an unset/false flag sends nothing. Support is per model+region.
-        // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        // Only `optimized` is sent; `standard` is the default.
         body["performanceConfig"] = {"latency": "optimized"};
     }
     // Guardrail is a Converse BODY field.

@@ -24,15 +24,8 @@ isolated function toolParameters(ai:ChatCompletionFunctions tool) returns map<js
     return params ?: {"type": "object", "properties": {}};
 }
 
-// Sets `temperature` on a request body ONLY when the caller supplied one.
-//
-// The field cannot be defaulted. Anthropic deprecated sampling parameters on
-// Claude 4.7 and later (Opus 4.7/4.8, Opus 5, Sonnet 5, Fable 5, Mythos 5) and
-// OpenAI's GPT-5.x reasoning models never accepted them: on those models ANY
-// value — including a module default the caller never asked for — is a hard 400
-// (`temperature is deprecated for this model` / `Unsupported parameter`). Omitting
-// the key is the only universally safe behaviour, and it lets each model apply its
-// own default rather than one this module invents.
+// Sets `temperature` only when the caller set it: Claude 4.7+ and the GPT-5.x reasoning
+// models reject any value.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 isolated function setTemperature(map<json> body, InferenceParams params, string key = "temperature") {
     decimal? temperature = params?.temperature;
@@ -41,12 +34,7 @@ isolated function setTemperature(map<json> body, InferenceParams params, string 
     }
 }
 
-// Sets the output-token cap on a request body ONLY when the caller supplied one.
-//
-// `key` differs per dialect — `maxTokens` inside Converse's `inferenceConfig`,
-// `max_completion_tokens` on OpenAI models' chat bodies, `max_tokens` on the
-// Anthropic/Mistral/DeepSeek/other chat bodies, `max_output_tokens` on the Responses
-// API — so it is a parameter rather than a constant here.
+// Sets the output cap only when the caller set it. `key` is the API's own name for it.
 isolated function setMaxTokens(map<json> body, InferenceParams params, string key) {
     int? maxTokens = params?.maxTokens;
     if maxTokens is int {
@@ -66,11 +54,7 @@ isolated function intField(map<json> m, string k) returns int? {
     if v is int {
         return v;
     }
-    // Bedrock sometimes serializes token counts as decimals. `<int>` ROUNDS, so an
-    // integral decimal (`5.0`) converts faithfully but a fractional one (`1.5`)
-    // would silently become `2` — inventing a token count rather than reporting
-    // that the field was unusable. A token count is never fractional, so treat that
-    // as absent.
+    // A fractional token count is treated as absent rather than rounded.
     if v is decimal {
         return v == v.round(0) ? <int>v : ();
     }
@@ -87,16 +71,9 @@ isolated function arrField(map<json> m, string k) returns json[]? {
     return v is json[] ? v : ();
 }
 
-// Reads the InvokeModel guardrail-fired signal out of a response BODY.
-//
-// It is a body field, NOT a response header. The InvokeModel Response Syntax has
-// exactly three headers (contentType, performanceConfigLatency, serviceTier); the
-// `X-Amzn-Bedrock-Guardrail*` headers are REQUEST-only. This module previously read
-// a nonexistent `X-Amzn-Bedrock-GuardrailAction` response header, which meant every
-// Invoke converter except Anthropic's silently reported "no guardrail fired" when one
-// had — a safety signal dropped on 4 of 7 vendors.
+// The InvokeModel guardrail signal: a body field (`amazon-bedrock-guardrailAction`),
+// not a response header.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
-// (Response Syntax + Example 4: `"amazon-bedrock-guardrailAction": "INTERVENED | NONE"`)
 isolated function invokeGuardrailAction(map<json> body) returns GuardrailAction? {
     string? action = strField(body, "amazon-bedrock-guardrailAction");
     if action is () {

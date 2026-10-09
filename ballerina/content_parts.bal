@@ -16,25 +16,11 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/lang.array;
 
-// Multimodal content resolution.
-//
-// An `ai:Prompt` may carry `ai:Document`/`ai:Chunk` insertions, including images.
-// This file flattens a prompt into ordered `ContentPart`s ONCE, before any converter
-// runs, and every dialect then maps those parts onto its own wire shape.
-//
-// WHY A PRE-PASS RATHER THAN WORK INSIDE THE CONVERTERS: resolving an `ai:Url` image
-// requires an HTTP GET. Converters are pure `RequestEncoder` functions that the
-// golden-file tests drive with no network and no credentials, and that property is
-// load-bearing. So all I/O happens here; the per-dialect emitters below are pure.
-//
-// NORMAL FORM IS BYTES + A CONCRETE MIME TYPE, not a data URL and not a URL:
-//   - Converse's `format` is a bare token (`png`), so a data URL would have to be
-//     re-parsed to recover it — a lossy round-trip.
-//   - Converse has no URL member at all, and Anthropic-on-Bedrock accepts base64
-//     only ("On Amazon Bedrock and Google Cloud, only base64-encoded sources are
-//     currently available" — https://platform.claude.com/docs/en/build-with-claude/vision).
-// Bytes+mime is a superset: every dialect's shape derives from it, none of them
-// derive back.
+// Flattens an `ai:Prompt` into ordered parts (text and images) once, before any
+// converter runs. All I/O (fetching image URLs) happens here, so the converters stay
+// pure. Images are kept as bytes plus a MIME type, the one form every API can be built
+// from: Converse has no URL source, and Anthropic on Bedrock takes base64 only.
+// https://platform.claude.com/docs/en/build-with-claude/vision
 
 # One part of a user turn after its `ai:Prompt` has been flattened.
 type ContentPart TextPart|ImagePart;
@@ -70,8 +56,7 @@ type ResolvedUserMessage record {|
 # A chat message ready for a converter: user content resolved to parts, others unchanged.
 type ResolvedMessage ResolvedUserMessage|ai:ChatAssistantMessage|ai:ChatFunctionMessage;
 
-// The only image formats ANY Bedrock dialect accepts. Converse constrains `format`
-// to exactly these four tokens, and Anthropic's `media_type` to their `image/*` form.
+// The only image formats any Bedrock API accepts.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageBlock.html
 final readonly & map<string> MIME_TO_CONVERSE_FORMAT = {
     "image/png": "png",
@@ -87,18 +72,14 @@ const MAX_IMAGE_REDIRECTS = 5;
 // Resolution (does I/O)
 // ---------------------------------------------------------------------------
 
-// Hoists system content (as text) and resolves every user turn to parts.
-// Runs once per chat()/generate(), before the converter.
+// Hoists system content as text and resolves each user turn to parts.
 isolated function resolveMessages(ai:ChatMessage[] messages)
         returns [string?, ResolvedMessage[]]|ai:Error {
     string[] systemParts = [];
     ResolvedMessage[] rest = [];
     foreach ai:ChatMessage m in messages {
         if m is ai:ChatSystemMessage {
-            // System is text-only on EVERY route: Converse's SystemContentBlock is
-            // `text | guardContent | cachePoint`, Anthropic's `system` is a string or
-            // text blocks, and Responses' `instructions` is a string. None has an
-            // image member, so an image here must be named rather than flattened.
+            // No API takes an image in the system prompt, so it is refused.
             systemParts.push(check contentToText(m.content, "a system message"));
         } else if m is ai:ChatUserMessage {
             rest.push({parts: check contentToParts(m.content)});
@@ -110,9 +91,8 @@ isolated function resolveMessages(ai:ChatMessage[] messages)
     return [system, rest];
 }
 
-// Flattens a user turn's content into ordered parts, fetching any image URL.
-// Adjacent text is merged so a prompt with no documents yields exactly one TextPart
-// and every dialect keeps emitting the same wire bytes it does today.
+// A user turn's content as ordered parts. Adjacent text is merged, so a text-only
+// prompt is one part.
 isolated function contentToParts(string|ai:Prompt content) returns ContentPart[]|ai:Error {
     if content is string {
         return content == "" ? [] : [{text: content}];
@@ -133,7 +113,6 @@ isolated function contentToParts(string|ai:Prompt content) returns ContentPart[]
                 check appendDocument(doc, parts);
             }
         } else {
-            // A plain interpolation — unchanged from the previous behaviour.
             text += insertion.toString();
         }
         if i + 1 < strings.length() {
@@ -144,9 +123,7 @@ isolated function contentToParts(string|ai:Prompt content) returns ContentPart[]
     return parts;
 }
 
-// Renders content to plain text, refusing anything that is not text. `sink` names
-// the surface that cannot carry the image, so the error tells the caller where the
-// problem is rather than just that there is one.
+// Content as plain text; an image is refused, naming `sink`.
 isolated function contentToText(string|ai:Prompt content, string sink) returns string|ai:Error {
     ContentPart[] parts = check contentToParts(content);
     string text = "";
@@ -160,9 +137,7 @@ isolated function contentToText(string|ai:Prompt content, string sink) returns s
     return text;
 }
 
-// Appends a document/chunk as a part. Text and image only — Converse does model
-// `document`/`video`/`audio` blocks, so this is a deliberate scope line rather than
-// a Bedrock limitation.
+// Text and images only; other document types are out of scope.
 isolated function appendDocument(ai:Document|ai:Chunk doc, ContentPart[] parts) returns ai:Error? {
     if doc is ai:TextDocument|ai:TextChunk {
         string text = doc.content;
@@ -178,23 +153,19 @@ isolated function appendDocument(ai:Document|ai:Chunk doc, ContentPart[] parts) 
     return error ai:Error("Only text and image documents are supported.");
 }
 
-// Resolves an `ai:ImageDocument` to bytes + a concrete MIME type.
 isolated function toImagePart(ai:ImageDocument doc) returns ImagePart|ai:Error {
     ai:Url|byte[] content = doc.content;
     byte[] data;
     string? mimeType = normalizeMimeType(doc.metadata?.mimeType);
     if content is ai:Url {
-        // Bedrock never fetches on our behalf: Converse has no URL source and
-        // Anthropic-on-Bedrock is base64-only. So the connector fetches, and the
-        // behaviour is uniform across every dialect rather than working on some.
+        // Bedrock never fetches a URL itself, so the module does.
         [byte[], string?] [downloaded, contentType] = check downloadImage(content);
         data = downloaded;
         mimeType = mimeType ?: normalizeMimeType(contentType);
     } else {
         data = content;
     }
-    // Sniff last: it is the only source that cannot be wrong, but an explicit
-    // metadata.mimeType is the caller's stated intent and wins.
+    // An explicit `metadata.mimeType` wins; sniffing is the fallback.
     string? resolved = mimeType ?: sniffImageMime(data);
     if resolved is () {
         return error ai:Error("Could not determine the image type. Set " +
@@ -207,7 +178,6 @@ isolated function toImagePart(ai:ImageDocument doc) returns ImagePart|ai:Error {
     return {mimeType: resolved, data};
 }
 
-// Merges accumulated text into a part and resets the accumulator.
 isolated function flushText(string text, ContentPart[] parts) returns string {
     if text != "" {
         parts.push({text});
@@ -219,8 +189,7 @@ isolated function flushText(string text, ContentPart[] parts) returns string {
 // MIME handling
 // ---------------------------------------------------------------------------
 
-// Lowercases, strips any `; charset=...` parameter, and maps the common non-IANA
-// `image/jpg` onto `image/jpeg` (which is the only spelling Bedrock accepts).
+// Lowercases, drops parameters, and maps `image/jpg` to `image/jpeg`.
 isolated function normalizeMimeType(string? raw) returns string? {
     if raw is () {
         return ();
@@ -231,14 +200,13 @@ isolated function normalizeMimeType(string? raw) returns string? {
         value = value.substring(0, semi).trim();
     }
     if value == "" || value == "image/*" || value == "application/octet-stream" {
-        // Not concrete enough for `format`/`media_type`; fall through to sniffing.
+        // Too vague (e.g. `image/*`); sniff instead.
         return ();
     }
     return value == "image/jpg" ? "image/jpeg" : value;
 }
 
-// Identifies the four supported formats from their magic bytes. Total over that set,
-// so the "could not determine" error only fires for genuinely unsupported data.
+// Identifies the four supported formats from their magic bytes.
 isolated function sniffImageMime(byte[] data) returns string? {
     if startsWithBytes(data, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return "image/png";
@@ -249,7 +217,7 @@ isolated function sniffImageMime(byte[] data) returns string? {
     if startsWithBytes(data, [0x47, 0x49, 0x46, 0x38]) { // "GIF8"
         return "image/gif";
     }
-    // WebP: "RIFF" .... "WEBP" — the size field sits between the two markers.
+    // WebP: "RIFF", a size, then "WEBP".
     if startsWithBytes(data, [0x52, 0x49, 0x46, 0x46]) && data.length() >= 12
         && data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50 {
         return "image/webp";
@@ -273,12 +241,8 @@ isolated function startsWithBytes(byte[] data, int[] prefix) returns boolean {
 // Download (the only I/O here)
 // ---------------------------------------------------------------------------
 
-// Fetches an image URL, returning its bytes and any `Content-Type`.
-//
-// Redirects are followed MANUALLY so that every hop is scheme-checked. Letting the
-// HTTP client follow them would check only the first URL, so a public origin could
-// bounce the fetch to an internal address — and this connector holds AWS credentials,
-// which makes it a more valuable SSRF target than most.
+// Fetches an image URL. Redirects are followed by hand so every hop is checked; this
+// connector holds AWS credentials, so it must not be bounced to an internal address.
 isolated function downloadImage(string url) returns [byte[], string?]|ai:Error {
     string target = url;
     int redirects = 0;
@@ -323,8 +287,7 @@ isolated function downloadImage(string url) returns [byte[], string?]|ai:Error {
     }
 }
 
-// Only http/https may be fetched. `s3://`, `file://`, `gopher://` and friends are all
-// valid `ai:Url` values, and none of them should reach an HTTP client.
+// Only http and https may be fetched.
 isolated function validateDownloadTarget(string url) returns ai:Error? {
     string lower = url.toLowerAscii();
     if lower.startsWith("https://") || lower.startsWith("http://") {
@@ -364,11 +327,10 @@ isolated function resolveRedirect(string base, string location) returns string {
 }
 
 // ---------------------------------------------------------------------------
-// Per-dialect emitters — PURE. This is the whole mapping table.
+// Per-API emitters (pure).
 // ---------------------------------------------------------------------------
 
-// Converse / Nova-Invoke content blocks.
-// `{"image": {"format": "png", "source": {"bytes": "<base64>"}}}`
+// Converse and Nova InvokeModel image blocks.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageBlock.html
 isolated function converseContentBlocks(ContentPart[] parts) returns json[] {
     json[] blocks = [];
@@ -378,7 +340,7 @@ isolated function converseContentBlocks(ContentPart[] parts) returns json[] {
         } else {
             blocks.push({
                 "image": {
-                    // A bare token here, NOT the full MIME type.
+                    // A bare token, not the MIME type.
                     "format": MIME_TO_CONVERSE_FORMAT.get(part.mimeType),
                     "source": {"bytes": array:toBase64(part.data)}
                 }
@@ -388,8 +350,7 @@ isolated function converseContentBlocks(ContentPart[] parts) returns json[] {
     return blocks;
 }
 
-// Anthropic Messages content blocks (Invoke-Anthropic AND Mantle Messages).
-// `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}`
+// Anthropic Messages content blocks (InvokeModel and Messages).
 // https://platform.claude.com/docs/en/api/messages
 isolated function anthropicContentBlocks(ContentPart[] parts) returns json[] {
     json[] blocks = [];
@@ -410,12 +371,8 @@ isolated function anthropicContentBlocks(ContentPart[] parts) returns json[] {
     return blocks;
 }
 
-// OpenAI Chat-Completions content (also the Mistral chat dialect, which copies it).
-//
-// Returns a BARE STRING when there is no image, exactly as before, so every existing
-// golden body stays byte-identical and text-only models that accept only a string
-// keep working. The parts array appears only once an image is present.
-// `{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}`
+// OpenAI Chat Completions content, also used by Mistral chat. A plain string when
+// there is no image, as text-only models expect.
 isolated function openAIContentParts(ContentPart[] parts) returns json {
     if !hasImage(parts) {
         return partsText(parts);
@@ -431,9 +388,7 @@ isolated function openAIContentParts(ContentPart[] parts) returns json {
     return out;
 }
 
-// OpenAI Responses content. Note `image_url` is a BARE STRING here, not the object
-// the Chat-Completions dialect uses — the same asymmetry this module already encodes
-// for tool choice.
+// OpenAI Responses content; `image_url` is a string here, unlike Chat Completions.
 isolated function responsesContentParts(ContentPart[] parts) returns json[] {
     json[] out = [];
     foreach ContentPart part in parts {
@@ -446,12 +401,9 @@ isolated function responsesContentParts(ContentPart[] parts) returns json[] {
     return out;
 }
 
-// `data:<mime>;base64,<data>` — the only way the OpenAI-shaped dialects take bytes.
 isolated function dataUri(ImagePart part) returns string
     => string `data:${part.mimeType};base64,${array:toBase64(part.data)}`;
 
-// True when any part is an image — used by the dialects whose image support is not
-// yet confirmed, so they can refuse rather than silently drop it.
 isolated function hasImage(ContentPart[] parts) returns boolean {
     foreach ContentPart part in parts {
         if part is ImagePart {
@@ -461,26 +413,17 @@ isolated function hasImage(ContentPart[] parts) returns boolean {
     return false;
 }
 
-// Covers the OpenAI-shaped Mantle/Invoke paths and Mistral's chat dialect, where no
-// first-party source confirms image input; AWS may reject these requests outright.
-// When `false`, images on those routes are refused before sending. In Config.toml:
+// The OpenAI-shaped Mantle and InvokeModel APIs and Mistral chat: no AWS page confirms
+// image input there. Set in Config.toml:
 //     [ballerinax.ai.aws.bedrock]
 //     enableUnverifiedImageRoutes = true
 
 # Sends images on APIs where AWS does not document image support. Experimental.
 public configurable boolean enableUnverifiedImageRoutes = false;
 
-// Refuses a request carrying an image on a dialect that cannot express one — either
-// because it has no content-part array at all (the prompt-template dialects), or
-// because its image support is NOT yet verified against a primary source.
-//
-// Called at the TOP of the affected encoders, so the refusal happens before any body
-// is built and no image can be silently dropped downstream.
-//
-// `unverifiedOnly` marks the second class: those dialects DO have a content-part
-// shape and an emitter ready, so `enableUnverifiedImageRoutes` lets a live test push
-// real bytes through them. The prompt-template dialects pass `false` — no flag can
-// make a single string carry an image.
+// Refuses an image on an API that cannot carry one, or whose image support is
+// unverified (`unverifiedOnly`, which `enableUnverifiedImageRoutes` lifts), before the
+// body is built.
 isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect,
         boolean unverifiedOnly = false) returns ai:Error? {
     if unverifiedOnly && enableUnverifiedImageRoutes {
@@ -494,11 +437,7 @@ isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect,
     }
 }
 
-// Concatenates the text of already-image-free parts.
-//
-// INVARIANT: every caller runs `rejectImagesIn` first, so an `ImagePart` cannot reach
-// here. Dropping one silently is the exact bug this file exists to fix, so the guard
-// belongs at the encoder boundary rather than being re-checked per message.
+// The text of parts already checked by `rejectImagesIn`.
 isolated function partsText(ContentPart[] parts) returns string {
     string text = "";
     foreach ContentPart part in parts {
@@ -509,9 +448,7 @@ isolated function partsText(ContentPart[] parts) returns string {
     return text;
 }
 
-// Redacted projection for the observe span. The span must never carry the payload:
-// an image is potentially megabytes, and it is user data that would otherwise be
-// shipped verbatim to whatever telemetry backend is configured.
+// Parts for a span, with images reduced to a placeholder.
 isolated function partsForSpan(ContentPart[] parts) returns string {
     string text = "";
     foreach ContentPart part in parts {

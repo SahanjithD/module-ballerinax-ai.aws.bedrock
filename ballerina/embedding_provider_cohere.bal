@@ -19,11 +19,8 @@ import ballerinax/aws;
 
 const string COHERE_EMBED_PREFIX = "cohere.embed";
 
-// `input_type` matters: a corpus embedded as queries (or the reverse) degrades
-// retrieval silently, with no error. Unless the caller fixes it in config, it follows
-// the method — `embed()` is a query, `batchEmbed()` is a corpus — which is exactly how
-// `ai:VectorKnowledgeBase` calls an embedding provider (`retrieve` → `embed`,
-// `ingest` → `batchEmbed`).
+// The wrong `input_type` silently degrades retrieval. Unless set in config, it follows
+// the method: `embed()` is a query, `batchEmbed()` a document.
 
 # Cohere Embed text embeddings on AWS Bedrock.
 @display {label: "Bedrock Cohere Embedding Provider"}
@@ -71,9 +68,7 @@ public distinct isolated client class CohereEmbeddingProvider {
         }
         int? dimensions = config?.dimensions;
         if dimensions is int {
-            // Fail at construction, not per call. Silently
-            // dropping this would be worse than a 400: the caller would index a
-            // corpus at the wrong width and only discover it at query time.
+            // At construction: an unsupported width would index the corpus wrongly.
             if !isV4 {
                 return errorWithDetail(
                     string `'dimensions' is not supported by Cohere Embed v3 ('${wireModelId}'). Use ` +

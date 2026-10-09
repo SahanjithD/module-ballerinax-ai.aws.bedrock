@@ -45,27 +45,23 @@ public enum ServiceTier {
 }
 
 # Options shared by the `bedrock-runtime` model providers.
-// NOTE `api` and `endpoint` are NOT here. Both are routing/transport decisions
-// a caller makes at the same moment they choose the model and the region, so they sit
-// directly on `init` alongside those rather than one level down in this record —
-// visible in the Integrator panel without expanding a config, and impossible to miss
-// when reading a call site.
+// `apiType` and `endpoint` are init parameters rather than fields here, so they show in
+// the form without opening the config.
 public type CommonRuntimeConfig record {|
     // --- Inference ---
     # Sequences that stop generation. A `stop` passed to `chat` overrides them
     string[] stopSequences?;
     // --- Passthrough ---
-    // Spliced verbatim: Converse's `additionalModelRequestFields`, and the top level
-    // of each Invoke dialect. The module never rewrites, renames or reshapes it.
+    // Sent verbatim: as Converse's `additionalModelRequestFields`, or at the top level
+    // of an InvokeModel body.
     // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
     # Extra fields sent as-is in the request body, for options this module does not cover
     AdditionalRequestFields additionalModelRequestFields?;
     // Converse `serviceTier` body field; `X-Amzn-Bedrock-Service-Tier` header on Invoke.
     # Processing tier for each request
     ServiceTier serviceTier?;
-    // Converse `performanceConfig` body field; `X-Amzn-Bedrock-PerformanceConfig-Latency`
-    // header on Invoke. Same output, only speed and cost change. Support is per model
-    // and region, and AWS rejects unsupported combinations.
+    // Converse `performanceConfig`, or the `X-Amzn-Bedrock-PerformanceConfig-Latency`
+    // header on InvokeModel. Support is per model and region.
     // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
     # Use latency-optimized inference, where the model and region support it
     boolean latencyOptimized?;
@@ -87,21 +83,14 @@ public type ConverseConfig record {|
 // APIs per vendor.
 // ============================================================================
 
-// The APIs each vendor's models are served in on `bedrock-runtime`. One alias per
-// provider class, named for the vendor rather than for the set it holds today: four
-// are the same union right now, but when AWS adds an API to one vendor only that
-// alias moves. Union subtypes rather than per-vendor enums, so the same `CONVERSE`
-// constant is valid on every class that admits it.
-//
-// `CHAT_COMPLETIONS` is deliberately NOT OpenAI-only: AWS lists DeepSeek, Gemma 3,
-// Mistral, Qwen3 and others as Chat-Completions-capable on `bedrock-runtime`.
+// One alias per vendor, so when AWS adds an API for one vendor only its alias changes.
+// Chat Completions is not OpenAI-only on `bedrock-runtime`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
 
 # APIs available for Anthropic models on `bedrock-runtime`.
 public type AnthropicRuntimeApi CONVERSE|INVOKE|MESSAGES;
 
-// Per-model gaps are left for AWS to reject: GPT OSS serves Chat Completions,
-// Converse and Invoke here but NOT Responses.
+// GPT OSS has no Responses API here; AWS rejects that combination.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
 
 # APIs available for OpenAI models on `bedrock-runtime`.
@@ -126,19 +115,14 @@ public type DeepSeekRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 // Model IDs and configuration, per vendor.
 // ============================================================================
 
-// Current Anthropic models are served on this endpoint through cross-region inference
-// profiles only: each model card's regional-availability table marks In-Region
-// unsupported in every region and lists the Geo (`us.`, `eu.`, `au.`) and Global
-// (`global.`) profile ids as the way in. A BARE id fails with `on-demand throughput
-// isn't supported`. (The cards' own boto3 samples still show the bare id,
-// contradicting the availability table on the same page; the table matches the
-// error users actually hit.)
+// Current Anthropic models are served here only through cross-region profiles (`us.`,
+// `eu.`, `au.`, `global.`); a bare id fails with "on-demand throughput isn't supported".
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
 
 # Anthropic model IDs on `bedrock-runtime`, with the `us.` cross-region prefix.
 # For another geography, pass the ID as a string, e.g. `eu.anthropic.claude-sonnet-5`.
 public enum AnthropicRuntimeModelNames {
-    // Refuses a FORCED tool choice, so typed `generate()` offers its tool unforced.
+    // Rejects a forced tool choice, so typed `generate()` offers its tool unforced.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
     # 1M context; adaptive thinking always on
     CLAUDE_OPUS_5_5 = "us.anthropic.claude-opus-5-5",
@@ -152,16 +136,13 @@ public enum AnthropicRuntimeModelNames {
     # 1M context; adaptive thinking always on
     CLAUDE_SONNET_5 = "us.anthropic.claude-sonnet-5",
     CLAUDE_SONNET_4_6 = "us.anthropic.claude-sonnet-4-6",
-    // DATED AND VERSIONED, unlike its siblings. The card's Programmatic Access table
-    // gives `N/A` as the runtime Model ID and names only the dated profile ids; the
-    // undated id is refused with "The provided model identifier is invalid".
+    // Only the dated id works; the undated one is "invalid".
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
     CLAUDE_HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
     # Needs an account opt-in: set the data retention mode to `aws_review` first
     CLAUDE_FABLE_5 = "us.anthropic.claude-fable-5",
-    // Inherits Opus 5.5's restrictions: thinking cannot be disabled, and a FORCED
-    // tool choice is refused, so typed `generate()` offers its tool unforced.
+    // Like Opus 5.5: thinking cannot be disabled and a forced tool choice is rejected.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
     # Needs the Fable 5 opt-in
     CLAUDE_FABLE_5_1 = "us.anthropic.claude-fable-5-1"
@@ -170,8 +151,7 @@ public enum AnthropicRuntimeModelNames {
 # Configuration for `RuntimeAnthropicModelProvider`.
 public type AnthropicRuntimeConfig record {|
     *CommonRuntimeConfig;
-    // A typed record rather than raw `json`, so the mode/budget pairing rules are
-    // checked at construction.
+    // A typed record, so the mode and budget rules are checked at construction.
     # Extended thinking settings
     ThinkingConfig thinking?;
     // Sent as `output_config.effort`.
@@ -179,12 +159,8 @@ public type AnthropicRuntimeConfig record {|
     Effort effort?;
 |};
 
-// The GPT-5.x ids are on `bedrock-mantle` in this module's verified per-card data —
-// see `OpenAIMantleModelNames`. AWS's endpoint-availability page has since listed some
-// GPT-5.6 ids on both endpoints, which contradicts those cards; rather than pick a
-// side silently, this enum keeps the per-card reading, and any id can still be passed
-// as a string. GPT OSS serves Chat Completions, Converse and Invoke here but NOT
-// Responses.
+// The GPT-5.x ids are listed under `OpenAIMantleModelNames`, per their model cards;
+// any id can still be passed as a string.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
 
 # OpenAI model IDs on `bedrock-runtime`.
@@ -195,10 +171,8 @@ public enum OpenAIRuntimeModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html
     # Not available on the `RESPONSES` API
     GPT_OSS_20B = "openai.gpt-oss-20b-1:0",
-    // The GPT-6 family. CRIS-PREFIXED, unlike GPT OSS: each card says "You cannot use
-    // the base model ID for in-Region calls on this endpoint". They serve Responses,
-    // Chat Completions and Converse here, but NOT Invoke, and refuse the Chat
-    // Completions `max_tokens` parameter (they are sent `max_completion_tokens`).
+    // GPT-6: cross-region ids only ("You cannot use the base model ID for in-Region
+    // calls on this endpoint"), and no InvokeModel.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
     # Not available on the `INVOKE` API
     GPT_6_ASTRA = "us.openai.gpt-6-astra",
@@ -219,9 +193,8 @@ public type OpenAIRuntimeConfig record {|
     ReasoningEffort reasoningEffort?;
 |};
 
-// Nova and Titan are served on the Bedrock-native APIs only — there is no
-// vendor-compatible path for them and no Amazon model on `bedrock-mantle`, which is
-// why this vendor has no Mantle class.
+// Nova and Titan have only the Bedrock-native APIs, and no Amazon model is on
+// `bedrock-mantle`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
 
 # Amazon Nova model IDs.
@@ -236,29 +209,19 @@ public type AmazonRuntimeConfig record {|
     *CommonRuntimeConfig;
 |};
 
-// REGION MATTERS HERE MORE THAN FOR ANY OTHER VENDOR IN THIS MODULE. Mistral Large
-// 2407 is the one id in these enums whose availability is a single region: AWS's
-// regional-availability page lists exactly one row for it, `us-west-2` In-Region,
-// with no Geo or Global profile. It is also no longer in the Mistral AI model-card
-// index — the card titled "Mistral Large" is 24.02 — so the availability page is the
-// only first-party statement left, and it is the one that matches what the endpoint
-// does: every other region answers "The provided model identifier is invalid", which
-// reads like a wrong id rather than a wrong region. Kept rather than removed, because
-// AWS still documents it as live in that region.
+// Mistral Large 2407 is served only in us-west-2; elsewhere AWS answers "The provided
+// model identifier is invalid", which looks like a wrong id.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html
 
 # Mistral model IDs on `bedrock-runtime`.
 public enum MistralRuntimeModelNames {
     # The current flagship: 675B, 256K context
     MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct",
-    // Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
-    // Any other region answers "The provided model identifier is invalid".
+    // Chat-completion format on InvokeModel.
     # Available in us-west-2 only
     MISTRAL_LARGE_2407 = "mistral.mistral-large-2407-v1:0",
-    // Text-completion dialect on InvokeModel (`prompt`/`outputs`) — the opposite
-    // dialect to its 24.07 sibling, despite the shared family name.
+    // Text-completion format on InvokeModel, unlike 2407.
     MISTRAL_LARGE_2402 = "mistral.mistral-large-2402-v1:0",
-    // Text-completion dialect on InvokeModel, which has no tool calling.
     # No tool calling on `INVOKE`, so `generate` can only return `string` there
     MISTRAL_7B_INSTRUCT = "mistral.mistral-7b-instruct-v0:2"
 }
@@ -271,11 +234,8 @@ public type MistralRuntimeConfig record {|
 # Qwen model IDs on `bedrock-runtime`.
 public enum QwenRuntimeModelNames {
     QWEN3_32B = "qwen.qwen3-32b-v1:0",
-    // The card lists this exact id, In-Region, in us-east-1 among nine other regions,
-    // so an "invalid model identifier" here is NOT a wrong id or a wrong region: it is
-    // an account that has not been granted access to the model. Grant it in the
-    // Bedrock console under Model access. The Mantle id works independently of that,
-    // which is why one can succeed while the other does not.
+    // An "invalid model identifier" for this id means the account lacks model access;
+    // grant it in the Bedrock console.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
     # Coding model: 480B mixture of experts, 35B active
     QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
@@ -295,7 +255,7 @@ public type QwenRuntimeConfig record {|
 public enum GoogleRuntimeModelNames {
     GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     GEMMA_3_12B_IT = "google.gemma-3-12b-it",
-    // AWS titles this card "Gemma 3 27B PT" but its id really is `-it` — do not "correct" this.
+    // AWS titles this card "Gemma 3 27B PT", but the id is `-it`.
     GEMMA_3_27B_IT = "google.gemma-3-27b-it"
 }
 

@@ -61,9 +61,6 @@ public isolated distinct client class MantleAnthropicModelProvider {
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
-        // Params BEFORE headers: `serviceTier`/`latencyOptimized` ride InvokeModel
-        // REQUEST HEADERS, so the header builder has to see them, and the route has to
-        // be able to refuse the ones it cannot carry before any of it is stored.
         ThinkingConfig? thinking = config?.thinking;
         if thinking is ThinkingConfig {
             check validateThinking(thinking, maxTokens);

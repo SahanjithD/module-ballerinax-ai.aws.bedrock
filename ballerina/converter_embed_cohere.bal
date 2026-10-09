@@ -14,22 +14,11 @@
 
 import ballerina/ai;
 
-// Cohere Embed. Like Mistral on the chat side,
-// Cohere ships TWO request shapes under one vendor prefix, and only the model id
-// tells them apart:
-//
-//   v3 — {"texts": [string] (0..96), "input_type": REQUIRED,
-//         "truncate": "NONE|START|END", "embedding_types": [...]}
-//        NO output-size parameter exists at all; vectors are always 1024.
-//        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
-//   v4 — {"texts": [...], "input_type": REQUIRED,
-//         "truncate": "NONE|LEFT|RIGHT", "output_dimension": 256|512|1024|1536,
-//         "embedding_types": [...], "max_tokens": int}
-//        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
-//
-// The two differ on BOTH names that matter: the size parameter is `output_dimension`
-// (not `dimensions`), and truncate's non-NONE values are LEFT/RIGHT (not START/END).
-// Response shape is common to both — `inputTokenCount` is `()` either way.
+// Cohere Embed has two request formats, told apart by model id. v3 has no output size
+// (always 1024) and truncates with START/END; v4 has `output_dimension` and truncates
+// with LEFT/RIGHT. The response is the same.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
 
 // Cohere accepts up to 96 texts per call — the WIRE limit.
 const int COHERE_MAX_BATCH = 96;
@@ -48,25 +37,15 @@ final readonly & EmbeddingConverter COHERE_EMBED_V4_CONVERTER = {
     decode: decodeCohereEmbed
 };
 
-// Cohere Embed ids speaking the v4 request shape. An allowlist of v4 (rather than
-// of v3) would misroute every future id, so this matches the v4 family and lets
-// everything else fall to v3 — the shape the `-english-v3`/`-multilingual-v3` ids
-// use today.
-//
-// Normalizes FIRST because callers hold the wire id, which may carry a CRIS geo
-// prefix — Cohere Embed v4 is the one embedding model with Geo and Global
-// inference ids (`us.cohere.embed-v4:0`, `global.cohere.embed-v4:0`). Matching the
-// raw string would silently drop such a caller onto the v3 converter, sending v3's
-// truncate spelling and no `output_dimension` at all.
+// Whether an id uses the v4 format; anything else is treated as v3. Strips a
+// cross-region prefix first, since v4 has `us.` and `global.` ids.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-cohere-embed-v4.html
 isolated function usesCohereEmbedV4(string modelId) returns boolean {
     [string, string?] [bareId, _] = normalizeModelId(modelId);
     return bareId.startsWith("cohere.embed-v4");
 }
 
-// The shared part of both request shapes. `input_type` is
-// REQUIRED on every request — omitting it is a 400, and the wrong value silently
-// degrades retrieval.
+// The part both formats share. `input_type` is required.
 isolated function cohereEmbedBase(string[] texts, EmbeddingParams params) returns map<json>|ai:Error {
     if texts.length() > COHERE_MAX_BATCH {
         return error ai:Error(string `Cohere accepts at most ${COHERE_MAX_BATCH} texts per call; ` +
@@ -115,9 +94,7 @@ isolated function encodeCohereEmbedV4(string[] texts, EmbeddingParams params) re
     map<json> body = base;
     Truncate? truncate = params?.truncate;
     if truncate is Truncate {
-        // v4 renamed the non-NONE values: START→LEFT, END→RIGHT. Same meaning
-        // ("discard from the start / the end"), so the public enum keeps one
-        // spelling and we translate here rather than leaking the version into it.
+        // v4 spells START and END as LEFT and RIGHT.
         body["truncate"] = cohereV4Truncate(truncate);
     }
     int? dimensions = params?.dimensions;

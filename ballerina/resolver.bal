@@ -12,23 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Route resolution. Pure: no I/O, no state, fully table-testable without AWS
-// credentials. All construction-time routing decisions are made here.
-//
-// There is no longer a single `resolveRoute` with a preference ladder. The provider
-// CLASS fixes the endpoint, so resolution splits in two and each half is small
-// enough to read at a glance. Nothing here can send a model to an endpoint the
-// caller did not name — the old `AUTO` failure mode, where a bare id silently
-// resolved to `bedrock-mantle` and then 403'd on a separate IAM namespace, is
-// unrepresentable.
+// Route resolution: pure, no I/O. The provider class fixes the endpoint, so a model
+// never ends up on an endpoint the caller did not choose.
 
-// Resolves a model id for the `bedrock-runtime` endpoint. The id may be bare,
-// CRIS-prefixed, or an ARN. Returns an `error` only for the cases AWS cannot
-// diagnose for us: `custom-model/` and `imported-model/` ARNs.
-//
-// Unknown ids are NOT an error. Converse is model-agnostic, so an id this module has
-// never heard of goes on the wire as-is and AWS answers for it — which is what keeps
-// a model AWS ships tomorrow usable today.
+// Resolves a model id (bare, cross-region or ARN) for `bedrock-runtime`. An unknown id
+// is not an error: it is sent as given and AWS answers, so new models work at once.
 isolated function resolveRuntimeRoute(string model, string region, ApiFamily api) returns Route|error {
     if isArn(model) {
         return resolveRuntimeArn(model, region, api);
@@ -39,8 +27,7 @@ isolated function resolveRuntimeRoute(string model, string region, ApiFamily api
         api,
         bareModelId: bareId,
         geoPrefix,
-        // Cross-region inference is a `bedrock-runtime` concept: the geo prefix is
-        // stripped for table lookup and re-applied on the wire.
+        // The geo prefix is stripped for lookup and put back on the wire.
         // https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html
         effectiveModelId: applyGeoPrefix(bareId, geoPrefix),
         region,
@@ -49,17 +36,11 @@ isolated function resolveRuntimeRoute(string model, string region, ApiFamily api
     };
 }
 
-// Resolves a model id for the `bedrock-mantle` endpoint.
-//
-// Stricter than the runtime side by necessity: a Mantle request path is per-model
-// table data (`/v1` vs `/openai/v1` vs `/anthropic/v1` on the same host) and is not
-// derivable from an id, so an id absent from `MANTLE_CAPABLE` has no URL to build and
-// is refused by name rather than guessed at.
+// Resolves a model id for `bedrock-mantle`. Stricter: the request path is per-model data,
+// so an id not in `MANTLE_CAPABLE` is refused by name.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 isolated function resolveMantleRoute(string model, string region) returns Route|error {
-    // An ARN names a `bedrock-runtime` resource — a provisioned model, an inference
-    // profile, a custom-model deployment. None of those exist on Mantle, and an ARN
-    // is not a key into `MANTLE_CAPABLE`, so there is nothing to look up.
+    // ARNs name bedrock-runtime resources; none exist on Mantle.
     if isArn(model) {
         return error(string `'${model}' is an ARN, which the bedrock-mantle endpoint does not accept: ` +
             string `provisioned models, inference profiles and custom-model deployments are ` +
@@ -69,10 +50,8 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
 
     [string, string?] [bareId, geoPrefix] = normalizeModelId(model);
     if geoPrefix is string {
-        // Guard, not a silent strip: a caller who passed `us.` asked for cross-region
-        // inference, and Mantle has none. Dropping the prefix would quietly give them
-        // in-region single-endpoint routing under the name they used to request the
-        // opposite.
+        // Refused rather than stripped: the caller asked for cross-region inference,
+        // which Mantle does not have.
         // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
         return error(string `'${model}' carries the cross-region inference prefix '${geoPrefix}.', ` +
             string `which the bedrock-mantle endpoint does not support — cross-region inference is ` +
@@ -81,14 +60,8 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
     }
 
     [string, MantleEntry] [canonicalId, entry] = check mantleEntryForBare(bareId);
-    // The shape is the MODEL's, not the caller's. Every Mantle model has exactly one
-    // route this module takes, so there is no API argument on the Mantle classes and
-    // no way to ask for one the model is not published on.
-    //
-    // `shapes` stays a list because the underlying fact is a list — gpt-oss really is
-    // published on both Responses and Chat Completions on `/v1` — so recording it
-    // truthfully means a selector can be reintroduced later with no data change.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
+    // The model decides the API; the Mantle classes take no API argument. `apis` stays
+    // a list because some models serve more than one.
     ApiFamily resolvedApi = entry.apis[0];
 
     return {
@@ -96,8 +69,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
         api: resolvedApi,
         bareModelId: canonicalId,
         geoPrefix: (),
-        // A model may be published under different ids per endpoint (see
-        // `MantleEntry.modelId`); the entry wins when it says so.
+        // Some models have a different id on each endpoint.
         effectiveModelId: entry?.modelId ?: canonicalId,
         region,
         partition: partitionForRegion(region),
@@ -105,8 +77,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
     };
 }
 
-// ARN dispatch for the runtime endpoint — the resource-type token settles the case
-// before any call. The ARN's region and partition override the caller's.
+// ARN routing for bedrock-runtime. The ARN's region and partition win over the caller's.
 isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api) returns Route|error {
     ParsedArn arn = check parseArn(arnStr);
 
@@ -114,14 +85,10 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
         return error(string `not a Bedrock ARN: service segment is '${arn.'service}', expected 'bedrock'`);
     }
 
-    // The ARN's region is authoritative — but it is legitimately EMPTY on global ARNs
-    // such as `arn:aws:bedrock::123:foundation-model/anthropic.claude-v2`. Copying ""
-    // through would build the host `bedrock-runtime..amazonaws.com` and surface as an
-    // opaque DNS failure, so fall back to the caller's region.
+    // Global ARNs leave the region empty; use the caller's then.
     string arnRegion = arn.region == "" ? region : arn.region;
 
-    // `foundation-model/` carries a bare, globally-addressable id — strip to it and
-    // resolve as an ordinary bare id.
+    // A bare id inside; resolve it as one.
     if arn.resourceType == "foundation-model" {
         [string, string?] [bareId, geoPrefix] = normalizeModelId(arn.resourceId);
         return {
@@ -136,17 +103,14 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
         };
     }
 
-    // `custom-model/` is an artifact, not a deployment — AWS's prose directs users to
-    // the deployment/Provisioned-Throughput ARN. Policy choice, recorded so a reviewer
-    // can overrule it.
+    // A custom model is used through its deployment or provisioned-throughput ARN.
     if arn.resourceType == "custom-model" {
         return error(string `'custom-model/' ARN is a model artifact, not a deployment; ` +
             string `pass the 'custom-model-deployment/' (on-demand) or 'provisioned-model/' ARN instead`);
     }
 
-    // `imported-model/` (Custom Model Import) is out of scope. AWS applies no default
-    // chat template to imported weights, so the request body cannot be built without
-    // the caller naming the wire dialect.
+    // Not supported: imported weights have no default chat template, so the request
+    // format cannot be known.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
     if arn.resourceType == "imported-model" {
         return error(string `'imported-model/' ARNs are not supported: AWS applies no default chat ` +
@@ -154,9 +118,7 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
             string `Use a foundation-model, inference-profile, or provisioned-model ARN instead`);
     }
 
-    // Every remaining opaque ARN (provisioned-model, inference-profile,
-    // application-inference-profile, custom-model-deployment) goes on the wire
-    // verbatim, URL-encoded in endpoint.bal.
+    // Any other ARN (provisioned model, inference profile, deployment) is sent as is.
     return {
         endpoint: RUNTIME,
         api,
@@ -169,20 +131,13 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
     };
 }
 
-// `MANTLE_CAPABLE` lookup for a bare id. A Mantle path is not derivable from a model
-// id, so a model AWS has added since our last release cannot be reached on Mantle
-// until the table ships it.
+// Looks up a bare id in `MANTLE_CAPABLE`.
 isolated function mantleEntryForBare(string bareId) returns [string, MantleEntry]|error {
     MantleEntry? entry = MANTLE_CAPABLE[bareId];
     if entry is MantleEntry {
         return [bareId, entry];
     }
-    // Second chance on the MANTLE-side id. The table is keyed on the bedrock-runtime
-    // id so that both endpoints agree on one lookup key, but a handful of models are
-    // published under a different id per endpoint (`MantleEntry.modelId`) — and the
-    // id a user reads off the Mantle model card is that one. Refusing
-    // `openai.gpt-oss-120b` on a Mantle class because the table happens to be keyed
-    // on `openai.gpt-oss-120b-1:0` is this module's bookkeeping leaking out.
+    // Also accept the Mantle-side id, which is what the Mantle model card shows.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     foreach [string, MantleEntry] [key, candidate] in MANTLE_CAPABLE.entries() {
         if candidate?.modelId == bareId {
@@ -194,8 +149,7 @@ isolated function mantleEntryForBare(string bareId) returns [string, MantleEntry
         string `has since added it to bedrock-mantle`);
 }
 
-// Strips a CRIS geo prefix for lookup, keeping it for re-application on the wire.
-// Returns [bareId, geoPrefix?].
+// Splits a cross-region geo prefix off: [bareId, geoPrefix?].
 isolated function normalizeModelId(string id) returns [string, string?] {
     int? dot = id.indexOf(".");
     if dot is int {
@@ -207,12 +161,10 @@ isolated function normalizeModelId(string id) returns [string, string?] {
     return [id, ()];
 }
 
-// Re-applies a CRIS geo prefix to a bare id (the `bedrock-runtime` wire form).
 isolated function applyGeoPrefix(string bareId, string? geoPrefix) returns string
     => geoPrefix is string ? string `${geoPrefix}.${bareId}` : bareId;
 
-// Partition inferred from a region string. ARNs carry their own partition; bare-id
-// routes derive it here.
+// The partition for a region; ARNs carry their own.
 isolated function partitionForRegion(string region) returns string {
     if region.startsWith("us-gov-") {
         return "aws-us-gov";
@@ -220,12 +172,7 @@ isolated function partitionForRegion(string region) returns string {
     if region.startsWith("cn-") {
         return "aws-cn";
     }
-    // The isolated and EU Sovereign partitions. Bedrock carries a service entry in all
-    // four in the SDK endpoint metadata, and each has its own DNS suffix
-    // (`c2s.ic.gov`, `sc2s.sgov.gov`, `csp.hci.ic.gov`, `amazonaws.eu`). Reporting them
-    // as `aws` let them past the Mantle host-shape guard, which would then build a
-    // `bedrock-mantle` host for a partition that serves none.
-    // `us-isob-`/`us-isof-` do not match the `us-iso-` prefix, so order is irrelevant.
+    // The isolated and EU Sovereign partitions each have their own DNS suffix.
     if region.startsWith("us-iso-") {
         return "aws-iso";
     }

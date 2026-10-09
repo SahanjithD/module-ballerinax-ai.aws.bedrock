@@ -14,10 +14,8 @@
 
 import ballerina/ai;
 
-// Amazon Nova on the InvokeModel route. Nova is Converse-shaped but
-// the request body REQUIRES `"schemaVersion": "messages-v1"` — omit it and the
-// request fails validation. The response shape matches Converse, so `decode` is
-// shared with the Converse converter.
+// Nova on InvokeModel: Converse-shaped, plus a required `"schemaVersion": "messages-v1"`.
+// The response matches Converse, so the decoder is shared.
 
 // Encodes a Nova InvokeModel request body. Reuses Converse message/
 // tool mapping and prepends the mandatory `schemaVersion`.
@@ -57,11 +55,8 @@ isolated function encodeNovaInvoke(string? system, ResolvedMessage[] messages,
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
-            // Nova is the one converter that nests inference knobs under a body key it
-            // also builds itself. A passthrough `{"inferenceConfig": {"topK": 20}}`
-            // must MERGE — a plain assignment would drop the maxTokens, temperature
-            // and stopSequences resolved above, silently ignoring the caller's
-            // inference settings. Every other key overwrites, as elsewhere.
+            // Merged, not replaced, so a passthrough `inferenceConfig` keeps the
+            // module's maxTokens, temperature and stop sequences.
             if k == "inferenceConfig" && v is map<json> {
                 foreach [string, json] [nestedKey, nestedValue] in v.entries() {
                     inferenceConfig[nestedKey] = nestedValue;

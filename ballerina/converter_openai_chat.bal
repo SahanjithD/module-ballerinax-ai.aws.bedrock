@@ -14,11 +14,8 @@
 
 import ballerina/ai;
 
-// OpenAI Chat-Completions wire format. Shared by the Mantle
-// Chat Completions route (GLM) and the Invoke route for the OpenAI-shaped vendors
-// (GPT-OSS, Qwen, DeepSeek, Mistral chat). Unlike Converse/Anthropic, THIS format
-// carries `system` as a `role: system` MESSAGE — that is the wire contract here,
-// so the hoisted system is re-added as the leading message.
+// OpenAI Chat Completions, used on Chat Completions routes and by the OpenAI-shaped
+// InvokeModel vendors. The system prompt is a `role: system` message here.
 
 // Encodes an OpenAI Chat-Completions request body for a non-OpenAI model, which
 // takes the output cap as `max_tokens`.
@@ -26,11 +23,8 @@ isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeOpenAIChatBody("max_tokens", system, messages, tools, stop, params);
 
-// The same body for an OpenAI model, which takes `max_completion_tokens`: AWS's
-// gpt-oss request schema names it, OpenAI deprecates `max_tokens` in its favour, and
-// GPT-6 rejects `max_tokens` outright.
+// For an OpenAI model, which takes `max_completion_tokens` (GPT-6 rejects `max_tokens`).
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html
-// https://github.com/openai/openai-openapi/blob/master/openapi.yaml
 isolated function encodeOpenAIModelChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeOpenAIChatBody("max_completion_tokens", system, messages, tools, stop, params);
@@ -69,10 +63,7 @@ isolated function encodeOpenAIChatBody(string maxTokensKey, string? system, Reso
         }
         body["tools"] = toolDefs;
     }
-    // `reasoning_effort` — TOP LEVEL on Chat Completions, unlike the Responses
-    // dialect, which nests the same value as `reasoning: {effort: ...}`. One vendor,
-    // two spellings; this is the half that made folding the knob into the passthrough
-    // look correct for as long as only this route was exercised.
+    // Top level here; Responses nests it as `reasoning: {effort}`.
     ReasoningEffort? reasoningEffort = params?.reasoningEffort;
     if reasoningEffort is ReasoningEffort {
         body["reasoning_effort"] = reasoningEffort;
@@ -180,10 +171,8 @@ isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Err
 const REASONING_START = "<reasoning>";
 const REASONING_END = "</reasoning>";
 
-// gpt-oss on InvokeModel and Chat Completions returns its reasoning inline, as
-// `<reasoning>…</reasoning>answer`, where Converse and Mantle return only the answer.
-// Only a block at the very start is removed, so other models' text is untouched.
-// Seen live on 2026-10-09 (us-east-1) on both APIs.
+// gpt-oss on InvokeModel and Chat Completions puts `<reasoning>…</reasoning>` before the
+// answer (seen live 2026-10-09). Only a block at the very start is removed.
 isolated function withoutReasoning(string content) returns string {
     if !content.startsWith(REASONING_START) {
         return content;

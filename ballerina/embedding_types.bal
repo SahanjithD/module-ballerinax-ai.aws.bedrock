@@ -15,10 +15,8 @@
 import ballerina/ai;
 import ballerina/http;
 
-// Embedding types; the public class is split by vendor.
-// Embeddings are InvokeModel-ONLY — there is no Converse equivalent
-// and no streaming, so the model provider's routing ladder collapses entirely.
-// Credentials, transport, SigV4, retry, and error mapping are reused unchanged.
+// Embeddings are InvokeModel only, so there is no API choice; the transport, signing
+// and retries are shared with the model providers.
 
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 
@@ -59,17 +57,8 @@ public enum Truncate {
 
 # Titan-specific embedding configuration.
 public type TitanEmbeddingConfig record {|
-    // `dimensions` is deliberately `int`, not a closed type. A Ballerina `enum` cannot
-    // hold ints at all (its members are string constants), so the only closed form is a
-    // singleton union — `256|512|1024`. That was weighed and rejected: V1 rejects
-    // `dimensions` outright, so the model-dependent guard in the provider's `init` has
-    // to stay regardless and a closed type would only split validation across two
-    // mechanisms; callers commonly source this from a `configurable int` that has to
-    // agree with an externally-created vector index, which would not assign without a
-    // cast; and a new AWS width would be a breaking type change here versus a one-line
-    // edit to the guard. The cost accepted is that the Integrator renders a text field
-    // rather than a dropdown (its form generator emits SINGLE_SELECT only when every
-    // union member is a singleton).
+    // `int` rather than `256|512|1024`: V1 takes no `dimensions`, so the construction
+    // check is needed anyway, and a `configurable int` would not assign to a union.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
     # Output vector size: 256, 512 or 1024 (Titan V2 only). Defaults to 1024
     int dimensions?;
@@ -88,18 +77,13 @@ public type TitanEmbeddingConfig record {|
 
 # Cohere-specific embedding configuration.
 public type CohereEmbeddingConfig record {|
-    // Required on the wire. When unset it follows the `ai:EmbeddingProvider` call
-    // pattern: `ai:VectorKnowledgeBase` embeds a retrieval query with `embed()` and
-    // ingests documents with `batchEmbed()`, so `embed()` sends `search_query` and
-    // `batchEmbed()` sends `search_document`. Set it only to override both — e.g. when
-    // ingesting a corpus one document at a time through `embed()`.
+    // Required by Cohere. Unset, it follows how `ai:VectorKnowledgeBase` calls the
+    // provider: `embed()` for queries, `batchEmbed()` for documents.
     # Input type for every call. Unset: queries for `embed`, documents for `batchEmbed`
     CohereInputType inputType?;
     # How over-long inputs are truncated
     Truncate truncate?;
-    // `int` rather than a closed type, for the reasons spelled out on
-    // `TitanEmbeddingConfig.dimensions`. Embed v3 has no output-size parameter
-    // at all and always returns 1024.
+    // `int` for the same reason as Titan's. Embed v3 always returns 1024.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
     # Output vector size: 256, 512, 1024 or 1536 (Embed v4 only). Defaults to 1536
     int dimensions?;
@@ -126,9 +110,8 @@ type EmbeddingParams record {|
     AdditionalRequestFields additionalModelRequestFields?;
 |};
 
-# What an embedding `decode` produces — NOT a bare vector.
-# Cohere's response carries no token count at all, so `inputTokenCount` is
-# optional and the observe-span call MUST be guarded. Module-private.
+# What an embedding decode produces. Cohere returns no token count, so
+# `inputTokenCount` can be `()`.
 type DecodedEmbedding record {|
     # One embedding per input text, in input order.
     ai:Embedding[] embeddings;
@@ -146,9 +129,7 @@ type EncodeEmbedRequest isolated function (string[] texts, EmbeddingParams param
 # Decodes an embedding response. Module-private converter plumbing.
 type DecodeEmbedResponse isolated function (json response) returns DecodedEmbedding|ai:Error;
 
-# An embedding converter. `maxBatchSize` is the WIRE limit, not
-# a tuning knob: Titan's `inputText` is a single string (1), Cohere's `texts` is
-# an array of up to 96. Module-private converter registry record.
+# An embedding converter. `maxBatchSize` is the wire limit: 1 for Titan, 96 for Cohere.
 type EmbeddingConverter record {|
     # Texts per request the wire allows — Titan 1, Cohere 96. One window == one call.
     int maxBatchSize;

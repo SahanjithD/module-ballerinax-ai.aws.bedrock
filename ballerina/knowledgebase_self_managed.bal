@@ -16,17 +16,10 @@ import ballerina/ai;
 import ballerina/ai.observe;
 import ballerinax/aws;
 
-// A Bedrock self-managed knowledge base (`KnowledgeBaseConfiguration.type = VECTOR`)
-// — your own vector store rather than Bedrock's — exposed through `ai:KnowledgeBase`.
-// This is the console's *Self-managed KB → Unstructured Vector Store KB*.
-//
-// Pass an existing knowledge base id to attach to it, or a
-// `SelfManagedKnowledgeBaseDefinition` to find-or-create one by name.
-//
-// The vector store named by `storageConfiguration` must already exist; this class
-// never provisions one. `ingest()` additionally needs `bedrock:StartIngestionJob`
-// and `bedrock:IngestKnowledgeBaseDocuments` on the caller's credentials, and the
-// knowledge base's own `serviceRoleArn` needs permissions on the vector store itself.
+// Attach by knowledge base id, or find or create one by name with a definition. The
+// vector store must already exist. `ingest()` also needs `bedrock:StartIngestionJob`
+// and `bedrock:IngestKnowledgeBaseDocuments`, and the service role needs access to
+// the store.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html
 
 # A Bedrock knowledge base backed by your own vector store.
@@ -42,23 +35,17 @@ public distinct isolated client class SelfManagedKnowledgeBase {
     private final decimal ingestTimeout;
     private final int? numberOfResults;
     private final SearchType? overrideSearchType;
-    // `readonly &` because the class is `isolated`: a plain mutable record could not
-    // be held in a `final` field, nor read outside a `lock`. `SearchType` needs no
-    // such treatment — it is an enum, and so already immutable.
+    // `readonly &` so an isolated class can hold it in a `final` field.
     private final readonly & VectorRerankingConfig? rerankingConfiguration;
 
-    // The vector store a definition names must already exist. `auth` is SigV4
-    // only — Bedrock API keys are not accepted on the agent planes. `endpoint` is derived
-    // from the region when `()`, which is correct in every partition; a `customEndpoint`
-    // is a GLOBAL override with the same semantics as the AWS SDK's `AWS_ENDPOINT_URL`,
-    // applying to every service this client talks to.
+    // `auth` is SigV4 only: Bedrock API keys are not accepted for knowledge bases. A
+    // `customEndpoint` applies to every service this client calls.
 
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
     # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
-    // `dataSourceId` unset needs exactly one `CUSTOM` data source on the knowledge base.
-    // `chunker` unset follows the data source's `chunkingStrategy`: `ai:AUTO` when it is
-    // `NONE`, else `ai:DISABLE`; an explicit `ai:Chunker` against a server-chunking data
-    // source is a construction error.
+    // An unset `dataSourceId` needs exactly one `CUSTOM` data source. An unset
+    // `chunker` follows the data source: `ai:AUTO` when its strategy is `NONE`, else
+    // `ai:DISABLE`. A chunker against a data source that chunks itself is refused.
 
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset
@@ -92,15 +79,10 @@ public distinct isolated client class SelfManagedKnowledgeBase {
             ? rerankingConfiguration.cloneReadOnly() : ();
     }
 
-    // Bedrock upserts by document id, derived from `ai:Metadata.id` when the caller
-    // sets one. A document this module chunks into more than one piece submits its
-    // chunks as `<id>#0`, `<id>#1`, ...; one that does not fan out keeps `<id>`.
-    // Two documents in one call resolving to the SAME id are rejected rather than
-    // silently overwriting each other.
-    //
-    // Chunks client-side first when the data source's `chunkingStrategy` is `NONE`, and
-    // blocks until every document reaches a terminal status or `ingestTimeout` elapses,
-    // so a `retrieve()` immediately afterward sees them.
+    // Chunks client-side when the data source does not chunk, then waits until every
+    // document is indexed or `ingestTimeout` passes. Document ids come from
+    // `ai:Metadata.id`; a document split into several chunks submits `<id>#0`,
+    // `<id>#1`, and so on. Two documents with the same id in one call are refused.
 
     # Ingests documents into the knowledge base.
     #
@@ -150,10 +132,8 @@ public distinct isolated client class SelfManagedKnowledgeBase {
         }
     }
 
-    // Searches across every data source on the knowledge base, not just the `CUSTOM`
-    // one `ingest()` writes to. `maxLimit = -1` is still subject to the vector store's
-    // own relevance cutoff, and filter operator support is BACKEND-DEPENDENT — see the
-    // module README.
+    // Searches every data source on the knowledge base. Which filter operators work
+    // depends on the vector store; see the README.
 
     # Retrieves relevant chunks for the given query.
     #
@@ -215,27 +195,11 @@ public distinct isolated client class SelfManagedKnowledgeBase {
         return matches;
     }
 
-    // Bedrock has no metadata-based delete, so this enumerates every document on this
-    // class's data source (`ListKnowledgeBaseDocuments`) and runs TWO PAGED
-    // `Retrieve` enumerations — filtered by `filters`, then unfiltered — to classify each
-    // candidate as a confirmed match, genuinely excluded, or indeterminate. See
-    // `resolveDataSourceDeletes` (knowledgebase_common.bal) for the algorithm (A17).
-    //
-    // Cost: two paged `Retrieve` enumerations (at most
-    // `KB_DELETE_ENUMERATION_MAX_PAGES` pages of 100 results), not one to two round trips
-    // per document. A maintenance operation, not something to put on a request path.
-    //
-    // `filters` must contain at least one leaf predicate: a filter set that constrains
-    // nothing matches every document, so "delete everything" has to be explicit.
-    //
-    // Parameterised here by the self-managed reserved metadata key
-    // (`VECTOR_SOURCE_URI_METADATA_KEY`, NOT the managed `_source_uri`) and the
-    // `vectorSearchConfiguration` branch (`vectorDeleteRetrieve`).
-    //
-    // Scoped to this class's own data source, the one `ingest()` writes to. Other data
-    // sources on the same knowledge base are never touched: document ids are unique
-    // only within a data source, so a match elsewhere says nothing about a document
-    // here. Deletes that can be made still happen when some documents cannot be reached.
+    // Bedrock has no delete-by-metadata, so this lists the data source's documents and
+    // checks each against the filter through `Retrieve` (see `resolveDataSourceDeletes`).
+    // A maintenance operation, not one for a request path. `filters` must constrain
+    // something, so deleting everything is never an accident. Only this class's data
+    // source is touched.
 
     # Deletes documents that match the given metadata filters.
     #
@@ -245,10 +209,8 @@ public distinct isolated client class SelfManagedKnowledgeBase {
         json? userFilter = check metadataFiltersToRetrievalFilter(filters);
         check guardDeleteFilter(userFilter, filters);
 
-        // Scoped to THIS class's data source — the only one `ingest()` writes to, and
-        // the one validated as CUSTOM at construction. Documents on other data sources
-        // of the same knowledge base are never touched: their ids are only unique
-        // within their own data source, and an S3 source re-syncs whatever is deleted.
+        // Only this class's data source: ids are unique per data source, and an S3
+        // source would re-sync anything deleted.
         DeletableDocument[] candidates = check listDeletableDocuments(self.controlTransport,
                 self.knowledgeBaseId, self.dataSourceId, "CUSTOM");
         if candidates.length() == 0 {

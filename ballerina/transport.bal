@@ -20,31 +20,13 @@ import ballerina/lang.runtime;
 import ballerina/time;
 import ballerinax/aws.auth;
 
-// SigV4 transport — per-route signing, retry, error mapping.
-//
-// CREDENTIAL RESOLUTION is delegated to `auth:CredentialProvider` (the full AWS
-// chain, with expiry/refresh owned by the provider). SIGNING stays here, and must:
-// `auth:getSignedHeaders` builds its canonical URI by double-encoding while always
-// treating `/` as a structural separator, so for a model-id ARN it emits
-// `...inference-profile/us.anthropic...` where AWS expects
-// `...inference-profile%252Fus.anthropic...`. No input string fixes that — `/`
-// survives both passes unchanged and a pre-encoded `%2F` becomes `%25252F` — so
-// every provisioned-model / inference-profile / custom-model-deployment ARN would
-// fail with SignatureDoesNotMatch. Verified 2026-08-09 against aws 1.0.1; the
-// dependency now resolves to 1.0.2, whose `SignatureRequest` is unchanged — re-check
-// this on every `ballerinax/aws` bump.
+// SigV4 transport: per-route signing, retry and error mapping. Signing is done here,
+// not with `auth:getSignedHeaders`, because that treats `/` as a path separator and
+// so cannot sign a model-id ARN (`inference-profile%252F...`). Re-check on every
+// `ballerinax/aws` upgrade.
 
-// Resolves a client's credentials ONCE, at construction. Every transport that
-// client builds then shares the result.
-//
-// `auth:CredentialProvider` owns a credential cache and, for the refreshing sources
-// (STS, SSO, IMDS, IRSA), a background refresh. Constructing one per TRANSPORT gave a
-// client with two endpoints — the two knowledge-base agent planes — two providers for
-// identical credentials, each with its own cache and refresh. `ai:ModelProvider`
-// declares no `close`, so nothing ever reclaims them; sharing is the only fix.
-//
-// Resolves eagerly, so a bad profile/role surfaces at construction rather than on the
-// first call. A bearer token bypasses SigV4 and needs no provider at all.
+// Resolves a client's credentials once, at construction, so a bad profile or role
+// fails early. Every transport of that client shares the provider and its cache.
 isolated function resolveCredentials(BedrockAuthConfig credentials)
         returns auth:CredentialProvider|BearerToken|ai:Error {
     if credentials is BearerToken {
@@ -64,8 +46,7 @@ const AWS4_REQUEST = "aws4_request";
 # SigV4 signing, an HTTP client and retry/error mapping for one resolved route.
 # Host, path and signing scope are fixed at construction.
 isolated client class BedrockTransport {
-    // Exactly one of these is set. A bearer bypasses SigV4, so it never reaches
-    // `CredentialProvider`; every other credential source resolves through it.
+    // Exactly one is set. A Bedrock API key skips SigV4.
     private final auth:CredentialProvider? credProvider;
     private final readonly & BearerToken? bearer;
     private final string region;
@@ -74,13 +55,9 @@ isolated client class BedrockTransport {
     private final string wirePath; // model-id segment single-encoded (from buildEndpoint)
     private final http:Client httpClient;
     private final readonly & RetryConfig retryConfig;
-    // Whether the RESOLVED ROUTE is Mantle — drives the
-    // `bedrock-mantle:CreateInference` hint on a 403.
+    // For the `bedrock-mantle:CreateInference` hint on a 403.
     private final boolean isMantleRoute;
-    // Whether this transport talks to the `bedrock-agent`/`bedrock-agent-runtime`
-    // control/data planes (knowledge bases) rather than a model route. Swaps the
-    // 400/403/404 hints for KB-appropriate wording and adds 402/409 handling — the
-    // agent control plane returns 402 for quota, not 400, and only it can 409.
+    // A knowledge-base plane: different 400/403/404 hints, and 402/409 handling.
     private final boolean isAgentRoute;
 
     isolated function init(auth:CredentialProvider|BearerToken credentials, string region, Endpoint ep,
@@ -91,15 +68,11 @@ isolated client class BedrockTransport {
             self.credProvider = ();
         } else {
             self.bearer = ();
-            // Already resolved by `resolveCredentials`, once per CLIENT. `CredentialProvider`
-            // is an isolated class holding its own cache and refresh, so sharing one
-            // across a client's transports is safe and is the point.
+            // Resolved once per client and safe to share.
             self.credProvider = credentials;
         }
         self.region = region;
-        // Signing name comes from the route and only from the route: `bedrock` for
-        // Converse/Invoke, `bedrock-mantle` for Mantle. A `customEndpoint` (VPCE,
-        // gateway, mock) changes the HOST, never the signing scope.
+        // From the route only: a `customEndpoint` changes the host, not the signing name.
         self.signingService = ep.signingService;
         self.isMantleRoute = ep.signingService == SIGNING_BEDROCK_MANTLE;
         self.isAgentRoute = isAgentRoute;
@@ -110,49 +83,31 @@ isolated client class BedrockTransport {
         self.retryConfig = rc.cloneReadOnly();
     }
 
-    // POSTs a signed request to the fixed `wirePath` and returns the JSON response
-    // plus the response headers we care about, retrying transient errors with
-    // exponential backoff. `extraHeaders` carry route-specific headers (guardrail,
-    // anthropic-version, workspace, api-key) — all of them are signed.
-    //
-    // A thin fixed-method/path wrapper over `executeRequest`, kept so every existing
-    // model/embedding call site (`transport.execute(body, headers)`) is untouched.
+    // POSTs a signed request to the route's path, with retries. `extraHeaders` are
+    // signed too.
     isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error
         => self.executeRequest("POST", self.wirePath, body, extraHeaders);
 
-    // The general form: method and path vary per call, for the knowledge-base agent
-    // planes where one transport instance serves many paths on the same host
-    // (`/knowledgebases/`, `/knowledgebases/{id}/retrieve`,
-    // `/knowledgebases/{id}/datasources/{id}/documents`, …). `body` is `()` for a
-    // bodyless `GET`/`DELETE` — signed as the SHA-256 of the empty string, per SigV4.
+    // Method and path per call, for the knowledge-base planes. A `()` body is signed
+    // as the empty string.
     isolated function executeRequest(string method, string path, json? body, map<string> extraHeaders = {})
             returns TransportResponse|ai:Error {
         TransportResponse|ConflictError|ai:Error result =
             self.executeRequestRetrying(method, path, body, extraHeaders);
         if result is ConflictError {
-            // The default surface: every call site but `createKnowledgeBase`'s A10
-            // recovery just wants a normal `ai:Error`, with the SAME message text a
-            // 409 always produced — see `executeRequestDetectingConflict` for the one
-            // caller that needs the typed distinction instead of this collapse.
+            // Every caller but the knowledge-base create recovery wants a plain error.
             return error ai:Error(result.message());
         }
         return result;
     }
 
-    // A10 §2a: like `executeRequest`, but surfaces a 409 as the typed `ConflictError`
-    // instead of collapsing it into a generic `ai:Error`, so `createKnowledgeBase` can
-    // attempt the idempotent-create recovery (re-list by name, attach on exactly one
-    // match) rather than matching on message text. Every other status still goes
-    // through the identical retry/error-mapping path `executeRequest` uses.
+    // Like `executeRequest`, but returns a 409 as `ConflictError` so the knowledge-base
+    // create can recover from it.
     isolated function executeRequestDetectingConflict(string method, string path, json? body,
             map<string> extraHeaders = {}) returns TransportResponse|ConflictError|ai:Error
         => self.executeRequestRetrying(method, path, body, extraHeaders);
 
-    // The shared retry loop behind both `executeRequest` and
-    // `executeRequestDetectingConflict`. A `ConflictError` is never retried — 409 is
-    // not in the transient-status set `executeRequestOnce`/`mapResponse` retry — so it
-    // passes straight through on the first attempt, same as any other non-retryable
-    // error.
+    // The retry loop. A 409 is not retried.
     isolated function executeRequestRetrying(string method, string path, json? body, map<string> extraHeaders)
             returns TransportResponse|ConflictError|ai:Error {
         RetryConfig rc = self.retryConfig;
@@ -167,7 +122,6 @@ isolated client class BedrockTransport {
             if result is ai:Error {
                 return result; // non-retryable
             }
-            // Back off unless attempts are exhausted.
             if attempt >= rc.maxRetries {
                 return error ai:LlmConnectionError(
                     string `${result.message()} (retries exhausted after ${rc.maxRetries} attempts)`, result.cause());
@@ -178,8 +132,8 @@ isolated client class BedrockTransport {
         }
     }
 
-    // A single signed round-trip. The path is sent single-
-    // encoded; the canonical URI is double-encoded for the signature.
+    // One signed round trip. The path goes out single-encoded; the signature uses it
+    // double-encoded.
     isolated function executeRequestOnce(string method, string path, json? body, map<string> extraHeaders)
             returns TransportResponse|RetryableError|ConflictError|ai:Error {
         string payload = body is () ? "" : body.toJsonString();
@@ -194,43 +148,27 @@ isolated client class BedrockTransport {
         foreach [string, string] [k, v] in headers.entries() {
             req.setHeader(k, v);
         }
-        // Path is already single-encoded by buildEndpoint; send it verbatim.
         http:Response|error resp = self.httpClient->execute(method, path, req);
         if resp is error {
-            // Transport-level failure (DNS, TLS, socket) — treat as retryable.
-            //
-            // NAME THE HOST. Without it every one of these reads
-            // "Connection error while calling Bedrock", which is the same string for a
-            // mistyped region in `customEndpoint`, a `dualstack` flag on a route with
-            // no dualstack host, a VPCE with no private DNS, and a genuine network
-            // outage — four different caller mistakes and one act of God, told apart
-            // only by the retry count. The host is the one fact that distinguishes
-            // them, this class already holds it, and it is not a secret.
+            // A connection failure (DNS, TLS, socket); retryable. The host is named,
+            // since it is what tells a wrong region or endpoint from an outage.
             return error RetryableError(
                 string `Connection error while calling Bedrock at '${self.host}'`, resp);
         }
         return self.mapResponse(resp);
     }
 
-    // Maps an HTTP response to a `TransportResponse` or a typed error.
     isolated function mapResponse(http:Response resp) returns TransportResponse|RetryableError|ConflictError|ai:Error {
         int status = resp.statusCode;
-        // Bedrock's own APIs answer with `x-amzn-RequestId`; the OpenAI-compatible
-        // paths may use the OpenAI convention `x-request-id` instead. It is the one
-        // value AWS Support asks for, so every error below carries it.
+        // The value AWS Support asks for. OpenAI-compatible paths may use `x-request-id`.
         string? requestId = optionalHeader(resp, "x-amzn-RequestId") ?: optionalHeader(resp, "x-request-id");
         if status >= 200 && status < 300 {
             json|error jsonBody = resp.getJsonPayload();
             if jsonBody is error {
                 return error ai:LlmInvalidResponseError("Bedrock response was not valid JSON", jsonBody);
             }
-            // Capture the response headers the decoder/provider needs.
-            //
-            // The guardrail-fired signal is NOT here: it is a response BODY field
-            // (`amazon-bedrock-guardrailAction`), read by each Invoke converter via
-            // `invokeGuardrailAction`. InvokeModel documents only three response
-            // headers, and no guardrail among them — the `X-Amzn-Bedrock-Guardrail*`
-            // headers are request-only.
+            // The guardrail signal is a body field, not a header; each InvokeModel
+            // decoder reads it.
             // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
             map<string> responseHeaders = {};
             if requestId is string {
@@ -245,26 +183,18 @@ isolated client class BedrockTransport {
         boolean mantle = self.isMantleRoute;
         boolean agent = self.isAgentRoute;
         match status {
-            // 502/504 come from the load balancers fronting Bedrock rather than the
-            // service itself, so they carry no Bedrock error code — but they are just
-            // as transient as a ThrottlingException and must be retried, not surfaced.
+            // 502 and 504 come from the load balancers; they are transient too.
             429|408|500|502|503|504 => {
                 return error RetryableError(string `Bedrock transient error (HTTP ${status}): ${detail}`);
             }
             400 => {
-                // Only append the routing hint when `detail` is itself the useless
-                // "status 400" fallback — when Bedrock sent a specific reason (e.g.
-                // "Model does not support image modality"), tacking on a generic
-                // routing guess is redundant at best and misleading at worst. Never on
-                // an agent (KB) route: there is no `api` to retry with there.
-                // Mantle classes have no `apiType` to switch, so the hint is runtime-only.
+                // Only when AWS gave no reason, and only on a runtime model route.
                 string hint = !agent && !mantle && detail.startsWith("status ")
                     ? " The model may not support this API; try 'apiType = INVOKE' (or CONVERSE)."
                     : "";
                 return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}.${hint}`);
             }
-            // The bedrock-agent control plane returns 402, not 400, for a quota
-            // violation (e.g. IngestKnowledgeBaseDocuments over a service limit).
+            // The knowledge-base control plane answers 402 for a quota violation.
             // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_IngestKnowledgeBaseDocuments.html
             402 => {
                 return error ai:Error(string `Bedrock ServiceQuotaExceededException (HTTP 402): ${detail}`);
@@ -286,12 +216,7 @@ isolated client class BedrockTransport {
                 return error ai:Error(string `Bedrock ResourceNotFoundException (HTTP 404): ${detail}. ${hint}`);
             }
             409 => {
-                // A10 §2a: typed rather than a bare `ai:Error`, so `createKnowledgeBase`
-                // can attempt the idempotent-create recovery (re-list by name, attach
-                // on exactly one match) without matching on message text. The message
-                // text itself is UNCHANGED from before this type existed — every call
-                // site that does not recover collapses this back to an identical
-                // `ai:Error` (see `executeRequest`).
+                // Typed so the knowledge-base create can recover from it.
                 return error ConflictError(string `Bedrock ConflictException (HTTP 409): ${detail}`, detail = detail);
             }
             424 => {
@@ -303,14 +228,8 @@ isolated client class BedrockTransport {
         }
     }
 
-    // Best-effort extraction of the error message from the response body.
-    //
-    // THREE SHAPES, because this transport spans three gateways. Bedrock's own APIs
-    // use a top-level `message`; the OpenAI-compatible Mantle paths use the OpenAI
-    // convention `{"error": {"message": ..., "code": ...}}`; and some upstream errors
-    // arrive with `error` as a bare string. Checking only the first meant every
-    // Mantle-route 400 degraded to the useless "status 400" — which is exactly what a
-    // caller sending an image to a model that does not accept one used to see.
+    // AWS's message from the body. Bedrock uses `message`; OpenAI-compatible paths use
+    // `{"error": {"message", "code"}}`, or a bare `error` string.
     isolated function errorDetail(http:Response resp) returns string {
         json|error j = resp.getJsonPayload();
         if j !is map<json> {
@@ -324,9 +243,7 @@ isolated client class BedrockTransport {
         if err is map<json> {
             json? nested = err["message"];
             if nested is string && nested.trim() != "" {
-                // Keep the provider's own code when it sent one — `validation_error`
-                // vs `invalid_request_error` is the difference between "your body is
-                // wrong" and "this model cannot do that".
+                // The provider's code says whether the body or the model is the problem.
                 json? code = err["code"] ?: err["type"];
                 return code is string ? string `${nested} (${code})` : nested;
             }
@@ -337,20 +254,12 @@ isolated client class BedrockTransport {
         return string `status ${resp.statusCode}`;
     }
 
-    // Builds the SigV4 (or bearer) headers for a request against the fixed
-    // `wirePath`, using `POST` (every model/embedding route). A thin wrapper over
-    // `signedHeadersFor`, kept so the existing golden signing tests — pinned to this
-    // exact signature — need no change.
+    // SigV4 (or bearer) headers for a `POST` to the route's path.
     isolated function signedHeaders(string payload, map<string> extraHeaders,
             [string, string]? fixedClock = ()) returns map<string>|error
         => self.signedHeadersFor("POST", self.wirePath, payload, extraHeaders, fixedClock);
 
-    // Builds the SigV4 (or bearer) headers for one request, method and path both
-    // caller-supplied — the knowledge-base planes call many paths per transport
-    // instance, so neither can stay fixed at `self.wirePath`/`"POST"`.
-    // `fixedClock` exists ONLY for tests: signing is otherwise unobservable without
-    // live AWS, and a wall clock makes the output unassertable. Production callers
-    // omit it and get `amzTimestamps()`.
+    // SigV4 (or bearer) headers for any method and path. `fixedClock` is for tests.
     isolated function signedHeadersFor(string method, string path, string payload, map<string> extraHeaders,
             [string, string]? fixedClock = ()) returns map<string>|error {
         map<string> headers = {};
@@ -359,16 +268,10 @@ isolated client class BedrockTransport {
         }
         BearerToken? bearerCreds = self.bearer;
 
-        // Bedrock API key (bearer) — first-class on both endpoints: skip SigV4.
+        // Bedrock API key: no SigV4.
         if bearerCreds is BearerToken {
-            // Anthropic's Mantle surface REJECTS a request carrying BOTH `Authorization`
-            // and `x-api-key` (verified live 2026-08-03: either header alone -> 200, both
-            // -> 401 `authentication_error: "request must not include both 'authorization'
-            // and 'x-api-key' headers"`). When the caller already attached `x-api-key` — an
-            // X_API_KEY Mantle route, set by addMantleApiKeyHeader — that header is the sole
-            // authenticator and Bearer must be SUPPRESSED. The check is case-insensitive so
-            // a routeOverrides entry using a different casing (e.g. `X-Api-Key`) cannot
-            // slip past and resurrect the collision.
+            // The Mantle Messages path rejects a request with both `Authorization` and
+            // `x-api-key` (verified live), so no Bearer when `x-api-key` is present.
             if !hasApiKeyHeader(headers) {
                 headers["Authorization"] = string `Bearer ${bearerCreds.apiKey}`;
             }
@@ -377,24 +280,21 @@ isolated client class BedrockTransport {
         }
 
         // ---- SigV4 ----
-        // Credentials come from the chain on EVERY request, not once at construction:
-        // IMDS/ECS/IRSA/AssumeRole credentials expire, and the provider refreshes them
-        // behind its own lock. Nothing mutable lives in this class.
+        // Credentials are read on every request: temporary ones expire and the
+        // provider refreshes them.
         auth:CredentialProvider provider = check self.credProvider.ensureType();
         auth:Credentials creds = check provider.getCredentials();
         [string, string] [amzDate, dateStamp] = fixedClock ?: check amzTimestamps();
-        // Canonical URI is the DOUBLE-encoded wire path (SigV4 non-S3 rule):
-        // the server re-encodes the received (single-encoded) path once to match.
+        // The canonical URI is the wire path encoded twice (SigV4, non-S3).
         string canonicalUri = getCanonicalUri(path);
         string payloadHash = array:toBase16(crypto:hashSha256(payload.toBytes())).toLowerAscii();
 
         string accessKey = creds.accessKeyId;
         string secretKey = creds.secretAccessKey;
-        // Present for every temporary-credential source (STS, AssumeRole, IRSA, IMDS,
-        // SSO), absent for long-lived access keys.
+        // Only temporary credentials have one.
         string? sessionToken = creds?.sessionToken;
 
-        // Sign EVERY header we send, sorted by lowercased name.
+        // Every header sent is signed.
         map<string> toSign = {"content-type": APPLICATION_JSON, "host": self.host, "x-amz-date": amzDate};
         if sessionToken is string {
             toSign["x-amz-security-token"] = sessionToken;
@@ -430,10 +330,7 @@ isolated client class BedrockTransport {
     }
 }
 
-// True if `headers` already carries an `x-api-key` (any casing). Used to decide
-// whether the transport's default `Authorization: Bearer` must be SUPPRESSED: an
-// X_API_KEY Mantle route attaches x-api-key, and Anthropic's Mantle surface 401s on a
-// request that includes both auth headers (see the BearerToken branch above).
+// Whether `headers` has an `x-api-key` in any casing.
 isolated function hasApiKeyHeader(map<string> headers) returns boolean {
     foreach string name in headers.keys() {
         if name.toLowerAscii() == "x-api-key" {
@@ -451,53 +348,34 @@ type TransportResponse record {|
     map<string> headers;
 |};
 
-// Response-header keys captured into `TransportResponse.headers`.
 const REQUEST_ID_HEADER = "requestId";
-
-// A `distinct error` so it narrows cleanly against `json` and `ai:Error`.
 
 # A retryable failure: HTTP 408, 429, 500, 502, 503 or 504, or a connection failure.
 type RetryableError distinct error;
 
-// A10 §2a/prerequisite: a Bedrock `ConflictException` (HTTP 409) — the caller may be
-// able to recover by re-resolving the resource that already exists (a sequential
-// duplicate `CreateKnowledgeBase`/`CreateDataSource` name collision). Deliberately a
-// PLAIN `distinct error`, not a `distinct ai:Error` — mirrors `RetryableError` just
-// above: neither type crosses a public boundary as itself. `executeRequest` (used by
-// every call site but the one that recovers) collapses a `ConflictError` back into a
-// generic `ai:Error` with the identical message text, so existing error output for
-// every other 409 is unchanged.
+// A plain `distinct error`, like `RetryableError`; `executeRequest` turns it back into
+// an `ai:Error` with the same message for every other caller.
 
 # A Bedrock `ConflictException` (HTTP 409), which the caller may recover from.
 type ConflictError distinct error<record {| string detail; |}>;
 
-// Returns a response header value, or `()` if absent.
 isolated function optionalHeader(http:Response resp, string name) returns string? {
     string|error value = resp.getHeader(name);
     return value is string ? value : ();
 }
 
-// `[amzDate (ISO8601 basic), dateStamp (YYYYMMDD)]` for NOW, in UTC.
 isolated function amzTimestamps() returns [string, string]|error {
     return formatAmzTimestamps(time:utcToCivil(time:utcNow()));
 }
 
-// The pure formatter behind `amzTimestamps` — split out so the format can be
-// tested at a fixed clock, including the second-59 boundary that a wall-clock test
-// would only hit once a minute (and only half the time).
+// Split out so the format can be tested at a fixed clock.
 isolated function formatAmzTimestamps(time:Civil c) returns [string, string]|error {
     string y = pad(c.year, 4);
     string mo = pad(c.month, 2);
     string d = pad(c.day, 2);
     string h = pad(c.hour, 2);
     string mi = pad(c.minute, 2);
-    // `time:Civil.second` is a decimal carrying sub-second precision. `<int>` on a
-    // decimal ROUNDS (half-to-even) in Ballerina — it does not truncate — so
-    // `<int>59.7d` is 60, and second 59 with a fraction >= 0.5 would emit
-    // "...T235960Z". That is not a valid ISO 8601 basic timestamp; AWS rejects the
-    // X-Amz-Date header, and the resulting 403 is NOT retryable. Roughly 1 request
-    // in 120 (P(second==59) * P(frac>=0.5)). `.floor()` truncates, which is what
-    // SigV4 wants: whole seconds, no milliseconds.
+    // Floor, not `<int>`: `<int>` rounds, so 59.7 s would become an invalid `60`.
     // https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-signing-elements.html
     decimal secDec = c.second ?: 0;
     string s = pad(<int>secDec.floor(), 2);
@@ -506,7 +384,6 @@ isolated function formatAmzTimestamps(time:Civil c) returns [string, string]|err
     return [amzDate, dateStamp];
 }
 
-// Zero-pads `n` to `width` digits.
 isolated function pad(int n, int width) returns string {
     string s = n.toString();
     while s.length() < width {
@@ -515,19 +392,12 @@ isolated function pad(int n, int width) returns string {
     return s;
 }
 
-// Double-encodes the (already single-encoded) wire path for the SigV4 canonical
-// URI (non-S3 rule): encode again, then restore structural `/` separators
-// (their `%2F` maps back to `/`, while a model-id's internal `%2F`→`%252F` stays
-// double-encoded).
-//
-// Uses the SAME RFC 3986 encoder as `buildEndpoint` — the two must agree
-// character-for-character or the server cannot reconstruct what we signed. Total:
-// `encodePathSegment` has no failure mode, so neither does this.
+// Encodes the single-encoded wire path again for the SigV4 canonical URI, keeping `/`
+// separators. Must use the same encoder as `buildEndpoint`.
 isolated function getCanonicalUri(string wirePath) returns string {
     return re `%2F`.replaceAll(encodePathSegment(wirePath), "/");
 }
 
-// SigV4 signing-key derivation. Identical to aws.dynamodb.
 isolated function getSignatureKey(string secretKey, string dateStamp, string region, string serviceName)
         returns byte[]|error {
     byte[] kDate = check crypto:hmacSha256(dateStamp.toBytes(), ("AWS4" + secretKey).toBytes());
@@ -536,11 +406,10 @@ isolated function getSignatureKey(string secretKey, string dateStamp, string reg
     return crypto:hmacSha256(AWS4_REQUEST.toBytes(), kService);
 }
 
-// The caller's HTTP settings, with `timeout` replaced by `defaultTimeout` unless the
-// caller changed it from the HTTP client's own default.
+// `httpConfig` with `timeout` set to `defaultTimeout`, unless the caller changed it.
 isolated function withDefaultTimeout(http:ClientConfiguration? httpConfig, decimal defaultTimeout)
         returns http:ClientConfiguration {
-    // A shallow copy, so a caller's (possibly read-only) record is never written to.
+    // A copy, so the caller's record is never written to.
     http:ClientConfiguration base = httpConfig ?: {};
     http:ClientConfiguration config = {...base};
     if config.timeout == HTTP_CLIENT_DEFAULT_TIMEOUT {

@@ -14,20 +14,11 @@
 
 import ballerina/ai;
 
-// `ai:MetadataFilters` -> Bedrock `RetrievalFilter` JSON. Pure, no I/O — golden/
-// table-testable directly. Two wire constraints that would otherwise surface as a
-// runtime 400 from Bedrock rather than a construction-time or call-time mistake:
-//
-//   1. `RetrievalFilter` is a UNION — exactly one member (`equals`, `andAll`, ...)
-//      may be set on any single JSON object.
-//   2. `RetrievalFilterList` (the value of `andAll`/`orAll`) has `min: 2`. A group
-//      that reduces to a single child must be FLATTENED to that child's own JSON,
-//      not wrapped in a one-element array.
+// `ai:MetadataFilters` to a Bedrock `RetrievalFilter`. Each object sets exactly one
+// operator, and a group needs at least two members, so a one-member group is flattened.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_RetrievalFilter.html
 
-// The eight `ai:MetadataFilterOperator` members, mapped 1:1 to their `RetrievalFilter`
-// field name. `IN`/`NOT_IN` are the only operators whose `value` must be an array —
-// enforced here rather than left for Bedrock to reject with an opaque 400.
+// One filter as its `RetrievalFilter` operator. `IN` and `NOT_IN` need an array value.
 isolated function metadataFilterToRetrievalFilter(ai:MetadataFilter filter) returns json|ai:Error {
     string key = filter.key;
     json value = filter.value;
@@ -63,26 +54,19 @@ isolated function metadataFilterToRetrievalFilter(ai:MetadataFilter filter) retu
             return {notIn: attribute};
         }
     }
-    // Unreachable: `ai:MetadataFilterOperator` is a closed 8-member enum and every
-    // member is matched above. Kept only because `match` on an open string type
-    // requires an exhaustive-looking clause to compile.
+    // Unreachable: every operator is matched above.
     return error ai:Error(string `Unsupported metadata filter operator: '${filter.operator}'`);
 }
 
-// `ai:MetadataFilters` (a possibly-nested AND/OR group) -> a single `RetrievalFilter`
-// JSON value, or `()` when the group is empty (the caller then omits Bedrock's
-// `filter` field entirely rather than sending a meaningless empty union).
+// A filter group as one `RetrievalFilter`, or `()` when it constrains nothing.
 isolated function metadataFiltersToRetrievalFilter(ai:MetadataFilters filters) returns json?|ai:Error {
     json[] children = [];
     foreach ai:MetadataFilters|ai:MetadataFilter child in filters.filters {
         json? childJson = child is ai:MetadataFilter
             ? check metadataFilterToRetrievalFilter(child)
             : check metadataFiltersToRetrievalFilter(child);
-        // `childJson is json` would NOT reject nil — `()` is a member of `json` — so
-        // an empty nested group's `()` would be pushed into `children` verbatim and
-        // reach the wire as `{"andAll": [null, null]}`, which Bedrock rejects with a
-        // bare `ValidationException`. Two nested empty groups constrain nothing, so
-        // the whole thing must collapse to `()` and behave like an omitted filter.
+    // `()` is a `json` value, so `childJson is json` would let empty groups through as
+    // `null` members.
         if childJson !is () {
             children.push(childJson);
         }
@@ -99,19 +83,8 @@ isolated function metadataFiltersToRetrievalFilter(ai:MetadataFilters filters) r
     return {[groupKey]: children};
 }
 
-// The number of real leaf predicates in a (possibly nested) `ai:MetadataFilters`.
-//
-// Guards `deleteByFilter` (both classes) against a filter set that LOOKS populated
-// but constrains nothing: `{filters: [{filters: []}, {filters: []}]}` has two
-// children and no predicates, and a filter that constrains nothing makes every
-// per-document probe "does this document exist" — every one hits, and the whole
-// knowledge base is deleted.
-//
-// `metadataFiltersToRetrievalFilter` above now collapses that case to `()` as well,
-// so a nil check alone would catch it today. This is kept as the SECOND, independent
-// condition because it answers the caller's real question — did you actually
-// constrain anything? — without depending on how the wire encoder happens to fold
-// empty groups. Total deletion is not a case to protect against with one check.
+// How many real predicates a filter has. `deleteByFilter` checks this as well as the
+// encoded filter, so an empty filter can never delete everything.
 isolated function filterLeafCount(ai:MetadataFilters filters) returns int {
     int count = 0;
     foreach ai:MetadataFilters|ai:MetadataFilter child in filters.filters {

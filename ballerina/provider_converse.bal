@@ -17,19 +17,8 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// CONVERSE-ONLY, and deliberately so. Converse is the one model-agnostic surface —
-// a single request shape serves every vendor — so it is the only API this class can
-// offer without knowing whose model it is holding. The alternatives all need that
-// knowledge: InvokeModel's body is the model's own and is selected by vendor prefix,
-// and the vendor-native shapes are specific protocols served for specific model sets.
-// Offering those here would mean guessing a dialect from an id this module has never
-// seen, and a wrong guess is a confusing 400 rather than an honest refusal.
-//
-// An unknown id is NOT an error: it goes on the wire as-is and AWS answers for it,
-// which is what keeps a model AWS ships tomorrow usable without a module release.
-//
-// Reaches every model Bedrock serves on Converse, including vendors with no dedicated
-// class here. Signs as `bedrock`.
+// Converse only: it is the one API with a single request format for every model, so the
+// class needs no knowledge of the vendor. An unknown id is sent as given.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html
 
 # Any Bedrock model, through the Converse API on the Bedrock Runtime endpoint.

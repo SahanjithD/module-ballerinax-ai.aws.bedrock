@@ -16,39 +16,21 @@ import ballerina/ai;
 import ballerina/time;
 import ballerina/uuid;
 
-// Pure conversions between `ai:Chunk`/`ai:Document`/`ai:QueryMatch` and the Bedrock
-// `KnowledgeBaseDocument` / `KnowledgeBaseRetrievalResult` wire shapes. No I/O —
-// golden-file testable directly.
+// Pure conversions between `ai` types and the knowledge-base wire shapes.
 
 const string KB_CONTENT_TYPE_TEXT = "TEXT";
 
-// Bedrock's own limits on `DocumentMetadata.inlineAttributes` — validated here so a
-// caller sees a clear message instead of an opaque 400 from `IngestKnowledgeBaseDocuments`.
+// Bedrock's limits on inline metadata, checked here for a clearer error than a 400.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_DocumentMetadata.html
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_MetadataAttribute.html
-// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_MetadataAttributeValue.html
 const int MAX_INLINE_ATTRIBUTES = 50;
 const int MAX_METADATA_KEY_LENGTH = 200;
 const int MAX_STRING_VALUE_LENGTH = 2048;
 const int MAX_STRING_LIST_LENGTH = 10;
 
-// `ai:Metadata` (ballerina/ai `document-types.bal`) is an open record whose DECLARED
-// fields are TYPED — `int id|index|prev`, `decimal fileSize`, `time:Utc
-// createdAt|modifiedAt`, and ten `string` fields — with a `json...` rest field
-// underneath. Both directions of the conversion have to respect those types:
-//
-//   - OUTBOUND, `time:Utc` is a TUPLE (`readonly & [int, decimal]`), so it reaches
-//     `toMetadataAttributeValue` as a `json[]` and would hit the STRING_LIST branch
-//     and be rejected for holding non-string elements. Any document that has been
-//     through Ballerina's own chunkers or loaders carries one.
-//   - INBOUND, writing a raw `json` into a typed field is an inherent type violation
-//     that PANICS (not an `ai:Error`) and kills the strand. Bedrock stores every
-//     numeric metadata attribute as `NUMBER` and answers with a `decimal` even for a
-//     value submitted as an `int`, so `metadata["id"] = <decimal>` is the ordinary
-//     case, not an edge one.
-//
-// Listed by name, which is safe precisely because these names are DECLARED fields:
-// a value under one of them can only ever be that field's type.
+// `ai:Metadata`'s typed fields. Each needs converting both ways: a `time:Utc` is a tuple
+// that would otherwise look like a string list, and Bedrock returns every number as a
+// `decimal`, which would panic if written into an `int` field.
 final readonly & string[] METADATA_INT_FIELDS = ["id", "index", "prev"];
 final readonly & string[] METADATA_UTC_FIELDS = ["createdAt", "modifiedAt"];
 final readonly & string[] METADATA_STRING_FIELDS = [
@@ -57,14 +39,8 @@ final readonly & string[] METADATA_STRING_FIELDS = [
 ];
 const string METADATA_DECIMAL_FIELD = "fileSize";
 
-// `ai:Chunk`/`ai:Document` -> a `KnowledgeBaseDocument` JSON fragment (the
-// `documents[]` array element for `IngestKnowledgeBaseDocuments`), plus the
-// `customDocumentIdentifier.id` it was given — the caller needs that id back to
-// poll `GetKnowledgeBaseDocuments` for the document it just submitted.
-//
-// Only `ai:TextChunk`/`ai:TextDocument` are supported: a non-text chunk returns a
-// clean `ai:Error` rather than being silently dropped from the batch, matching this
-// module's existing multimodal stance (see content_parts.bal).
+// An `ai:Chunk` or `ai:Document` as a `KnowledgeBaseDocument`, plus the id it was given
+// (needed to poll its status). Only text is supported; anything else is an error.
 isolated function chunkToKnowledgeBaseDocument(string providerName, ai:Chunk|ai:Document chunk,
         int? chunkOrdinal = ()) returns [json, string]|ai:Error {
     string content;
@@ -93,9 +69,7 @@ isolated function chunkToKnowledgeBaseDocument(string providerName, ai:Chunk|ai:
     };
     if metadata is ai:Metadata {
         json? metadataJson = check metadataToDocumentMetadata(metadata);
-        // `metadataJson is json` would NOT reject nil — `()` is a member of `json` —
-        // and would put `"metadata": null` on an ingest document that simply has no
-        // metadata, rather than omitting the field.
+        // `()` is a `json` value, so `metadataJson is json` would send `null`.
         if metadataJson !is () {
             documentJson["metadata"] = metadataJson;
         }
@@ -103,10 +77,7 @@ isolated function chunkToKnowledgeBaseDocument(string providerName, ai:Chunk|ai:
     return [documentJson, documentId];
 }
 
-// The document id to submit: `ai:Metadata.id` (an int field already on the shared
-// `ai` module type) stringified when present, so a caller who wants deterministic,
-// re-ingestable ids can supply one; otherwise a fresh UUID, mirroring the Azure
-// knowledge base precedent's fallback.
+// `ai:Metadata.id` as a string when set, so ids can be stable; otherwise a new UUID.
 isolated function documentIdFrom(ai:Metadata? metadata) returns string? {
     if metadata is () {
         return ();
@@ -115,38 +86,21 @@ isolated function documentIdFrom(ai:Metadata? metadata) returns string? {
     return id is int ? id.toString() : ();
 }
 
-// The id actually submitted for one document.
-//
-// `chunkOrdinal` is set ONLY for chunks this module produced client-side from a
-// parent that fanned out into more than one — see `applyChunker`. It exists because
-// Ballerina's chunkers COPY the parent document's metadata, `id` included, onto every
-// chunk (verified against `ai:GenericRecursiveChunker`: 14 chunks, all carrying the
-// parent's `id`), while Bedrock UPSERTS by `customDocumentIdentifier.id`. Without a
-// per-chunk id, a document that split into 20 pieces submits 20 documents under one
-// id, each overwriting the last: one chunk survives, 19 are silently discarded, and
-// `ingest()` reports complete success.
-//
-// A parent that produced exactly ONE chunk keeps the caller's own id — rewriting the
-// id of a document that never fanned out would orphan whatever was ingested under it
-// before, for no correctness gain.
-//
-// `#` is safe as a separator: `CustomDocumentIdentifier.id` has no pattern and allows
-// 1-2048 characters, and every caller-supplied id is a stringified `ai:Metadata.id`
-// (an `int`), so no caller id can collide with a generated one.
+// The id submitted for one document. Chunks of a document split into several get
+// `<id>#<n>`: chunkers copy the parent's `id`, and Bedrock upserts by id, so they would
+// otherwise overwrite each other. A single chunk keeps the caller's id. `#` cannot
+// clash with a caller id, which is always a number.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_CustomDocumentIdentifier.html
 isolated function documentIdFor(ai:Metadata? metadata, int? chunkOrdinal) returns string {
     string? derived = documentIdFrom(metadata);
     if derived is () {
-        // No caller id at all: every chunk already gets its own UUID, so there is
-        // nothing to disambiguate.
+        // No caller id: each chunk already gets its own UUID.
         return uuid:createRandomUuid();
     }
     return chunkOrdinal is int ? string `${derived}#${chunkOrdinal}` : derived;
 }
 
-// `ai:Metadata` -> `DocumentMetadata` (`IN_LINE_ATTRIBUTE`). Returns `()` when there
-// is nothing to send (an empty or all-`()` metadata record) so the caller omits the
-// `metadata` field entirely.
+// `ai:Metadata` as inline attributes, or `()` when there is nothing to send.
 isolated function metadataToDocumentMetadata(ai:Metadata metadata) returns json?|ai:Error {
     json[] attributes = [];
     foreach [string, json] [key, value] in metadata.entries() {
@@ -170,18 +124,10 @@ isolated function metadataToDocumentMetadata(ai:Metadata metadata) returns json?
     return {'type: "IN_LINE_ATTRIBUTE", inlineAttributes: attributes};
 }
 
-// One `ai:Metadata` value -> a typed `MetadataAttributeValue`. Bedrock supports
-// exactly four shapes (`BOOLEAN`/`NUMBER`/`STRING`/`STRING_LIST`); anything else
-// (nested objects, mixed-type arrays, ...) is a clear `ai:Error` rather than a
-// silent drop or a lossy `toString()`.
+// One metadata value as a `MetadataAttributeValue`: boolean, number, string or string
+// list. Anything else is an error rather than dropped.
 isolated function toMetadataAttributeValue(string key, json value) returns json|ai:Error {
-    // BEFORE the array branch: `time:Utc` is `readonly & [int, decimal]`, so
-    // `createdAt`/`modifiedAt` arrive here as a two-element `json[]` and would
-    // otherwise be rejected as "an array containing a non-string element" — an error
-    // naming STRING_LIST for what is really a standard timestamp field, making any
-    // document that has been through Ballerina's chunkers or loaders un-ingestable.
-    // Sent as an RFC 3339 `STRING`, which `metadataFromRetrievalResult` parses back
-    // symmetrically.
+    // Before the array branch: a `time:Utc` is a tuple. Sent as an RFC 3339 string.
     if METADATA_UTC_FIELDS.indexOf(key) is int {
         time:Utc|error utc = value.cloneWithType();
         if utc is error {
@@ -225,15 +171,8 @@ isolated function toMetadataAttributeValue(string key, json value) returns json|
         string `(supported: boolean, number, string, string[]); got ${value.toJsonString()}`);
 }
 
-// A `KnowledgeBaseRetrievalResult` (one element of `Retrieve`'s `retrievalResults[]`)
-// -> `ai:QueryMatch`. Only `content.type == "TEXT"` is supported — `IMAGE`/`ROW`/
-// `AUDIO`/`VIDEO` have no `ai:TextChunk`-shaped representation, so they are a clean
-// `ai:Error` rather than a silently empty or truncated chunk.
-//
-// `metadata` is passed through VERBATIM, including the six underscore-prefixed
-// system attributes Bedrock injects (`_source_uri`, `_chunk_id`, `_data_source_id`,
-// `_data_source_type`, `_file_type`, `_language_code`) — `_source_uri` in particular
-// is what makes `deleteByFilter`'s probe possible at all (see knowledgebase_managed.bal).
+// A retrieval result as an `ai:QueryMatch`. Only text results are supported. Metadata
+// is passed through, including Bedrock's own `_`-prefixed attributes.
 isolated function retrievalResultToQueryMatch(string providerName, json result) returns ai:QueryMatch|ai:Error {
     map<json> resultMap = result is map<json> ? result : {};
     json contentJson = resultMap["content"] ?: {};
@@ -258,19 +197,9 @@ isolated function retrievalResultToQueryMatch(string providerName, json result) 
     return {chunk, similarityScore};
 }
 
-// Bedrock's returned `metadata` map -> `ai:Metadata`, COERCED per declared field.
-//
-// A blind `metadata[key] = value` panics with an `InherentTypeViolation` the moment a
-// declared field's type and the returned JSON's type disagree — which is the ordinary
-// case, not an edge one: Bedrock stores every numeric attribute as `NUMBER` and
-// answers with a `decimal`, so a document ingested with `metadata.id` (the documented
-// way to give a document a stable, re-ingestable id — see `documentIdFrom`) could not
-// be retrieved at all. A panic is not an `ai:Error`: it escapes `retrieve()`'s error
-// union and kills the strand.
-//
-// Undeclared keys — including the six underscore-prefixed system attributes Bedrock
-// injects (`_source_uri`, `_chunk_id`, `_data_source_id`, `_data_source_type`,
-// `_file_type`, `_language_code`) — go through the `json...` rest field verbatim.
+// Bedrock's metadata back into `ai:Metadata`, converting each typed field (a direct
+// write would panic, since numbers come back as `decimal`). Other keys go into the
+// rest field as they are.
 isolated function metadataFromRetrievalResult(map<json> attributes) returns ai:Metadata|ai:Error {
     ai:Metadata metadata = {};
     foreach [string, json] [key, value] in attributes.entries() {
@@ -292,7 +221,7 @@ isolated function metadataFromRetrievalResult(map<json> attributes) returns ai:M
             }
             metadata[key] = narrowed;
         } else if METADATA_UTC_FIELDS.indexOf(key) is int {
-            // The symmetric half of `toMetadataAttributeValue`'s RFC 3339 STRING.
+            // The reverse of the RFC 3339 string sent on ingest.
             time:Utc|error utc = value is string ? time:utcFromString(value) : error("not a string");
             if utc is error {
                 return error ai:Error(
@@ -308,16 +237,13 @@ isolated function metadataFromRetrievalResult(map<json> attributes) returns ai:M
             }
             metadata[key] = value;
         } else {
-            // Rest field (`json...`): no declared type to violate.
             metadata[key] = value;
         }
     }
     return metadata;
 }
 
-// `json` -> `int`, or `()` when the value cannot be represented as one WITHOUT LOSS.
-// The round-trip comparison is the point: a plain `<int>` cast rounds half-even, so
-// `3.7` would silently become `4`.
+// `json` as an `int` only when lossless; `<int>` would round 3.7 to 4.
 isolated function narrowToInt(json value) returns int? {
     if value is int {
         return value;
@@ -333,8 +259,6 @@ isolated function narrowToInt(json value) returns int? {
     return ();
 }
 
-// `json` -> `decimal`. Widening from `int`/`float` is lossless in the direction that
-// matters here, so no round-trip check is needed.
 isolated function narrowToDecimal(json value) returns decimal? {
     if value is decimal {
         return value;

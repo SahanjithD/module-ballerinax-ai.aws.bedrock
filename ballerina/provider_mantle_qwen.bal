@@ -61,11 +61,7 @@ public isolated distinct client class MantleQwenModelProvider {
         self.wireModelId = route.effectiveModelId;
         self.converter = converter;
         self.transport = transport;
-        // Params BEFORE headers: `serviceTier`/`latencyOptimized` ride InvokeModel
-        // REQUEST HEADERS, so the header builder has to see them, and the route has to
-        // be able to refuse the ones it cannot carry before any of it is stored.
-        // Qwen3 hybrid thinking has no modelled field on any dialect, so it rides the
-        // verbatim passthrough.
+        // Qwen3 thinking has no field of its own, so it goes in the passthrough.
         // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
         AdditionalRequestFields? extra = config?.additionalModelRequestFields;
         boolean? enableThinking = config?.enableThinking;

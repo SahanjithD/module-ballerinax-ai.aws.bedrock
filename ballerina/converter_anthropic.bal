@@ -14,15 +14,10 @@
 
 import ballerina/ai;
 
-// Anthropic Messages wire format — shared by two routes:
-//   * Invoke-Anthropic: `anthropic_version: bedrock-2023-05-31` BODY field.
-//   * Mantle Messages:  `anthropic-version: 2023-06-01` HEADER (added by the
-//     transport), NO body version field. Different value AND mechanism.
-// The response shape is identical, so `decode` is shared.
+// Anthropic Messages, for two routes: InvokeModel (`anthropic_version` body field) and
+// the Messages API (`anthropic-version` header). The response is the same.
 
-// Invoke-Anthropic encoder — includes the mandatory `anthropic_version` body
-// field.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
+// InvokeModel with Anthropic: adds the required `anthropic_version` body field.
 isolated function encodeInvokeAnthropic(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeAnthropicMessages(system, messages, tools, stop, params, true);
@@ -66,9 +61,7 @@ isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] mess
         }
         body["tools"] = toolDefs;
     }
-    // Native body fields on this dialect. `output_config` is a SIBLING of `thinking`
-    // — nesting `effort` inside `thinking` is a documented ValidationException.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-adaptive-thinking.html
+    // `output_config` sits beside `thinking`, never inside it.
     ThinkingConfig? thinking = params?.thinking;
     if thinking is ThinkingConfig {
         body["thinking"] = thinkingBody(thinking);
@@ -77,15 +70,8 @@ isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] mess
     if effort is Effort {
         body["output_config"] = {"effort": effort};
     }
-    // The caller's passthrough, spliced at top level.
-    //
-    // These two encoders were the ONLY ones that dropped it — the other eight all
-    // splice it — which made `additionalModelRequestFields` silently inert on exactly
-    // the dialect it is most needed for: `top_k`, `anthropic_beta` and prompt-caching
-    // `cache_control` are Anthropic Messages body fields and have no other way in.
-    // Merged rather than assigned, so a key the module already set (`thinking`,
-    // `output_config`) is not clobbered by an unrelated passthrough entry, and a
-    // caller who deliberately overrides one still wins on the key they named.
+    // The caller's passthrough, merged at the top level (e.g. `top_k`, `anthropic_beta`,
+    // `cache_control`). Keys the caller names override the module's.
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
         foreach [string, json] [k, v] in extra.entries() {
@@ -106,9 +92,8 @@ isolated function thinkingBody(ThinkingConfig thinking) returns json {
     return out;
 }
 
-// Maps one resolved message to an Anthropic Messages content block. Images use the
-// base64 `source`; Bedrock does NOT accept Anthropic's `url` source type
-// (https://platform.claude.com/docs/en/build-with-claude/vision).
+// One message as Anthropic content. Images are base64: Bedrock does not take a URL.
+// https://platform.claude.com/docs/en/build-with-claude/vision
 isolated function anthropicMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
         return {role: "user", content: anthropicContentBlocks(m.parts)};
@@ -168,9 +153,7 @@ isolated function decodeAnthropicMessages(json response) returns DecodedResponse
         inputTokens = intField(usage, "input_tokens") ?: 0;
         outputTokens = intField(usage, "output_tokens") ?: 0;
     }
-    // On the InvokeModel route a fired guardrail is a response-BODY field, not a
-    // header:
-    // "amazon-bedrock-guardrailAction": "INTERVENED | NONE". Absent on Mantle.
+    // On InvokeModel a fired guardrail is a body field; absent on Mantle.
     GuardrailAction? guardrailAction = ();
     string? action = strField(r, "amazon-bedrock-guardrailAction");
     if action is string {

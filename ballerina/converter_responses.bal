@@ -14,9 +14,8 @@
 
 import ballerina/ai;
 
-// OpenAI Responses wire format on Mantle. GPT-5.5/5.4 are
-// served on `/openai/v1/responses` on bedrock-runtime and on `/v1/responses` or `/openai/v1/responses` on bedrock-mantle, per model. System text is the `instructions`
-// field; turns are `input` items; the model reply is in `output` items.
+// OpenAI Responses on both endpoints. The system prompt is `instructions`, turns are
+// `input` items, and the reply is in `output` items.
 
 // Encodes an OpenAI Responses request body.
 isolated function encodeResponses(string? system, ResolvedMessage[] messages,
@@ -28,15 +27,8 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     foreach ResolvedMessage m in messages {
         input.push(...responsesInputItems(m));
     }
-    // The Responses dialect has NO stop-sequence parameter — it is absent from the
-    // request schema entirely (unlike Chat Completions' `stop`), so there is nothing
-    // to map onto. Accepting one silently would let the model run past the caller's
-    // stop text: wrong output, and billed tokens they asked us not to spend.
-    //
-    // A CONFIGURED `stopSequences` is now refused earlier still, at construction, by
-    // `validateParamsForRoute` reading this dialect's `DialectSupport.stopSequences`.
-    // This stays for the PER-CALL `stop` argument, which no construction-time check
-    // can see.
+    // Responses has no stop-sequence parameter, so a per-call `stop` is refused rather
+    // than ignored. A configured one is refused at construction.
     // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py
     string[]? configuredStops = params.stopSequences;
     if stop is string || (configuredStops is string[] && configuredStops.length() > 0) {
@@ -58,21 +50,15 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
         }
         body["tools"] = toolDefs;
     }
-    // `reasoning: { effort: ... }` — NESTED. The Responses API has no top-level
-    // `reasoning_effort`; that is the Chat Completions spelling, and sending it here
-    // is a hard 400 (`Unknown parameter: 'reasoning_effort'`). Verified against
-    // openai-python: `ResponseCreateParams.reasoning` is a `Reasoning` object whose
-    // `effort` member carries the value, and no `reasoning_effort` member exists.
+    // Nested `reasoning: {effort}`; a top-level `reasoning_effort` is a 400 here.
     // https://github.com/openai/openai-python/blob/main/src/openai/types/shared_params/reasoning.py
     ReasoningEffort? reasoningEffort = params?.reasoningEffort;
     if reasoningEffort is ReasoningEffort {
         body["reasoning"] = {"effort": reasoningEffort};
     }
-    // `store` defaults to TRUE on the Responses API, and AWS then retains the input and
-    // output for 30 days. This module resends the full history every turn, pairs tool
-    // results by `call_id`, and never uses `previous_response_id`, so storing buys
-    // nothing and only retains the caller's data. Set before the passthrough so a
-    // caller who wants stored responses can still send `"store": true`.
+    // `store` defaults to true, and AWS then keeps the data for 30 days. The full history
+    // is resent every turn, so nothing needs storing. Set before the passthrough, so a
+    // caller can still send `"store": true`.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
     body["store"] = false;
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
@@ -84,15 +70,8 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     return body;
 }
 
-// Maps one resolved message to one or more Responses `input` items.
-//
-// An assistant turn that made tool calls MUST expand to a `function_call` item per
-// call, carrying its `call_id`: the Responses API pairs every `function_call_output`
-// to a preceding `function_call` by `call_id`. Dropping the call — as this once did,
-// encoding it as an empty `output_text` — makes AWS reject the following tool result
-// with 400 "No tool call found for function call output with call_id …", so the agent
-// loop never completes (verified live 2026-08-03). One assistant message can carry
-// several tool calls, which is why this returns json[].
+// One message as Responses `input` items. Each tool call becomes a `function_call`
+// item with its `call_id`, which the following tool result is matched against.
 isolated function responsesInputItems(ResolvedMessage m) returns json[] {
     if m is ResolvedUserMessage {
         return [{"role": "user", "content": responsesContentParts(m.parts)}];
@@ -151,11 +130,8 @@ isolated function decodeResponses(json response) returns DecodedResponse|ai:Erro
                     }
                     toolCalls.push({name: strField(item, "name") ?: "", arguments: args, id: strField(item, "call_id")});
                 } else if itemType == "message" {
-                    // Two gates, both required. `output` also carries `reasoning`
-                    // items, and a `message` item's `content` can hold `refusal`
-                    // blocks — both have a `text` field, so an unfiltered append
-                    // leaks the model's chain-of-thought (and refusal prose) into
-                    // the assistant content returned to the caller.
+                    // Only `output_text` from `message` items: `reasoning` items and
+                    // `refusal` blocks also have `text`, which would leak into the reply.
                     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
                     json[]? content = arrField(item, "content");
                     if content is json[] {

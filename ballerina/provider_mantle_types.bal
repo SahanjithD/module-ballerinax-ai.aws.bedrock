@@ -18,9 +18,8 @@ import ballerina/http;
 // Options shared by the `bedrock-mantle` model providers.
 // ============================================================================
 
-// No `guardrail`, `serviceTier` or `latencyOptimized`: guardrails are a
-// bedrock-runtime feature and Mantle carries no Bedrock request-option headers, so
-// leaving the fields out makes them a compile error rather than a runtime refusal.
+// No `guardrail`, `serviceTier` or `latencyOptimized`: Mantle supports none of them,
+// so leaving them out makes setting one a compile error.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 
 # Options shared by the `bedrock-mantle` model providers.
@@ -40,9 +39,9 @@ public type CommonMantleConfig record {|
 // Model IDs and configuration, per vendor.
 // ============================================================================
 
-// BARE ids: Mantle has no cross-region inference, so takes no geo prefix. Every one
-// is also on `bedrock-runtime`, which adds guardrails, cross-region inference and
-// typed `generate()`, so the runtime class is the better default.
+// Bare ids: Mantle has no cross-region inference. Every one is also on
+// `bedrock-runtime`, which adds guardrails, cross-region inference and typed
+// `generate()`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
 
 # Anthropic model IDs on `bedrock-mantle`.
@@ -86,13 +85,10 @@ public enum OpenAIMantleModelNames {
     MANTLE_GPT_5_6_SOL = "openai.gpt-5.6-sol",
     MANTLE_GPT_5_6_TERRA = "openai.gpt-5.6-terra",
     MANTLE_GPT_5_6_LUNA = "openai.gpt-5.6-luna",
-    // Published under a DIFFERENT id per endpoint — `-1:0` on bedrock-runtime, bare
-    // here. The module puts the Mantle id on the wire.
+    // `-1:0` on bedrock-runtime, bare here; the module sends the Mantle id.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     MANTLE_GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
-    // The GPT-6 family. Bare here, and on `/openai/v1` — each card states it
-    // explicitly ("On `bedrock-mantle`, both APIs use the `/openai/v1` base path. Do
-    // not use `/v1`."). Sol and Luna are in us-east-1.
+    // GPT-6: on `/openai/v1`, per each card. Sol and Luna are in us-east-1.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
     # Available in us-west-2 only
     MANTLE_GPT_6_ASTRA = "openai.gpt-6-astra",
@@ -143,9 +139,7 @@ public type QwenMantleConfig record {|
     boolean enableThinking?;
 |};
 
-// The two generations sit on DIFFERENT paths: Gemma 3 speaks Chat Completions on
-// `/v1/chat/completions`, Gemma 4 speaks Responses on `/openai/v1/responses`. The
-// module resolves the path per model.
+// Gemma 3 is on `/v1/chat/completions`, Gemma 4 on `/openai/v1/responses`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
 
 # Google Gemma model IDs on `bedrock-mantle`.
@@ -154,9 +148,7 @@ public enum GoogleMantleModelNames {
     MANTLE_GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     MANTLE_GEMMA_3_12B_IT = "google.gemma-3-12b-it",
     MANTLE_GEMMA_3_27B_IT = "google.gemma-3-27b-it",
-    // … while Gemma 4 sits on `/openai/v1/responses`. One vendor prefix, two Mantle
-    // path families — which is exactly why the path is per-model table data and never
-    // derived from the prefix.
+    // Gemma 4.
     # Not available on `bedrock-runtime`
     MANTLE_GEMMA_4_E2B = "google.gemma-4-e2b",
     # Not available on `bedrock-runtime`

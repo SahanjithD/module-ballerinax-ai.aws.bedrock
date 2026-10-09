@@ -14,26 +14,11 @@
 
 import ballerina/ai;
 
-// DeepSeek-R1 on the InvokeModel route.
-//
-// R1's Invoke dialect is TEXT COMPLETION, not chat — despite the `choices`
-// wrapper making it look OpenAI-shaped at a glance:
-//
-//   request:  {"prompt": string, "temperature": float, "top_p": float,
-//              "max_tokens": int, "stop": [string]}
-//   response: {"choices": [{"text": string, "stop_reason": "stop"|"length"}]}
-//
-// Note `choices[].text`, NOT `choices[].message.content`; `stop_reason`, NOT
-// `finish_reason`; and NO `usage` object at all. Routing DeepSeek through the
-// OpenAI chat converter sends `messages` (a 400 on encode) and, if it somehow got a
-// response, would read every field from the wrong place.
-//
-// This converter serves R1 ONLY (`usesDeepSeekTextDialect` in converters.bal). DeepSeek
-// V3.1/V3.2 take `{"messages": [...]}` on InvokeModel and go through the OpenAI
-// chat converter instead — sending `prompt` to V3.2 returns `ValidationException ...
-// missing field messages`.
+// DeepSeek R1 on InvokeModel: text completion, despite the `choices` wrapper.
+//   request:  {"prompt", "temperature", "top_p", "max_tokens", "stop"}
+//   response: {"choices": [{"text", "stop_reason"}]}, with no usage
+// DeepSeek V3.x takes `messages` and uses the OpenAI chat converter instead.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
 
 // Encodes a DeepSeek text-completion request body.
 isolated function encodeDeepSeekInvoke(string? system, ResolvedMessage[] messages,
@@ -67,18 +52,10 @@ isolated function encodeDeepSeekInvoke(string? system, ResolvedMessage[] message
     return body;
 }
 
-// Renders messages into DeepSeek-R1's documented instruction template:
-//
+// R1's instruction template, with DeepSeek's full-width delimiters (not ASCII pipes):
 //   <｜begin▁of▁sentence｜><｜User｜>{prompt}<｜Assistant｜><think>\n
-//
-// The tokens are DeepSeek's own full-width delimiters — they are NOT ASCII pipes,
-// and substituting ASCII silently degrades the model's output rather than erroring.
-//
-// NOTE: AWS documents only the single-turn form above. Multi-turn and `system`
-// placement are NOT specified for this dialect, so the mapping below (system folded
-// ahead of the first user turn; turns alternated with the same delimiters) follows
-// DeepSeek's own chat template. It preserves the module invariant that system is
-// never emitted as a `role: system` message.
+// AWS documents only one turn; the system prompt and later turns follow DeepSeek's own
+// chat template.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
 isolated function deepSeekPrompt(string? system, ResolvedMessage[] messages) returns string {
     string prompt = "<｜begin▁of▁sentence｜>";
@@ -131,10 +108,8 @@ isolated function decodeDeepSeekInvoke(json response) returns DecodedResponse|ai
 
 const DEEPSEEK_THINK_END = "</think>";
 
-// The answer part of an R1 completion. The prompt opens `<think>`, so the model writes
-// its chain of thought, then `</think>`, then the answer; only the answer is returned.
-// Cut off before `</think>`, there is no answer yet, so the text is empty. Verified
-// live on 2026-10-09 (us-east-1): without this the reply held the whole chain of thought.
+// The answer after `</think>`; the prompt opens `<think>`, so the reasoning comes
+// first. Cut off before `</think>`, there is no answer yet (verified live 2026-10-09).
 isolated function deepSeekAnswer(string completion, string stopReason) returns string {
     int? end = completion.lastIndexOf(DEEPSEEK_THINK_END);
     if end is int {

@@ -15,20 +15,13 @@
 import ballerina/http;
 import ballerinax/aws.auth;
 
-// Public surface for `ManagedKnowledgeBase`: configuration, the
-// find-or-create definition, and the chunking-strategy enum. See
-// knowledgebase_common.bal for the resolution spine and knowledgebase_managed.bal
-// for the public class.
-
-// SigV4 only, deliberately excluding `BearerToken`: Bedrock API keys cannot be used
-// with the Agents for Amazon Bedrock APIs (`bedrock-agent`/`bedrock-agent-runtime`),
-// which back knowledge bases.
+// Bedrock API keys cannot be used with the agent APIs behind knowledge bases.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html
 
 # Authentication for a Bedrock knowledge base: AWS credentials only, no API key.
 public type KnowledgeBaseAuthConfig auth:AuthConfig;
 
-// Set on `CreateDataSource` and fixed for the life of the data source.
+// Fixed for the life of the data source.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ChunkingConfiguration.html
 
 # How Bedrock splits ingested documents into chunks.
@@ -53,9 +46,6 @@ public enum RerankingModelType {
     RERANKING_MANAGED = "MANAGED"
 }
 
-// The `CUSTOM` direct-ingestion data source created alongside a knowledge base in
-// the find-or-create (`ManagedKnowledgeBaseDefinition`) path.
-
 # The data source created with a new knowledge base.
 public type DataSourceDefinition record {|
     # Data source name
@@ -64,11 +54,7 @@ public type DataSourceDefinition record {|
     string description?;
 |};
 
-// Replaces Bedrock's service-managed embedding model. `embeddingModelType` cannot be
-// changed after creation. Choosing one also opts out of the managed reranker
-// (`RERANKING_MANAGED`) and bills the model separately from the knowledge base.
-// AWS supports Amazon Titan Text Embeddings V2, Cohere Embed English v3, Cohere Embed
-// Multilingual v3, Cohere Embed v4, and Amazon Nova Multimodal Embeddings here, and
+// Fixed at creation. Rules out the managed reranker and is billed separately. AWS
 // requires 1024 dimensions and FLOAT32.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html#kb-managed-embedding-models
 
@@ -83,12 +69,8 @@ public type ManagedEmbeddingModel record {|
     string embeddingDataType = "FLOAT32";
 |};
 
-// `init` searches `ListKnowledgeBases` for an exact name match: one match attaches to
-// it, no match creates it, more than one is a construction error. `name` must match
-// `([0-9a-zA-Z][_-]?){1,100}`. Leaving `embeddingModel` unset uses Bedrock's
-// service-managed model (no extra cost, chunking fixed at 300 tokens / 20% overlap);
-// setting it is permanent — read `ManagedEmbeddingModel` first. `serviceRoleArn` is
-// sent as the API's `roleArn`; `kmsKeyArn` as `serverSideEncryptionConfiguration`.
+// `name` must match `([0-9a-zA-Z][_-]?){1,100}`. Without `embeddingModel`, Bedrock's own
+// model is used (300-token chunks, 20% overlap). `serviceRoleArn` is sent as `roleArn`.
 
 # A managed knowledge base to find or create by name.
 public type ManagedKnowledgeBaseDefinition record {|
@@ -110,8 +92,6 @@ public type ManagedKnowledgeBaseDefinition record {|
     # Seconds to wait for a new knowledge base to become ready
     decimal readyTimeout = 300;
 |};
-
-// `httpConfig`/`retryConfig` are shared by both agent-plane clients.
 
 # Configuration for `ManagedKnowledgeBase`.
 public type ManagedKnowledgeBaseConfig record {|
