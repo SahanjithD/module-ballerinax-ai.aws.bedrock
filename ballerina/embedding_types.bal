@@ -95,7 +95,6 @@ public type CohereEmbeddingConfig record {|
     // ingesting a corpus one document at a time through `embed()`.
     # Input type for every call. Unset: queries for `embed`, documents for `batchEmbed`
     CohereInputType inputType?;
-
     # How over-long inputs are truncated
     Truncate truncate?;
     // `int` rather than a closed type, for the reasons spelled out on

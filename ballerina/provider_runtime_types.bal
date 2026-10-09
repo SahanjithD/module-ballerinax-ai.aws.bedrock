@@ -54,25 +54,21 @@ public type CommonRuntimeConfig record {|
     // --- Inference ---
     # Sequences that stop generation. A `stop` passed to `chat` overrides them
     string[] stopSequences?;
-
     // --- Passthrough ---
     // Spliced verbatim: Converse's `additionalModelRequestFields`, and the top level
     // of each Invoke dialect. The module never rewrites, renames or reshapes it.
     // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
     # Extra fields sent as-is in the request body, for options this module does not cover
     AdditionalRequestFields additionalModelRequestFields?;
-
     // Converse `serviceTier` body field; `X-Amzn-Bedrock-Service-Tier` header on Invoke.
     # Processing tier for each request
     ServiceTier serviceTier?;
-
     // Converse `performanceConfig` body field; `X-Amzn-Bedrock-PerformanceConfig-Latency`
     // header on Invoke. Same output, only speed and cost change. Support is per model
     // and region, and AWS rejects unsupported combinations.
     // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
     # Use latency-optimized inference, where the model and region support it
     boolean latencyOptimized?;
-
     // --- Cross-cutting ---
     # Guardrail applied to every request
     GuardrailConfig guardrail?;
@@ -174,12 +170,10 @@ public enum AnthropicRuntimeModelNames {
 # Configuration for `RuntimeAnthropicModelProvider`.
 public type AnthropicRuntimeConfig record {|
     *CommonRuntimeConfig;
-
     // A typed record rather than raw `json`, so the mode/budget pairing rules are
     // checked at construction.
     # Extended thinking settings
     ThinkingConfig thinking?;
-
     // Sent as `output_config.effort`.
     # Reasoning effort. The only depth control on Fable 5 and Opus 4.7
     Effort effort?;
@@ -219,7 +213,6 @@ public enum OpenAIRuntimeModelNames {
 # Configuration for `RuntimeOpenAIModelProvider`.
 public type OpenAIRuntimeConfig record {|
     *CommonRuntimeConfig;
-
     // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
     // Responses.
     # How much the model reasons before answering
@@ -284,7 +277,6 @@ public enum QwenRuntimeModelNames {
     // Bedrock console under Model access. The Mantle id works independently of that,
     // which is why one can succeed while the other does not.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
-
     # Coding model: 480B mixture of experts, 35B active
     QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
 }
@@ -292,7 +284,6 @@ public enum QwenRuntimeModelNames {
 # Configuration for `RuntimeQwenModelProvider`.
 public type QwenRuntimeConfig record {|
     *CommonRuntimeConfig;
-
     // Sent as `enable_thinking` in the request body.
     # Turns Qwen3 thinking on or off. Unset uses the model's default
     boolean enableThinking?;

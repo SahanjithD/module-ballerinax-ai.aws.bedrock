@@ -27,14 +27,11 @@ import ballerina/http;
 public type CommonMantleConfig record {|
     # Sequences that stop generation. A `stop` passed to `chat` overrides them
     string[] stopSequences?;
-
     // Spliced verbatim into the top level of the request body, never rewritten.
     # Extra fields sent as-is in the request body, for options this module does not cover
     AdditionalRequestFields additionalModelRequestFields?;
-
     # Retry settings
     RetryConfig retryConfig?;
-
     # HTTP client settings, such as timeouts and proxy
     http:ClientConfiguration httpConfig?;
 |};
@@ -69,12 +66,10 @@ public enum AnthropicMantleModelNames {
 # Configuration for `MantleAnthropicModelProvider`.
 public type AnthropicMantleConfig record {|
     *CommonMantleConfig;
-
     // A typed record rather than raw `json`, so the mode/budget pairing rules are
     // checked at construction.
     # Extended thinking settings
     ThinkingConfig thinking?;
-
     // Sent as `output_config.effort`.
     # Reasoning effort. The only depth control on Fable 5 and Opus 4.7
     Effort effort?;
@@ -110,7 +105,6 @@ public enum OpenAIMantleModelNames {
 # Configuration for `MantleOpenAIModelProvider`.
 public type OpenAIMantleConfig record {|
     *CommonMantleConfig;
-
     // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
     // Responses.
     # How much the model reasons before answering
@@ -144,7 +138,6 @@ public enum QwenMantleModelNames {
 # Configuration for `MantleQwenModelProvider`.
 public type QwenMantleConfig record {|
     *CommonMantleConfig;
-
     // Sent as `enable_thinking` in the request body.
     # Turns Qwen3 thinking on or off. Unset uses the model's default
     boolean enableThinking?;

@@ -275,12 +275,10 @@ type MantleEntry record {|
     # `/anthropic/v1`. The full request path is this plus the API family's own suffix,
     # which IS derivable (see `mantlePathFor`).
     string basePath;
-
     # The shapes this model serves on that base path. More than one is normal —
     # gpt-oss serves both Responses and Chat Completions on `/v1` — and the `api`
     # argument selects among them. The first entry is the default.
     ApiFamily[] apis;
-
     # The id to put on the wire when it DIFFERS from the `bedrock-runtime` id.
     #
     # Some models are published under different ids per endpoint — gpt-oss is

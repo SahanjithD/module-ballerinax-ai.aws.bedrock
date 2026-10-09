@@ -20,13 +20,11 @@ type ParsedArn record {|
     string partition;
     # e.g. `bedrock`.
     string 'service;
-
     # Authoritative region — overrides `config.region`. MAY be empty:
     # foundation-model ARNs are often written globally, e.g.
     # `arn:aws:bedrock::123456789012:foundation-model/anthropic.claude-v2`.
     # `resolveArn` falls back to the caller's region in that case.
     string region;
-
     string accountId;
     # e.g. `imported-model`, `provisioned-model`, `inference-profile`.
     string resourceType;
