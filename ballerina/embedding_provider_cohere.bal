@@ -44,7 +44,7 @@ public distinct isolated client class CohereEmbeddingProvider {
     # + config - Input type, truncation, vector size and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} CohereEmbeddingModel|string model,
+            @display {label: "Model"} CohereEmbeddingModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),

@@ -44,7 +44,7 @@ public isolated distinct client class RuntimeDeepSeekModelProvider {
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} DeepSeekRuntimeModel|string model,
+            @display {label: "Model"} DeepSeekRuntimeModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "API Type"} DeepSeekRuntimeApi apiType = CONVERSE,

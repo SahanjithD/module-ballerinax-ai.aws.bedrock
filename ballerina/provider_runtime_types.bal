@@ -141,7 +141,7 @@ public type DeepSeekRuntimeApi CONVERSE|INVOKE|CHAT_COMPLETIONS;
 
 # Anthropic model IDs on `bedrock-runtime`, with the `us.` cross-region prefix.
 # For another geography, pass the ID as a string, e.g. `eu.anthropic.claude-sonnet-5`.
-public enum AnthropicRuntimeModel {
+public enum AnthropicRuntimeModelNames {
     // Refuses a FORCED tool choice, so typed `generate()` offers its tool unforced.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
     # 1M context; adaptive thinking always on
@@ -186,7 +186,7 @@ public type AnthropicRuntimeConfig record {|
 |};
 
 // The GPT-5.x ids are on `bedrock-mantle` in this module's verified per-card data —
-// see `OpenAIMantleModel`. AWS's endpoint-availability page has since listed some
+// see `OpenAIMantleModelNames`. AWS's endpoint-availability page has since listed some
 // GPT-5.6 ids on both endpoints, which contradicts those cards; rather than pick a
 // side silently, this enum keeps the per-card reading, and any id can still be passed
 // as a string. GPT OSS serves Chat Completions, Converse and Invoke here but NOT
@@ -194,7 +194,7 @@ public type AnthropicRuntimeConfig record {|
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
 
 # OpenAI model IDs on `bedrock-runtime`.
-public enum OpenAIRuntimeModel {
+public enum OpenAIRuntimeModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
     # Not available on the `RESPONSES` API
     GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
@@ -232,7 +232,7 @@ public type OpenAIRuntimeConfig record {|
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
 
 # Amazon Nova model IDs.
-public enum AmazonRuntimeModel {
+public enum AmazonRuntimeModelNames {
     NOVA_PRO = "amazon.nova-pro-v1:0",
     NOVA_LITE = "amazon.nova-lite-v1:0",
     NOVA_MICRO = "amazon.nova-micro-v1:0"
@@ -255,7 +255,7 @@ public type AmazonRuntimeConfig record {|
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html
 
 # Mistral model IDs on `bedrock-runtime`.
-public enum MistralRuntimeModel {
+public enum MistralRuntimeModelNames {
     # The current flagship: 675B, 256K context
     MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct",
     // Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
@@ -276,7 +276,7 @@ public type MistralRuntimeConfig record {|
 |};
 
 # Qwen model IDs on `bedrock-runtime`.
-public enum QwenRuntimeModel {
+public enum QwenRuntimeModelNames {
     QWEN3_32B = "qwen.qwen3-32b-v1:0",
     // The card lists this exact id, In-Region, in us-east-1 among nine other regions,
     // so an "invalid model identifier" here is NOT a wrong id or a wrong region: it is
@@ -301,7 +301,7 @@ public type QwenRuntimeConfig record {|
 // Gemma is the open-weight family; Gemini is not on Bedrock.
 
 # Google Gemma model IDs on `bedrock-runtime`. For Gemma 4, use `MantleGoogleModelProvider`.
-public enum GoogleRuntimeModel {
+public enum GoogleRuntimeModelNames {
     GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     GEMMA_3_12B_IT = "google.gemma-3-12b-it",
     // AWS titles this card "Gemma 3 27B PT" but its id really is `-it` — do not "correct" this.
@@ -314,7 +314,7 @@ public type GoogleRuntimeConfig record {|
 |};
 
 # DeepSeek model IDs on `bedrock-runtime`.
-public enum DeepSeekRuntimeModel {
+public enum DeepSeekRuntimeModelNames {
     // The bare `deepseek.r1-v1:0` is not callable in any region.
     # Cross-region ID. For another geography, pass the ID as a string
     DEEPSEEK_R1 = "us.deepseek.r1-v1:0",

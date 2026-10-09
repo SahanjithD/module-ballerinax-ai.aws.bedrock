@@ -44,7 +44,7 @@ public isolated distinct client class MantleGoogleModelProvider {
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} GoogleMantleModel|string model,
+            @display {label: "Model"} GoogleMantleModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),

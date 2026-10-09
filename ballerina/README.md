@@ -304,7 +304,7 @@ perfectly valid for Bedrock. The endpoint is now yours to state, and the type sy
 | `imported-model/` ARN | **not supported** — construction error |
 
 Current Claude models are served on `bedrock-runtime` through cross-region inference profiles only, so
-the `AnthropicRuntimeModel` constants carry a `us.` prefix. A bare Claude id here fails with
+the `AnthropicRuntimeModelNames` constants carry a `us.` prefix. A bare Claude id here fails with
 `on-demand throughput isn't supported`.
 
 ### On a `Mantle*` class

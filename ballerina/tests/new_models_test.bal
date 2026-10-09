@@ -103,16 +103,16 @@ function testTheRuntimeAnthropicEnumCarriesCrisPrefixedIds() returns error? {
     // isn't supported" — so the RUNTIME enum members carry `us.` and the MANTLE ones
     // never do.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
-    AnthropicRuntimeModel[] ids = [CLAUDE_OPUS_5, CLAUDE_OPUS_4_8, CLAUDE_SONNET_5,
+    AnthropicRuntimeModelNames[] ids = [CLAUDE_OPUS_5, CLAUDE_OPUS_4_8, CLAUDE_SONNET_5,
             CLAUDE_SONNET_4_6, CLAUDE_HAIKU_4_5];
-    foreach AnthropicRuntimeModel id in ids {
+    foreach AnthropicRuntimeModelNames id in ids {
         Route route = check resolveRuntimeRoute(id, "us-east-1", CONVERSE);
         test:assertEquals(route.geoPrefix, "us", id + " must carry a CRIS prefix on bedrock-runtime");
         test:assertEquals(route.effectiveModelId, id, "the prefix must survive onto the wire");
     }
-    AnthropicMantleModel[] mantleIds = [MANTLE_CLAUDE_OPUS_5, MANTLE_CLAUDE_OPUS_4_8,
+    AnthropicMantleModelNames[] mantleIds = [MANTLE_CLAUDE_OPUS_5, MANTLE_CLAUDE_OPUS_4_8,
             MANTLE_CLAUDE_SONNET_5, MANTLE_CLAUDE_HAIKU_4_5];
-    foreach AnthropicMantleModel id in mantleIds {
+    foreach AnthropicMantleModelNames id in mantleIds {
         Route route = check resolveMantleRoute(id, "us-east-1");
         test:assertEquals(route.geoPrefix, (), id + " must be bare for bedrock-mantle");
     }

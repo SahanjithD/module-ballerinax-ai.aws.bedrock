@@ -44,7 +44,7 @@ public isolated distinct client class RuntimeMistralModelProvider {
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} MistralRuntimeModel|string model,
+            @display {label: "Model"} MistralRuntimeModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "API Type"} MistralRuntimeApi apiType = CONVERSE,

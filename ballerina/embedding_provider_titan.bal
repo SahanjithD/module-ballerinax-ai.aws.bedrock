@@ -42,7 +42,7 @@ public distinct isolated client class TitanEmbeddingProvider {
     # + config - Vector size, normalization and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} TitanEmbeddingModel|string model,
+            @display {label: "Model"} TitanEmbeddingModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),

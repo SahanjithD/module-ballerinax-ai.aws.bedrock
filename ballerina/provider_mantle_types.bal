@@ -49,7 +49,7 @@ public type CommonMantleConfig record {|
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
 
 # Anthropic model IDs on `bedrock-mantle`.
-public enum AnthropicMantleModel {
+public enum AnthropicMantleModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
     MANTLE_CLAUDE_OPUS_5_5 = "anthropic.claude-opus-5-5",
     MANTLE_CLAUDE_OPUS_5 = "anthropic.claude-opus-5",
@@ -83,7 +83,7 @@ public type AnthropicMantleConfig record {|
 // The GPT-5.x models are reachable only here.
 
 # OpenAI model IDs on `bedrock-mantle`.
-public enum OpenAIMantleModel {
+public enum OpenAIMantleModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
     MANTLE_GPT_5_5 = "openai.gpt-5.5",
     MANTLE_GPT_5_4 = "openai.gpt-5.4",
@@ -118,7 +118,7 @@ public type OpenAIMantleConfig record {|
 |};
 
 # Mistral model IDs on `bedrock-mantle`.
-public enum MistralMantleModel {
+public enum MistralMantleModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
     MANTLE_MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct"
 }
@@ -132,7 +132,7 @@ public type MistralMantleConfig record {|
 // the runtime-shaped id and the module puts the Mantle one on the wire.
 
 # Qwen model IDs on `bedrock-mantle`.
-public enum QwenMantleModel {
+public enum QwenMantleModelNames {
     // `qwen.qwen3-32b` on Mantle.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
     MANTLE_QWEN3_32B = "qwen.qwen3-32b-v1:0",
@@ -156,7 +156,7 @@ public type QwenMantleConfig record {|
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
 
 # Google Gemma model IDs on `bedrock-mantle`.
-public enum GoogleMantleModel {
+public enum GoogleMantleModelNames {
     // Gemma 3 sits on `/v1/chat/completions` …
     MANTLE_GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     MANTLE_GEMMA_3_12B_IT = "google.gemma-3-12b-it",
@@ -178,7 +178,7 @@ public type GoogleMantleConfig record {|
 |};
 
 # DeepSeek model IDs on `bedrock-mantle`.
-public enum DeepSeekMantleModel {
+public enum DeepSeekMantleModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
     MANTLE_DEEPSEEK_V3_2 = "deepseek.v3.2"
 }

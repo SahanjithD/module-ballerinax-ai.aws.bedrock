@@ -23,7 +23,7 @@ import ballerina/http;
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 
 # Amazon Titan text embedding model IDs.
-public enum TitanEmbeddingModel {
+public enum TitanEmbeddingModelNames {
     TITAN_EMBED_TEXT_V2 = "amazon.titan-embed-text-v2:0",
     TITAN_EMBED_TEXT_V1 = "amazon.titan-embed-text-v1"
 }
@@ -31,7 +31,7 @@ public enum TitanEmbeddingModel {
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed.html
 
 # Cohere Embed model IDs.
-public enum CohereEmbeddingModel {
+public enum CohereEmbeddingModelNames {
     COHERE_EMBED_ENGLISH_V3 = "cohere.embed-english-v3",
     COHERE_EMBED_MULTILINGUAL_V3 = "cohere.embed-multilingual-v3",
     COHERE_EMBED_V4 = "cohere.embed-v4:0"

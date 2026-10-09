@@ -44,7 +44,7 @@ public isolated distinct client class MantleAnthropicModelProvider {
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} AnthropicMantleModel|string model,
+            @display {label: "Model"} AnthropicMantleModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),

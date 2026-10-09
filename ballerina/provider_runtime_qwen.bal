@@ -44,7 +44,7 @@ public isolated distinct client class RuntimeQwenModelProvider {
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
-            @display {label: "Model"} QwenRuntimeModel|string model,
+            @display {label: "Model"} QwenRuntimeModelNames|string model,
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "API Type"} QwenRuntimeApi apiType = CONVERSE,
