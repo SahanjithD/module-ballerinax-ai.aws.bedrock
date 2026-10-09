@@ -17,29 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Qwen model IDs on `bedrock-runtime`.
-public enum QwenRuntimeModel {
-    QWEN3_32B = "qwen.qwen3-32b-v1:0",
-    // The card lists this exact id, In-Region, in us-east-1 among nine other regions,
-    // so an "invalid model identifier" here is NOT a wrong id or a wrong region: it is
-    // an account that has not been granted access to the model. Grant it in the
-    // Bedrock console under Model access. The Mantle id works independently of that,
-    // which is why one can succeed while the other does not.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
-
-    # Coding model: 480B mixture of experts, 35B active
-    QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
-}
-
-# Configuration for `RuntimeQwenModelProvider`.
-public type QwenRuntimeConfig record {|
-    *CommonRuntimeConfig;
-
-    // Sent as `enable_thinking` in the request body.
-    # Turns Qwen3 thinking on or off. Unset uses the model's default
-    boolean enableThinking?;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 

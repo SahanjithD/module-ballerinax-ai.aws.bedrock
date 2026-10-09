@@ -17,17 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# DeepSeek model IDs on `bedrock-mantle`.
-public enum DeepSeekMantleModel {
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
-    MANTLE_DEEPSEEK_V3_2 = "deepseek.v3.2"
-}
-
-# Configuration for `MantleDeepSeekModelProvider`.
-public type DeepSeekMantleConfig record {|
-    *CommonMantleConfig;
-|};
-
 // Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
 // `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html

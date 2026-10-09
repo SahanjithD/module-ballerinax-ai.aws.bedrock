@@ -17,47 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// The GPT-5.x ids are on `bedrock-mantle` in this module's verified per-card data —
-// see `OpenAIMantleModel`. AWS's endpoint-availability page has since listed some
-// GPT-5.6 ids on both endpoints, which contradicts those cards; rather than pick a
-// side silently, this enum keeps the per-card reading, and any id can still be passed
-// as a string. GPT OSS serves Chat Completions, Converse and Invoke here but NOT
-// Responses.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
-
-# OpenAI model IDs on `bedrock-runtime`.
-public enum OpenAIRuntimeModel {
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
-    # Not available on the `RESPONSES` API
-    GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html
-    # Not available on the `RESPONSES` API
-    GPT_OSS_20B = "openai.gpt-oss-20b-1:0",
-    // The GPT-6 family. CRIS-PREFIXED, unlike GPT OSS: each card says "You cannot use
-    // the base model ID for in-Region calls on this endpoint". They serve Responses,
-    // Chat Completions and Converse here, but NOT Invoke, and refuse the Chat
-    // Completions `max_tokens` parameter (they are sent `max_completion_tokens`).
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
-    # Not available on the `INVOKE` API
-    GPT_6_ASTRA = "us.openai.gpt-6-astra",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
-    # Not available on the `INVOKE` API
-    GPT_6_SOL = "us.openai.gpt-6-sol",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
-    # Not available on the `INVOKE` API
-    GPT_6_LUNA = "us.openai.gpt-6-luna"
-}
-
-# Configuration for `RuntimeOpenAIModelProvider`.
-public type OpenAIRuntimeConfig record {|
-    *CommonRuntimeConfig;
-
-    // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
-    // Responses.
-    # How much the model reasons before answering
-    ReasoningEffort reasoningEffort?;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 

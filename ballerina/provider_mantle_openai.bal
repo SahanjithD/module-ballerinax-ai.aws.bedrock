@@ -17,43 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// The GPT-5.x models are reachable only here.
-
-# OpenAI model IDs on `bedrock-mantle`.
-public enum OpenAIMantleModel {
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
-    MANTLE_GPT_5_5 = "openai.gpt-5.5",
-    MANTLE_GPT_5_4 = "openai.gpt-5.4",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
-    MANTLE_GPT_5_6_SOL = "openai.gpt-5.6-sol",
-    MANTLE_GPT_5_6_TERRA = "openai.gpt-5.6-terra",
-    MANTLE_GPT_5_6_LUNA = "openai.gpt-5.6-luna",
-    // Published under a DIFFERENT id per endpoint — `-1:0` on bedrock-runtime, bare
-    // here. The module puts the Mantle id on the wire.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
-    MANTLE_GPT_OSS_120B = "openai.gpt-oss-120b-1:0",
-    // The GPT-6 family. Bare here, and on `/openai/v1` — each card states it
-    // explicitly ("On `bedrock-mantle`, both APIs use the `/openai/v1` base path. Do
-    // not use `/v1`."). Sol and Luna are in us-east-1.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
-    # Available in us-west-2 only
-    MANTLE_GPT_6_ASTRA = "openai.gpt-6-astra",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
-    MANTLE_GPT_6_SOL = "openai.gpt-6-sol",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
-    MANTLE_GPT_6_LUNA = "openai.gpt-6-luna"
-}
-
-# Configuration for `MantleOpenAIModelProvider`.
-public type OpenAIMantleConfig record {|
-    *CommonMantleConfig;
-
-    // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
-    // Responses.
-    # How much the model reasons before answering
-    ReasoningEffort reasoningEffort?;
-|};
-
 // Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
 // `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html

@@ -17,33 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// The two generations sit on DIFFERENT paths: Gemma 3 speaks Chat Completions on
-// `/v1/chat/completions`, Gemma 4 speaks Responses on `/openai/v1/responses`. The
-// module resolves the path per model.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
-
-# Google Gemma model IDs on `bedrock-mantle`.
-public enum GoogleMantleModel {
-    // Gemma 3 sits on `/v1/chat/completions` …
-    MANTLE_GEMMA_3_4B_IT = "google.gemma-3-4b-it",
-    MANTLE_GEMMA_3_12B_IT = "google.gemma-3-12b-it",
-    MANTLE_GEMMA_3_27B_IT = "google.gemma-3-27b-it",
-    // … while Gemma 4 sits on `/openai/v1/responses`. One vendor prefix, two Mantle
-    // path families — which is exactly why the path is per-model table data and never
-    // derived from the prefix.
-    # Not available on `bedrock-runtime`
-    MANTLE_GEMMA_4_E2B = "google.gemma-4-e2b",
-    # Not available on `bedrock-runtime`
-    MANTLE_GEMMA_4_26B_A4B = "google.gemma-4-26b-a4b",
-    # Not available on `bedrock-runtime`
-    MANTLE_GEMMA_4_31B = "google.gemma-4-31b"
-}
-
-# Configuration for `MantleGoogleModelProvider`.
-public type GoogleMantleConfig record {|
-    *CommonMantleConfig;
-|};
-
 // Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
 // `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html

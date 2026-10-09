@@ -17,38 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// REGION MATTERS HERE MORE THAN FOR ANY OTHER VENDOR IN THIS MODULE. Mistral Large
-// 2407 is the one id in these enums whose availability is a single region: AWS's
-// regional-availability page lists exactly one row for it, `us-west-2` In-Region,
-// with no Geo or Global profile. It is also no longer in the Mistral AI model-card
-// index — the card titled "Mistral Large" is 24.02 — so the availability page is the
-// only first-party statement left, and it is the one that matches what the endpoint
-// does: every other region answers "The provided model identifier is invalid", which
-// reads like a wrong id rather than a wrong region. Kept rather than removed, because
-// AWS still documents it as live in that region.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html
-
-# Mistral model IDs on `bedrock-runtime`.
-public enum MistralRuntimeModel {
-    # The current flagship: 675B, 256K context
-    MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct",
-    // Chat-completion dialect on InvokeModel (`messages`/`choices`), and Converse.
-    // Any other region answers "The provided model identifier is invalid".
-    # Available in us-west-2 only
-    MISTRAL_LARGE_2407 = "mistral.mistral-large-2407-v1:0",
-    // Text-completion dialect on InvokeModel (`prompt`/`outputs`) — the opposite
-    // dialect to its 24.07 sibling, despite the shared family name.
-    MISTRAL_LARGE_2402 = "mistral.mistral-large-2402-v1:0",
-    // Text-completion dialect on InvokeModel, which has no tool calling.
-    # No tool calling on `INVOKE`, so `generate` can only return `string` there
-    MISTRAL_7B_INSTRUCT = "mistral.mistral-7b-instruct-v0:2"
-}
-
-# Configuration for `RuntimeMistralModelProvider`.
-public type MistralRuntimeConfig record {|
-    *CommonRuntimeConfig;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 

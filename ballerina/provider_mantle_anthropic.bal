@@ -17,43 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// BARE ids: Mantle has no cross-region inference, so takes no geo prefix. Every one
-// is also on `bedrock-runtime`, which adds guardrails, cross-region inference and
-// typed `generate()`, so the runtime class is the better default.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-
-# Anthropic model IDs on `bedrock-mantle`.
-public enum AnthropicMantleModel {
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
-    MANTLE_CLAUDE_OPUS_5_5 = "anthropic.claude-opus-5-5",
-    MANTLE_CLAUDE_OPUS_5 = "anthropic.claude-opus-5",
-    MANTLE_CLAUDE_OPUS_4_8 = "anthropic.claude-opus-4-8",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
-    MANTLE_CLAUDE_OPUS_4_7 = "anthropic.claude-opus-4-7",
-    MANTLE_CLAUDE_SONNET_5 = "anthropic.claude-sonnet-5",
-    MANTLE_CLAUDE_HAIKU_4_5 = "anthropic.claude-haiku-4-5",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
-    # Needs an account opt-in: set the data retention mode to `aws_review` first
-    MANTLE_CLAUDE_FABLE_5 = "anthropic.claude-fable-5",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
-    # Needs the Fable 5 opt-in
-    MANTLE_CLAUDE_FABLE_5_1 = "anthropic.claude-fable-5-1"
-}
-
-# Configuration for `MantleAnthropicModelProvider`.
-public type AnthropicMantleConfig record {|
-    *CommonMantleConfig;
-
-    // A typed record rather than raw `json`, so the mode/budget pairing rules are
-    // checked at construction.
-    # Extended thinking settings
-    ThinkingConfig thinking?;
-
-    // Sent as `output_config.effort`.
-    # Reasoning effort. The only depth control on Fable 5 and Opus 4.7
-    Effort effort?;
-|};
-
 // Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
 // `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html

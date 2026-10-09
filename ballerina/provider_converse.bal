@@ -17,11 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Configuration for `ConverseModelProvider`.
-public type ConverseConfig record {|
-    *CommonRuntimeConfig;
-|};
-
 // CONVERSE-ONLY, and deliberately so. Converse is the one model-agnostic surface —
 // a single request shape serves every vendor — so it is the only API this class can
 // offer without knowing whose model it is holding. The alternatives all need that

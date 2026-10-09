@@ -17,17 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Mistral model IDs on `bedrock-mantle`.
-public enum MistralMantleModel {
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-    MANTLE_MISTRAL_LARGE_3 = "mistral.mistral-large-3-675b-instruct"
-}
-
-# Configuration for `MantleMistralModelProvider`.
-public type MistralMantleConfig record {|
-    *CommonMantleConfig;
-|};
-
 // Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
 // `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html

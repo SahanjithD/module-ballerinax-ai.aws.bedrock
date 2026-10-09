@@ -17,28 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// Both are published under a different id on each endpoint. These constants carry
-// the runtime-shaped id and the module puts the Mantle one on the wire.
-
-# Qwen model IDs on `bedrock-mantle`.
-public enum QwenMantleModel {
-    // `qwen.qwen3-32b` on Mantle.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
-    MANTLE_QWEN3_32B = "qwen.qwen3-32b-v1:0",
-    // `qwen.qwen3-coder-480b-a35b-instruct` on Mantle.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
-    MANTLE_QWEN3_CODER_480B = "qwen.qwen3-coder-480b-a35b-v1:0"
-}
-
-# Configuration for `MantleQwenModelProvider`.
-public type QwenMantleConfig record {|
-    *CommonMantleConfig;
-
-    // Sent as `enable_thinking` in the request body.
-    # Turns Qwen3 thinking on or off. Unset uses the model's default
-    boolean enableThinking?;
-|};
-
 // Signs as `bedrock-mantle`, a separate IAM namespace, so credentials that work on
 // `bedrock-runtime` can still be denied here. No guardrails or cross-region inference.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html

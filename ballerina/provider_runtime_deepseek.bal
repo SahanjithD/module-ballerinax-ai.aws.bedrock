@@ -17,21 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# DeepSeek model IDs on `bedrock-runtime`.
-public enum DeepSeekRuntimeModel {
-    // The bare `deepseek.r1-v1:0` is not callable in any region.
-    # Cross-region ID. For another geography, pass the ID as a string
-    DEEPSEEK_R1 = "us.deepseek.r1-v1:0",
-    // Unlike R1, the bare id is callable directly.
-    # The current flagship
-    DEEPSEEK_V3_2 = "deepseek.v3.2"
-}
-
-# Configuration for `RuntimeDeepSeekModelProvider`.
-public type DeepSeekRuntimeConfig record {|
-    *CommonRuntimeConfig;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 

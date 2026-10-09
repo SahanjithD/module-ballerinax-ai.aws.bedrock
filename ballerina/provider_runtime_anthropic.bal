@@ -17,61 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// Current Anthropic models are served on this endpoint through cross-region inference
-// profiles only: each model card's regional-availability table marks In-Region
-// unsupported in every region and lists the Geo (`us.`, `eu.`, `au.`) and Global
-// (`global.`) profile ids as the way in. A BARE id fails with `on-demand throughput
-// isn't supported`. (The cards' own boto3 samples still show the bare id,
-// contradicting the availability table on the same page; the table matches the
-// error users actually hit.)
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
-
-# Anthropic model IDs on `bedrock-runtime`, with the `us.` cross-region prefix.
-# For another geography, pass the ID as a string, e.g. `eu.anthropic.claude-sonnet-5`.
-public enum AnthropicRuntimeModel {
-    // Refuses a FORCED tool choice, so typed `generate()` offers its tool unforced.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
-    # 1M context; adaptive thinking always on
-    CLAUDE_OPUS_5_5 = "us.anthropic.claude-opus-5-5",
-    # 1M context; adaptive thinking on by default
-    CLAUDE_OPUS_5 = "us.anthropic.claude-opus-5",
-    CLAUDE_OPUS_4_8 = "us.anthropic.claude-opus-4-8",
-    // `thinking.type = "enabled"` with a manual budget is a 400.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
-    # Adaptive thinking only. No `temperature`, `top_p` or `top_k`
-    CLAUDE_OPUS_4_7 = "us.anthropic.claude-opus-4-7",
-    # 1M context; adaptive thinking always on
-    CLAUDE_SONNET_5 = "us.anthropic.claude-sonnet-5",
-    CLAUDE_SONNET_4_6 = "us.anthropic.claude-sonnet-4-6",
-    // DATED AND VERSIONED, unlike its siblings. The card's Programmatic Access table
-    // gives `N/A` as the runtime Model ID and names only the dated profile ids; the
-    // undated id is refused with "The provided model identifier is invalid".
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
-    CLAUDE_HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
-    # Needs an account opt-in: set the data retention mode to `aws_review` first
-    CLAUDE_FABLE_5 = "us.anthropic.claude-fable-5",
-    // Inherits Opus 5.5's restrictions: thinking cannot be disabled, and a FORCED
-    // tool choice is refused, so typed `generate()` offers its tool unforced.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
-    # Needs the Fable 5 opt-in
-    CLAUDE_FABLE_5_1 = "us.anthropic.claude-fable-5-1"
-}
-
-# Configuration for `RuntimeAnthropicModelProvider`.
-public type AnthropicRuntimeConfig record {|
-    *CommonRuntimeConfig;
-
-    // A typed record rather than raw `json`, so the mode/budget pairing rules are
-    // checked at construction.
-    # Extended thinking settings
-    ThinkingConfig thinking?;
-
-    // Sent as `output_config.effort`.
-    # Reasoning effort. The only depth control on Fable 5 and Opus 4.7
-    Effort effort?;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 

@@ -17,23 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// Nova and Titan are served on the Bedrock-native APIs only — there is no
-// vendor-compatible path for them and no Amazon model on `bedrock-mantle`, which is
-// why this vendor has no Mantle class.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-
-# Amazon Nova model IDs.
-public enum AmazonRuntimeModel {
-    NOVA_PRO = "amazon.nova-pro-v1:0",
-    NOVA_LITE = "amazon.nova-lite-v1:0",
-    NOVA_MICRO = "amazon.nova-micro-v1:0"
-}
-
-# Configuration for `RuntimeAmazonModelProvider`.
-public type AmazonRuntimeConfig record {|
-    *CommonRuntimeConfig;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 

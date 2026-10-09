@@ -17,21 +17,6 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-// Gemma is the open-weight family; Gemini is not on Bedrock.
-
-# Google Gemma model IDs on `bedrock-runtime`. For Gemma 4, use `MantleGoogleModelProvider`.
-public enum GoogleRuntimeModel {
-    GEMMA_3_4B_IT = "google.gemma-3-4b-it",
-    GEMMA_3_12B_IT = "google.gemma-3-12b-it",
-    // AWS titles this card "Gemma 3 27B PT" but its id really is `-it` — do not "correct" this.
-    GEMMA_3_27B_IT = "google.gemma-3-27b-it"
-}
-
-# Configuration for `RuntimeGoogleModelProvider`.
-public type GoogleRuntimeConfig record {|
-    *CommonRuntimeConfig;
-|};
-
 // AWS's recommended endpoint for new applications. Signs as `bedrock`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 
