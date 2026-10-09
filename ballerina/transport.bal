@@ -85,7 +85,7 @@ isolated client class BedrockTransport {
 
     isolated function init(auth:CredentialProvider|BearerToken credentials, string region, Endpoint ep,
             http:ClientConfiguration? httpConfig = (), RetryConfig? retryConfig = (),
-            boolean isAgentRoute = false) returns error? {
+            boolean isAgentRoute = false, decimal defaultTimeout = DEFAULT_TIMEOUT) returns error? {
         if credentials is BearerToken {
             self.bearer = credentials.cloneReadOnly();
             self.credProvider = ();
@@ -105,7 +105,7 @@ isolated client class BedrockTransport {
         self.isAgentRoute = isAgentRoute;
         self.host = ep.host;
         self.wirePath = ep.path;
-        self.httpClient = check new (ep.baseUrl, httpConfig ?: {});
+        self.httpClient = check new (ep.baseUrl, withDefaultTimeout(httpConfig, defaultTimeout));
         RetryConfig rc = retryConfig ?: {};
         self.retryConfig = rc.cloneReadOnly();
     }
@@ -530,4 +530,17 @@ isolated function getSignatureKey(string secretKey, string dateStamp, string reg
     byte[] kRegion = check crypto:hmacSha256(region.toBytes(), kDate);
     byte[] kService = check crypto:hmacSha256(serviceName.toBytes(), kRegion);
     return crypto:hmacSha256(AWS4_REQUEST.toBytes(), kService);
+}
+
+// The caller's HTTP settings, with `timeout` replaced by `defaultTimeout` unless the
+// caller changed it from the HTTP client's own default.
+isolated function withDefaultTimeout(http:ClientConfiguration? httpConfig, decimal defaultTimeout)
+        returns http:ClientConfiguration {
+    // A shallow copy, so a caller's (possibly read-only) record is never written to.
+    http:ClientConfiguration base = httpConfig ?: {};
+    http:ClientConfiguration config = {...base};
+    if config.timeout == HTTP_CLIENT_DEFAULT_TIMEOUT {
+        config.timeout = defaultTimeout;
+    }
+    return config;
 }

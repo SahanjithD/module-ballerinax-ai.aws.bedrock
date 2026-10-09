@@ -927,6 +927,13 @@ everything.
 > so expect `deleteByFilter` to under-delete and report rather than to complete silently.
 
 
+### Request timeouts
+
+`chat()` and `generate()` wait up to **300 seconds** for a response, because a reasoning model can think
+for minutes before it answers. Embeddings and knowledge-base calls wait up to **60 seconds**. Set
+`httpConfig.timeout` to change either. The HTTP client's own default is 30 seconds, so a `timeout` of
+exactly 30 is read as "not set" and replaced by these values.
+
 ### `httpConfig.timeout` does not bound connection setup
 
 `http:ClientConfiguration.timeout` is a *response* deadline — Ballerina documents it as "Maximum time

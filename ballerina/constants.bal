@@ -37,6 +37,15 @@
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html
 const int DEFAULT_MAX_TOKEN_COUNT = 4096;
 
+// Request timeouts, in seconds, used unless the caller sets `httpConfig.timeout`. The
+// HTTP client's own default (30 s) is too short for a reasoning model, which can think
+// for minutes before answering; embeddings and knowledge-base calls return quickly.
+const decimal INFERENCE_TIMEOUT = 300;
+const decimal DEFAULT_TIMEOUT = 60;
+// `http:ClientConfiguration.timeout`'s default. A record default cannot be told apart
+// from the same value set explicitly, so this value is read as "not set".
+const decimal HTTP_CLIENT_DEFAULT_TIMEOUT = 30;
+
 // Cross-region-inference geo prefixes, stripped for lookup then re-applied on the
 // wire. bedrock-runtime only: bedrock-mantle has no cross-region inference, and
 // `resolveMantleRoute` refuses a prefixed id rather than silently stripping it. List copied from LiteLLM's cross-region

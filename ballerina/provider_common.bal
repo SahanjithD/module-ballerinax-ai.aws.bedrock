@@ -480,7 +480,7 @@ isolated function resolveSpine(string providerName, BedrockAuthConfig credential
         // on a Mantle class or `fips` on Mantle now all fail without a round trip.
         auth:CredentialProvider|BearerToken resolvedCredentials = check resolveCredentials(credentials);
         BedrockTransport transport =
-            check new (resolvedCredentials, route.region, ep, httpConfig, retryConfig);
+            check new (resolvedCredentials, route.region, ep, httpConfig, retryConfig, false, INFERENCE_TIMEOUT);
         return [route, converter, transport];
     } on fail error e {
         if e is ai:Error {

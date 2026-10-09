@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import ballerina/ai;
+import ballerina/http;
 import ballerina/test;
 
 // Construction-error tests. `init` fails before any I/O.
@@ -238,4 +239,13 @@ function testAnArnCarryingItsOwnRegionNeedsNoRegionArgument() returns error? {
             "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-6",
             TEST_CREDS, "");
     test:assertFalse(provider is error, provider is error ? provider.message() : "");
+}
+
+@test:Config {}
+function testTheRequestTimeoutDefaultsUnlessTheCallerSetsOne() {
+    test:assertEquals(withDefaultTimeout((), INFERENCE_TIMEOUT).timeout, INFERENCE_TIMEOUT);
+    test:assertEquals(withDefaultTimeout({}, DEFAULT_TIMEOUT).timeout, DEFAULT_TIMEOUT);
+    test:assertEquals(withDefaultTimeout({timeout: 45}, INFERENCE_TIMEOUT).timeout, <decimal>45);
+    // Other settings survive the copy.
+    test:assertEquals(withDefaultTimeout({httpVersion: http:HTTP_1_1}, DEFAULT_TIMEOUT).httpVersion, http:HTTP_1_1);
 }
