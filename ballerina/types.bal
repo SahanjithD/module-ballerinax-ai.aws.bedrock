@@ -365,6 +365,8 @@ type InferenceParams record {|
 // one request body in, one response out. `BedrockTransport` satisfies it
 // structurally. Named as a type rather than taking the concrete class so these paths
 // can be driven in tests by an in-process mock, without live AWS or a local port.
+
+# Sends one request body and returns the response.
 type ModelTransport isolated object {
     isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error;
 };

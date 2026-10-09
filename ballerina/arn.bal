@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// A parsed Bedrock ARN. The resource-type token is the free dispatch signal, and
-// the region/partition segments are authoritative over `config.region`.
-// Format: `arn:partition:service:region:account-id:resource-type/resource-id`.
+# A parsed Bedrock ARN: `arn:partition:service:region:account-id:resource-type/resource-id`.
+# Its region and partition override `config.region`.
 type ParsedArn record {|
     # `aws` | `aws-cn` | `aws-us-gov`.
     string partition;
@@ -25,6 +24,7 @@ type ParsedArn record {|
     # `arn:aws:bedrock::123456789012:foundation-model/anthropic.claude-v2`.
     # `resolveArn` falls back to the caller's region in that case.
     string region;
+    # The 12-digit AWS account id; may be empty.
     string accountId;
     # e.g. `imported-model`, `provisioned-model`, `inference-profile`.
     string resourceType;

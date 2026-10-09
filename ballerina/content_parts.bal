@@ -41,12 +41,15 @@ type ContentPart TextPart|ImagePart;
 
 # Literal text.
 type TextPart record {|
+    # Discriminator.
     readonly "text" kind = "text";
+    # The text.
     string text;
 |};
 
 # An image, always as raw bytes plus a concrete IANA type.
 type ImagePart record {|
+    # Discriminator.
     readonly "image" kind = "image";
     # Concrete type — never a wildcard. Both Converse's `format` and Anthropic's
     # `media_type` are derived from this, and neither accepts `image/*`.
@@ -58,10 +61,13 @@ type ImagePart record {|
 # A user message whose content has been resolved to parts. Assistant and function
 # messages are unchanged — neither can carry an image.
 type ResolvedUserMessage record {|
+    # Always `ai:USER`.
     ai:USER role = ai:USER;
+    # The message content, in order.
     ContentPart[] parts;
 |};
 
+# A chat message ready for a converter: user content resolved to parts, others unchanged.
 type ResolvedMessage ResolvedUserMessage|ai:ChatAssistantMessage|ai:ChatFunctionMessage;
 
 // The only image formats ANY Bedrock dialect accepts. Converse constrains `format`

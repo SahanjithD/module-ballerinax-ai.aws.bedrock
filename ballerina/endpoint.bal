@@ -50,8 +50,8 @@ const MANTLE_ENDPOINT_PREFIX = "bedrock-mantle";
 const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
 const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
 
-// The resolved wire endpoint. `signingService` is the SigV4 scope,
-// not the IAM namespace — they differ inside this service family.
+# The resolved wire endpoint. `signingService` is the SigV4 scope, not the IAM
+# namespace; they differ inside this service family.
 type Endpoint record {|
     # Origin, e.g. `https://bedrock-runtime.us-east-1.amazonaws.com`.
     string baseUrl;
@@ -279,13 +279,11 @@ isolated function runtimePath(Route route) returns string|error {
 isolated function isPathAddressed(ApiFamily api) returns boolean
     => api == CONVERSE || api == INVOKE;
 
-// Which bedrock-agent plane an endpoint is for. Module-private: only the knowledge
-// base spine needs this distinction.
+# Which bedrock-agent plane an endpoint is for. Only the knowledge base spine needs it.
 enum AgentPlane {
-    // Control plane (`bedrock-agent`): CreateKnowledgeBase, CreateDataSource,
-    // IngestKnowledgeBaseDocuments, List/Get/DeleteKnowledgeBaseDocuments, ...
+    # Control plane (`bedrock-agent`): create, list and get knowledge bases, data sources and documents
     AGENT_CONTROL,
-    // Data plane (`bedrock-agent-runtime`): Retrieve.
+    # Data plane (`bedrock-agent-runtime`): Retrieve
     AGENT_DATA
 }
 

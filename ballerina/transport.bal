@@ -61,8 +61,8 @@ const APPLICATION_JSON = "application/json";
 const AWS4_HMAC_SHA256 = "AWS4-HMAC-SHA256";
 const AWS4_REQUEST = "aws4_request";
 
-// Wraps SigV4 signing + an HTTP client + retry/error mapping for one resolved
-// route. Resolve-once: host, path, and signing scope are fixed.
+# SigV4 signing, an HTTP client and retry/error mapping for one resolved route.
+# Host, path and signing scope are fixed at construction.
 isolated client class BedrockTransport {
     // Exactly one of these is set. A bearer bypasses SigV4, so it never reaches
     // `CredentialProvider`; every other credential source resolves through it.
@@ -443,18 +443,20 @@ isolated function hasApiKeyHeader(map<string> headers) returns boolean {
     return false;
 }
 
-// A successful transport round-trip: the JSON body plus the selected response
-// headers the decoder/provider needs.
+# A successful round trip: the JSON body and the response headers the caller needs.
 type TransportResponse record {|
+    # The response body
     json body;
+    # Selected response headers, keyed as in `REQUEST_ID_HEADER`
     map<string> headers;
 |};
 
 // Response-header keys captured into `TransportResponse.headers`.
 const REQUEST_ID_HEADER = "requestId";
 
-// A retryable transport outcome (408/429/500/502/503/504 or a connection failure).
 // A `distinct error` so it narrows cleanly against `json` and `ai:Error`.
+
+# A retryable failure: HTTP 408, 429, 500, 502, 503 or 504, or a connection failure.
 type RetryableError distinct error;
 
 // A10 §2a/prerequisite: a Bedrock `ConflictException` (HTTP 409) — the caller may be
@@ -465,6 +467,8 @@ type RetryableError distinct error;
 // every call site but the one that recovers) collapses a `ConflictError` back into a
 // generic `ai:Error` with the identical message text, so existing error output for
 // every other 409 is unchanged.
+
+# A Bedrock `ConflictException` (HTTP 409), which the caller may recover from.
 type ConflictError distinct error<record {| string detail; |}>;
 
 // Returns a response header value, or `()` if absent.
