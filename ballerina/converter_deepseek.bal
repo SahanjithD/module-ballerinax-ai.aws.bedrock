@@ -116,14 +116,29 @@ isolated function decodeDeepSeekInvoke(json response) returns DecodedResponse|ai
     }
     map<json> choice = choiceResult;
     // `text`, not `message.content` — this is a completion, not a chat turn.
-    string text = strField(choice, "text") ?: "";
+    // `stop_reason`, not `finish_reason`.
+    string stopReason = strField(choice, "stop_reason") ?: "stop";
+    string text = deepSeekAnswer(strField(choice, "text") ?: "", stopReason);
     return {
         message: {role: ai:ASSISTANT, content: text == "" ? () : text},
         // AWS documents no usage for this dialect; `usage` stays populated.
         usage: {inputTokens: 0, outputTokens: 0},
-        // `stop_reason`, not `finish_reason`.
-        stopReason: strField(choice, "stop_reason") ?: "stop",
+        stopReason,
         responseId: (),
         guardrailAction: invokeGuardrailAction(r) // body field
     };
+}
+
+const DEEPSEEK_THINK_END = "</think>";
+
+// The answer part of an R1 completion. The prompt opens `<think>`, so the model writes
+// its chain of thought, then `</think>`, then the answer; only the answer is returned.
+// Cut off before `</think>`, there is no answer yet, so the text is empty. Verified
+// live on 2026-10-09 (us-east-1): without this the reply held the whole chain of thought.
+isolated function deepSeekAnswer(string completion, string stopReason) returns string {
+    int? end = completion.lastIndexOf(DEEPSEEK_THINK_END);
+    if end is int {
+        return completion.substring(end + DEEPSEEK_THINK_END.length()).trim();
+    }
+    return finishReason(stopReason) == FINISH_LENGTH ? "" : completion;
 }

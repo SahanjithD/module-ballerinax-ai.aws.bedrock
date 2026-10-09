@@ -135,7 +135,7 @@ isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Err
     ai:FunctionCall[] toolCalls = [];
     map<json>? message = mapField(choice, "message");
     if message is map<json> {
-        text = strField(message, "content") ?: "";
+        text = withoutReasoning(strField(message, "content") ?: "");
         json[]? calls = arrField(message, "tool_calls");
         if calls is json[] {
             foreach json call in calls {
@@ -175,4 +175,19 @@ isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Err
         responseId: strField(r, "id"),
         guardrailAction: invokeGuardrailAction(r) // body field
     };
+}
+
+const REASONING_START = "<reasoning>";
+const REASONING_END = "</reasoning>";
+
+// gpt-oss on InvokeModel and Chat Completions returns its reasoning inline, as
+// `<reasoning>…</reasoning>answer`, where Converse and Mantle return only the answer.
+// Only a block at the very start is removed, so other models' text is untouched.
+// Seen live on 2026-10-09 (us-east-1) on both APIs.
+isolated function withoutReasoning(string content) returns string {
+    if !content.startsWith(REASONING_START) {
+        return content;
+    }
+    int? end = content.indexOf(REASONING_END);
+    return end is int ? content.substring(end + REASONING_END.length()).trim() : content;
 }

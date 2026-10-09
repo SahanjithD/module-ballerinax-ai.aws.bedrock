@@ -297,7 +297,7 @@ function testDeepSeekInvokeEmitsPromptNotMessages() returns error? {
 function testDeepSeekDecodeReadsChoicesTextNotMessage() returns error? {
     // The `choices` wrapper makes it look OpenAI-shaped, but the payload is
     // `choices[].text` + `stop_reason`, and there is no usage object at all.
-    json canned = {"choices": [{"text": "the answer", "stop_reason": "length"}]};
+    json canned = {"choices": [{"text": "thinking\n</think>\nthe answer", "stop_reason": "length"}]};
     DecodedResponse decoded = check decodeDeepSeekInvoke(canned);
     test:assertEquals(decoded.message.content, "the answer");
     test:assertEquals(decoded.stopReason, "length");
@@ -660,4 +660,31 @@ function testAnIncompleteResponsesReplyReportsWhy() {
     test:assertEquals(responsesStopReason({status: "incomplete", incomplete_details: {reason: "max_output_tokens"}}),
             "max_output_tokens");
     test:assertEquals(responsesStopReason({status: "completed"}), "completed");
+}
+
+@test:Config {}
+function testGptOssReasoningIsLeftOutOfTheReply() returns error? {
+    DecodedResponse decoded = check decodeOpenAIChat({
+        choices: [{message: {role: "assistant", content: "<reasoning>User asks for the capital.</reasoning>Paris."},
+            finish_reason: "stop"}]
+    });
+    test:assertEquals(decoded.message.content, "Paris.");
+    // Text that merely mentions the tag later on is left alone.
+    test:assertEquals(withoutReasoning("Use <reasoning></reasoning> tags."), "Use <reasoning></reasoning> tags.");
+    test:assertEquals(withoutReasoning("<reasoning>never closed"), "<reasoning>never closed");
+}
+
+@test:Config {}
+function testDeepSeekR1ReturnsOnlyTheAnswerAfterItsThinking() returns error? {
+    DecodedResponse decoded = check decodeDeepSeekInvoke({
+        choices: [{text: "The user wants the capital.\n</think>\n\nParis", stop_reason: "stop"}]
+    });
+    test:assertEquals(decoded.message.content, "Paris");
+    // Cut off while still thinking: there is no answer yet.
+    DecodedResponse cut = check decodeDeepSeekInvoke({
+        choices: [{text: "The user wants the capital. Let me", stop_reason: "length"}]
+    });
+    test:assertEquals(cut.message.content, ());
+    // No thinking block and a normal stop: the text is the answer.
+    test:assertEquals(deepSeekAnswer("Paris", "stop"), "Paris");
 }

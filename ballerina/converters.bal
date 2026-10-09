@@ -288,7 +288,8 @@ isolated function usesMistralTextDialect(string bareModelId) returns boolean =>
 // while R1's own model card now shows an Invoke sample using `messages`. We keep R1
 // on the dialect that has a documented RESPONSE shape (`choices[].text` +
 // `stop_reason`) — decoding is only defined for that pairing — and default every
-// other DeepSeek id to chat.
+// other DeepSeek id to chat. Verified live on 2026-10-09 (us-east-1): R1 answers this
+// text-completion request on InvokeModel.
 //
 // text:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
 // V3.2:  https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
