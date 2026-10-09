@@ -17,8 +17,6 @@ import ballerina/ai;
 // Converse converter — the model-agnostic normalized surface.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 
-// Encodes a Converse request body. `system` is the top-level `system` field, never
-// a message. Forwards the passthrough verbatim.
 isolated function encodeConverse(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] wire = [];
@@ -61,9 +59,7 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
     if thinking is ThinkingConfig {
         additionalRequest = foldRequestFields(additionalRequest, {"thinking": thinkingBody(thinking)});
     }
-    // `effort` also goes in the passthrough: the native `outputConfig.effort` member is
-    // rejected on the wire (verified live 2026-08-11), as AWS's adaptive-thinking page
-    // implies.
+    // Converse rejects the native `outputConfig.effort`, so it goes in the passthrough.
     Effort? effort = params?.effort;
     if effort is Effort {
         additionalRequest = foldRequestFields(additionalRequest, {"output_config": {"effort": effort}});
@@ -101,8 +97,6 @@ isolated function encodeConverse(string? system, ResolvedMessage[] messages,
     return body;
 }
 
-// Maps one resolved message to a Converse content block. Images ride the native
-// `image` ContentBlock member — verified against the Converse API reference.
 isolated function converseMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
         return {"role": "user", "content": converseContentBlocks(m.parts)};
@@ -128,8 +122,6 @@ isolated function converseMessage(ResolvedMessage m) returns json {
     };
 }
 
-// Decodes a Converse response. Always populates `usage` and
-// `stopReason`; maps `guardrail_intervened` to `INTERVENED`.
 isolated function decodeConverse(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {

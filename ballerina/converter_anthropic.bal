@@ -17,18 +17,15 @@ import ballerina/ai;
 // Anthropic Messages, for two routes: InvokeModel (`anthropic_version` body field) and
 // the Messages API (`anthropic-version` header). The response is the same.
 
-// InvokeModel with Anthropic: adds the required `anthropic_version` body field.
 isolated function encodeInvokeAnthropic(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeAnthropicMessages(system, messages, tools, stop, params, true);
 
-// Mantle Messages encoder — NO body version field (the header carries it).
+// No body version field: the `anthropic-version` header carries it.
 isolated function encodeMantleMessages(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeAnthropicMessages(system, messages, tools, stop, params, false);
 
-// Builds an Anthropic Messages request body. `bedrockInvoke` toggles the required
-// `anthropic_version` body field.
 isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params,
         boolean bedrockInvoke) returns json|ai:Error {
@@ -81,8 +78,6 @@ isolated function encodeAnthropicMessages(string? system, ResolvedMessage[] mess
     return body;
 }
 
-// `ThinkingConfig` -> its wire object. Kept in one place so the snake_case spelling
-// (`budget_tokens`) exists exactly once.
 isolated function thinkingBody(ThinkingConfig thinking) returns json {
     map<json> out = {"type": thinking.mode};
     int? budget = thinking?.budgetTokens;
@@ -92,7 +87,7 @@ isolated function thinkingBody(ThinkingConfig thinking) returns json {
     return out;
 }
 
-// One message as Anthropic content. Images are base64: Bedrock does not take a URL.
+// Images are base64: Bedrock does not take a URL.
 // https://platform.claude.com/docs/en/build-with-claude/vision
 isolated function anthropicMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
@@ -119,8 +114,6 @@ isolated function anthropicMessage(ResolvedMessage m) returns json {
     };
 }
 
-// Decodes an Anthropic Messages response (Invoke-Anthropic and Mantle Messages
-// share this shape). Always populates `usage` and `stopReason`.
 isolated function decodeAnthropicMessages(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {

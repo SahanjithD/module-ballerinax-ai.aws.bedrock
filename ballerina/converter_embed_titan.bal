@@ -21,7 +21,7 @@ import ballerina/ai;
 // Titan embeds exactly one text per InvokeModel call.
 const int TITAN_MAX_BATCH = 1;
 
-// Titan Embed V1 has no `dimensions`. Strips a cross-region prefix first.
+// V1 has no `dimensions`.
 isolated function isTitanEmbedV1(string modelId) returns boolean {
     [string, string?] [bareId, _] = normalizeModelId(modelId);
     return bareId.startsWith("amazon.titan-embed-text-v1");
@@ -34,8 +34,7 @@ final readonly & EmbeddingConverter TITAN_EMBED_CONVERTER = {
     decode: decodeTitanEmbed
 };
 
-// Encodes a Titan embedding request. `texts` must hold exactly one element —
-// `inputText` is a single string on the wire.
+// `inputText` is one string, so `texts` must hold exactly one element.
 isolated function encodeTitanEmbed(string[] texts, EmbeddingParams params) returns json|ai:Error {
     if texts.length() != 1 {
         return error ai:Error(string `Titan embeds exactly one text per call; got ${texts.length()}. ` +
@@ -59,8 +58,6 @@ isolated function encodeTitanEmbed(string[] texts, EmbeddingParams params) retur
     return body;
 }
 
-// Decodes a Titan embedding response. Titan DOES report an
-// input token count.
 isolated function decodeTitanEmbed(json response) returns DecodedEmbedding|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {

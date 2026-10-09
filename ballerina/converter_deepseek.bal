@@ -20,7 +20,6 @@ import ballerina/ai;
 // DeepSeek V3.x takes `messages` and uses the OpenAI chat converter instead.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
 
-// Encodes a DeepSeek text-completion request body.
 isolated function encodeDeepSeekInvoke(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // Text-only by construction: the whole conversation is one prompt string.
@@ -75,8 +74,7 @@ isolated function deepSeekPrompt(string? system, ResolvedMessage[] messages) ret
     return prompt;
 }
 
-// Decodes a DeepSeek text-completion response: `choices[].text` +
-// `choices[].stop_reason`. This dialect returns no token counts and no id.
+// This format returns no token counts and no id.
 isolated function decodeDeepSeekInvoke(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {
@@ -108,8 +106,7 @@ isolated function decodeDeepSeekInvoke(json response) returns DecodedResponse|ai
 
 const DEEPSEEK_THINK_END = "</think>";
 
-// The answer after `</think>`; the prompt opens `<think>`, so the reasoning comes
-// first. Cut off before `</think>`, there is no answer yet (verified live 2026-10-09).
+// The prompt opens `<think>`, so the answer is whatever follows `</think>`.
 isolated function deepSeekAnswer(string completion, string stopReason) returns string {
     int? end = completion.lastIndexOf(DEEPSEEK_THINK_END);
     if end is int {

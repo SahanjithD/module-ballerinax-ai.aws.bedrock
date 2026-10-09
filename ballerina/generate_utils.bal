@@ -20,8 +20,8 @@ import ballerina/jballerina.java;
 
 const RESULT_TOOL = "respond_with_result";
 
-// Called by the Java `Generator` shim. The shim returns the result as `td` without
-// checking it, so `ensureType` below is what guarantees the type. Owns the span.
+// Called by the Java `Generator` shim, which does not check the result type, so
+// `ensureType` below does.
 isolated function generateLlmResponse(StructuredOutputStyle structuredOutput, ApiFamily api,
         readonly & ModelConverter converter, ModelTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
@@ -58,12 +58,10 @@ isolated function isPlainStringType(typedesc<anydata> td) returns boolean = @jav
     name: "isPlainString"
 } external;
 
-// A short `generate()` error, with the reasoning and any underlying error in its cause.
 isolated function generationError(string message, string detail, error? cause = ())
         returns ai:LlmInvalidGenerationError
     => error ai:LlmInvalidGenerationError(message, error(detail, cause));
 
-// Picks the generate() path for the route. `span` is `()` only in tests.
 isolated function structuredGenerate(StructuredOutputStyle structuredOutput, ApiFamily api,
         readonly & ModelConverter converter, ModelTransport transport, string wireModelId,
         map<string> & readonly extraHeaders, readonly & InferenceParams params, ai:Prompt prompt,
@@ -125,7 +123,7 @@ isolated function wireSchemaFor(typedesc<anydata> td) returns [map<json>, boolea
     ];
 }
 
-// Binds the model's JSON to the target type, unwrapping it first. A bare value binds too.
+// A bare (unwrapped) value binds too.
 isolated function bindResult(json data, boolean wrapped, typedesc<anydata> td, string origin)
         returns anydata|ai:Error {
     if wrapped && data is map<json> && data.hasKey(RESULT_WRAPPER_KEY) {
@@ -134,7 +132,6 @@ isolated function bindResult(json data, boolean wrapped, typedesc<anydata> td, s
     return bindJson(data, td, origin);
 }
 
-// A `string` target: one chat turn, returning its text.
 isolated function plainTextResponse(ApiFamily api, readonly & ModelConverter converter, ModelTransport transport,
         string wireModelId, map<string> & readonly extraHeaders, readonly & InferenceParams params,
         ai:Prompt prompt, observe:LlmSpan? span) returns anydata|ai:Error {
@@ -148,7 +145,6 @@ isolated function plainTextResponse(ApiFamily api, readonly & ModelConverter con
     return decoded.message.content ?: "";
 }
 
-// Records the prompt on the span and sends through the same round trip as `chat()`.
 isolated function sendGenerateRequest(observe:LlmSpan? span, ApiFamily api, string wireModelId,
         readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
         ResolvedUserMessage userMsg, json encoded) returns DecodedResponse|ai:Error {
@@ -161,8 +157,6 @@ isolated function sendGenerateRequest(observe:LlmSpan? span, ApiFamily api, stri
 const RESULT_TOOL_INSTRUCTION = "Respond only by calling the " + RESULT_TOOL +
     " tool, with the result as its arguments.";
 
-// Offers one tool whose schema is the target type, forced unless `forceTool` is false,
-// and binds its arguments.
 isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter converter,
         ModelTransport transport, string wireModelId, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:Prompt prompt, typedesc<anydata> td, observe:LlmSpan? span,
@@ -267,8 +261,7 @@ isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolN
     return forced;
 }
 
-// Binds JSON to the target type. The error names where the JSON came from (tool call or
-// reply text) and shows it; the cause names the field that failed.
+// The error shows the JSON and where it came from; the cause names the failing field.
 isolated function bindJson(json data, typedesc<anydata> td, string origin) returns anydata|ai:Error {
     anydata|error bound = data.fromJsonWithType(td);
     if bound is error {
@@ -287,8 +280,7 @@ isolated function truncateForMessage(string value) returns string
         ? value
         : value.substring(0, MAX_ERROR_JSON_LENGTH) + "… (truncated)";
 
-// Best-effort JSON from model text: code fences, then the outermost braces or brackets.
-// Returns an error when there is none, since `()` is itself valid `json`.
+// Returns an error when there is no JSON, since `()` is itself valid `json`.
 isolated function extractJson(string content) returns json|error {
     string trimmed = content.trim();
     if trimmed.startsWith("```") {
@@ -325,9 +317,8 @@ isolated function extractJson(string content) returns json|error {
     return error("no JSON value found in model output");
 }
 
-// Native Converse structured output (`outputConfig.textFormat`). Its
 // `jsonSchema.schema` is a string (the serialised schema), unlike a tool's object
-// schema. Not used until `structuredOutputStyleFor` selects it.
+// schema. Not selected by any route yet.
 // https://github.com/boto/botocore/blob/develop/botocore/data/bedrock-runtime/2023-09-30/service-2.json
 isolated function generateByOutputConfig(ApiFamily api, readonly & ModelConverter converter,
         ModelTransport transport, string wireModelId, map<string> & readonly extraHeaders,

@@ -39,8 +39,7 @@ final readonly & string[] METADATA_STRING_FIELDS = [
 ];
 const string METADATA_DECIMAL_FIELD = "fileSize";
 
-// An `ai:Chunk` or `ai:Document` as a `KnowledgeBaseDocument`, plus the id it was given
-// (needed to poll its status). Only text is supported; anything else is an error.
+// Also returns the id it was given, needed to poll its status. Only text is supported.
 isolated function chunkToKnowledgeBaseDocument(string providerName, ai:Chunk|ai:Document chunk,
         int? chunkOrdinal = ()) returns [json, string]|ai:Error {
     string content;
@@ -100,7 +99,6 @@ isolated function documentIdFor(ai:Metadata? metadata, int? chunkOrdinal) return
     return chunkOrdinal is int ? string `${derived}#${chunkOrdinal}` : derived;
 }
 
-// `ai:Metadata` as inline attributes, or `()` when there is nothing to send.
 isolated function metadataToDocumentMetadata(ai:Metadata metadata) returns json?|ai:Error {
     json[] attributes = [];
     foreach [string, json] [key, value] in metadata.entries() {
@@ -124,8 +122,7 @@ isolated function metadataToDocumentMetadata(ai:Metadata metadata) returns json?
     return {'type: "IN_LINE_ATTRIBUTE", inlineAttributes: attributes};
 }
 
-// One metadata value as a `MetadataAttributeValue`: boolean, number, string or string
-// list. Anything else is an error rather than dropped.
+// Anything but a boolean, number, string or string list is an error, not dropped.
 isolated function toMetadataAttributeValue(string key, json value) returns json|ai:Error {
     // Before the array branch: a `time:Utc` is a tuple. Sent as an RFC 3339 string.
     if METADATA_UTC_FIELDS.indexOf(key) is int {
@@ -171,8 +168,7 @@ isolated function toMetadataAttributeValue(string key, json value) returns json|
         string `(supported: boolean, number, string, string[]); got ${value.toJsonString()}`);
 }
 
-// A retrieval result as an `ai:QueryMatch`. Only text results are supported. Metadata
-// is passed through, including Bedrock's own `_`-prefixed attributes.
+// Only text results are supported. Bedrock's own `_`-prefixed attributes pass through.
 isolated function retrievalResultToQueryMatch(string providerName, json result) returns ai:QueryMatch|ai:Error {
     map<json> resultMap = result is map<json> ? result : {};
     json contentJson = resultMap["content"] ?: {};
@@ -197,9 +193,8 @@ isolated function retrievalResultToQueryMatch(string providerName, json result) 
     return {chunk, similarityScore};
 }
 
-// Bedrock's metadata back into `ai:Metadata`, converting each typed field (a direct
-// write would panic, since numbers come back as `decimal`). Other keys go into the
-// rest field as they are.
+// Numbers come back as `decimal`, so typed fields are converted; a direct write would
+// panic.
 isolated function metadataFromRetrievalResult(map<json> attributes) returns ai:Metadata|ai:Error {
     ai:Metadata metadata = {};
     foreach [string, json] [key, value] in attributes.entries() {

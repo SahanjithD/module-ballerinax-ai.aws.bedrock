@@ -17,7 +17,6 @@ import ballerina/ai;
 // OpenAI Responses on both endpoints. The system prompt is `instructions`, turns are
 // `input` items, and the reply is in `output` items.
 
-// Encodes an OpenAI Responses request body.
 isolated function encodeResponses(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // UNVERIFIED: image support on the Mantle /openai/v1/responses path is not stated
@@ -70,8 +69,7 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
     return body;
 }
 
-// One message as Responses `input` items. Each tool call becomes a `function_call`
-// item with its `call_id`, which the following tool result is matched against.
+// Each tool call becomes a `function_call` item; its tool result is matched on `call_id`.
 isolated function responsesInputItems(ResolvedMessage m) returns json[] {
     if m is ResolvedUserMessage {
         return [{"role": "user", "content": responsesContentParts(m.parts)}];
@@ -103,8 +101,6 @@ isolated function responsesInputItems(ResolvedMessage m) returns json[] {
     return [{"type": "function_call_output", "call_id": m.id ?: m.name, "output": m.content ?: ""}];
 }
 
-// Decodes an OpenAI Responses response. Always populates `usage` and
-// `stopReason`.
 isolated function decodeResponses(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {

@@ -140,7 +140,7 @@ final readonly & ModelConverter INVOKE_MISTRAL_TEXT_CONVERTER = {
     supports: {stopSequences: true, thinking: false, effort: false, reasoningEffort: false}
 };
 
-// Picks the converter for a route, by API rather than endpoint.
+// Chosen by API, not endpoint.
 isolated function selectConverter(Route route) returns readonly & ModelConverter|error {
     match route.api {
         CONVERSE => {
@@ -160,7 +160,6 @@ isolated function selectConverter(Route route) returns readonly & ModelConverter
     return selectInvokeConverter(route.bareModelId);
 }
 
-// A Mantle path: the model's base path plus the API's suffix.
 isolated function mantlePathFor(string basePath, ApiFamily api) returns string|error {
     match api {
         MESSAGES => {
@@ -223,9 +222,7 @@ isolated function usesMistralTextDialect(string bareModelId) returns boolean =>
     bareModelId.startsWith("mistral.mixtral-") ||
     bareModelId.startsWith("mistral.mistral-large-2402");
 
-// DeepSeek ids that use the text-completion format on InvokeModel: R1 only; V3.x use
-// chat. AWS's pages disagree on R1 (the parameters page shows text completion, its
-// model card shows `messages`); text completion verified live on 2026-10-09.
+// R1 uses the text-completion format on InvokeModel; V3.x use chat.
 // text: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
 // R1:   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html
 isolated function usesDeepSeekTextDialect(string bareModelId) returns boolean =>

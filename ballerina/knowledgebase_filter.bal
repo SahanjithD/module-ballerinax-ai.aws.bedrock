@@ -18,7 +18,7 @@ import ballerina/ai;
 // operator, and a group needs at least two members, so a one-member group is flattened.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_RetrievalFilter.html
 
-// One filter as its `RetrievalFilter` operator. `IN` and `NOT_IN` need an array value.
+// `IN` and `NOT_IN` need an array value.
 isolated function metadataFilterToRetrievalFilter(ai:MetadataFilter filter) returns json|ai:Error {
     string key = filter.key;
     json value = filter.value;
@@ -58,7 +58,6 @@ isolated function metadataFilterToRetrievalFilter(ai:MetadataFilter filter) retu
     return error ai:Error(string `Unsupported metadata filter operator: '${filter.operator}'`);
 }
 
-// A filter group as one `RetrievalFilter`, or `()` when it constrains nothing.
 isolated function metadataFiltersToRetrievalFilter(ai:MetadataFilters filters) returns json?|ai:Error {
     json[] children = [];
     foreach ai:MetadataFilters|ai:MetadataFilter child in filters.filters {
@@ -83,8 +82,8 @@ isolated function metadataFiltersToRetrievalFilter(ai:MetadataFilters filters) r
     return {[groupKey]: children};
 }
 
-// How many real predicates a filter has. `deleteByFilter` checks this as well as the
-// encoded filter, so an empty filter can never delete everything.
+// `deleteByFilter` checks this as well as the encoded filter, so an empty filter can
+// never delete everything.
 isolated function filterLeafCount(ai:MetadataFilters filters) returns int {
     int count = 0;
     foreach ai:MetadataFilters|ai:MetadataFilter child in filters.filters {

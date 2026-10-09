@@ -24,7 +24,7 @@ import ballerinax/aws.auth;
 // transports, find-or-create, data-source resolution and the document wire calls.
 
 // Injected on every retrieval result: the document's custom id or S3 URI. Not in the
-// service model; observed on the live API. `deleteByFilter` relies on it, because
+// service model. `deleteByFilter` relies on it, because
 // Bedrock cannot read a document's metadata back any other way.
 const string SOURCE_URI_METADATA_KEY = "_source_uri";
 
@@ -56,7 +56,7 @@ const int KB_PIN_KEY_SAMPLE_SIZE = 10;
 // `ai:Metadata.id`, so the two always agree for documents this module ingested.
 const string KB_DOCUMENT_ID_METADATA_KEY = "id";
 
-// The live `ListKnowledgeBaseDocuments` rejects more than 100, although the service
+// `ListKnowledgeBaseDocuments` rejects more than 100, although the service
 // model allows 1000; used for all three list calls, which share that shape.
 const int KB_LIST_PAGE_SIZE = 100;
 
@@ -89,8 +89,7 @@ const int KB_MAX_RESULTS_PER_CALL = 100;
 // Spine resolution.
 // ============================================================================
 
-// Builds the transports, then finds or creates the knowledge base and resolves its
-// data source and chunking, so every failure surfaces at construction.
+// Resolves everything up front, so every failure surfaces at construction.
 isolated function resolveKbSpine(string providerName, KnowledgeBaseAuthConfig credentials, string region,
         aws:EndpointConfig? endpointConfig, string|ManagedKnowledgeBaseDefinition knowledgeBase,
         string? dataSourceIdOverride, http:ClientConfiguration? httpConfig, RetryConfig? retryConfig,
@@ -176,8 +175,7 @@ isolated function nameAmbiguityMessage(string name, string[] candidates) returns
         string `(${string:'join(", ", ...candidates)}) — construction cannot tell which one was meant. ` +
         "Pass the knowledge base id directly instead of a definition.";
 
-// Checks the knowledge base is ACTIVE and MANAGED. A `VECTOR` one goes through a
-// different retrieval branch, so it belongs to `SelfManagedKnowledgeBase`. Returns the
+// A `VECTOR` knowledge base belongs to `SelfManagedKnowledgeBase`. Returns the
 // knowledge base so the definition check can reuse it.
 isolated function verifyKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId)
         returns map<json>|ai:Error {
@@ -254,8 +252,8 @@ isolated function guardEmbeddingModelAgainstReranker(string|ManagedKnowledgeBase
     }
 }
 
-// The `CreateKnowledgeBase` request body. MANAGED takes no `storageConfiguration`;
-// `embeddingModelArn` and its configuration go only with a `CUSTOM` embedding model.
+// MANAGED takes no `storageConfiguration`; `embeddingModelArn` goes only with a
+// `CUSTOM` embedding model.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ManagedKnowledgeBaseConfiguration.html
 isolated function createKnowledgeBaseRequestBody(ManagedKnowledgeBaseDefinition def) returns map<json> {
@@ -363,8 +361,6 @@ isolated function concurrentDuplicateMessage(string name, string[] matches, stri
         "instead — that path creates nothing and cannot race.";
 }
 
-// Polls until ACTIVE or `readyTimeout`. A managed knowledge base usually takes a few
-// seconds; a self-managed one can take over a minute.
 isolated function pollKnowledgeBaseActive(BedrockTransport controlTransport, string kbId, decimal timeoutSeconds)
         returns ai:Error? {
     time:Utc deadline = time:utcAddSeconds(time:utcNow(), timeoutSeconds);
@@ -400,9 +396,8 @@ isolated function failureReasonsOf(map<json> details) returns string {
 // Data sources: created with a new knowledge base, or resolved on an existing one.
 // ============================================================================
 
-// The `CreateDataSource` body. A managed knowledge base rejects a plain `CUSTOM` type:
-// the console's "Custom" source is `MANAGED_KNOWLEDGE_BASE_CONNECTOR` with the type in
-// `connectorParameters` (observed on the live API).
+// A managed knowledge base rejects a plain `CUSTOM` type: the console's "Custom"
+// source is `MANAGED_KNOWLEDGE_BASE_CONNECTOR` with the type in `connectorParameters`.
 isolated function createDataSourceRequestBody(DataSourceDefinition def) returns map<json>|ai:Error {
     map<json> body = {
         name: def.name,
@@ -502,8 +497,7 @@ isolated function listDataSources(BedrockTransport controlTransport, string kbId
     return summaries;
 }
 
-// Finds the knowledge base's single `CUSTOM` data source. Summaries carry no type, so
-// this reads each data source.
+// Summaries carry no type, so each data source is read.
 isolated function resolveCustomDataSource(BedrockTransport controlTransport, string kbId) returns string|ai:Error {
     map<json>[] summaries = check listDataSources(controlTransport, kbId);
     string[] candidates = [];
@@ -531,9 +525,8 @@ isolated function resolveCustomDataSource(BedrockTransport controlTransport, str
         string `(${string:'join(", ", ...candidates)}) — ambiguous. Pass 'dataSourceId' explicitly.`);
 }
 
-// The data source's real type: `connectorParameters.type` inside a
-// `MANAGED_KNOWLEDGE_BASE_CONNECTOR`. The live API returns `connectorParameters` as a
-// JSON string, although the service model declares an object; both are handled.
+// `connectorParameters` comes back as a JSON string, although the service model
+// declares an object; both are handled.
 isolated function effectiveDataSourceType(map<json> dataSource) returns string {
     map<json> config = asMap(dataSource["dataSourceConfiguration"] ?: {});
     string wireType = stringField(config, "type") ?: "";
@@ -558,9 +551,7 @@ isolated function effectiveDataSourceType(map<json> dataSource) returns string {
 // Chunking-strategy detection.
 // ============================================================================
 
-// Checks the data source is AVAILABLE and `CUSTOM`, and reads its chunking strategy,
-// which picks the default `chunker`: `ai:DISABLE` when Bedrock chunks, `ai:AUTO` when
-// the strategy is `NONE`. A missing strategy is treated as Bedrock's FIXED_SIZE.
+// A missing chunking strategy is treated as Bedrock's FIXED_SIZE.
 isolated function validateResolvedDataSource(BedrockTransport controlTransport, string kbId, string dsId)
         returns ChunkingStrategy|ai:Error {
     map<json> dataSource = check getDataSource(controlTransport, kbId, dsId);
@@ -707,8 +698,7 @@ isolated function sourceValueOfIdentifier(json identifier) returns string? {
     return id is string ? id : stringField(asMap(m["s3"] ?: {}), "uri");
 }
 
-// Polls until every submitted id is terminal or the timeout passes. Driven by the
-// submitted ids, so an id that reads `NOT_FOUND` or is missing from the response stays
+// Driven by the submitted ids, so an id that reads `NOT_FOUND` or is missing stays
 // pending instead of passing as success.
 isolated function pollDocumentsTerminal(BedrockTransport controlTransport, string kbId, string dsId,
         string[] ids, decimal timeoutSeconds) returns map<DocumentOutcome>|ai:Error {
@@ -775,7 +765,7 @@ isolated function assertDistinctDocumentIds(string[] documentIds) returns ai:Err
         "the earlier one. Ingest them in separate calls if the overwrite is intended.");
 }
 
-// The data source's documents that are retrievable and deletable (`CUSTOM` or `S3`).
+// Only `CUSTOM` and `S3` documents are retrievable and deletable.
 isolated function listDeletableDocuments(BedrockTransport controlTransport, string kbId, string dsId,
         string dataSourceType) returns DeletableDocument[]|ai:Error {
     DeletableDocument[] docs = [];
@@ -805,8 +795,6 @@ isolated function listDeletableDocuments(BedrockTransport controlTransport, stri
 // Retrieve (bedrock-agent-runtime).
 // ============================================================================
 
-// One `Retrieve` call on the managed search branch. Returns the results and the next
-// page token.
 isolated function callRetrieve(BedrockTransport dataTransport, string kbId, string query, json? filter,
         int numberOfResults, RerankingModelType? reranking, string? nextToken)
         returns [json[], string?]|ai:Error {
@@ -860,13 +848,10 @@ isolated function retrievalResultIdentifies(json result, string documentId, stri
 // deleteByFilter, shared by both classes.
 // ============================================================================
 
-// The managed `DeleteRetrieveCaller`; `vectorDeleteRetrieve` is the self-managed one.
 isolated function managedDeleteRetrieve(BedrockTransport dataTransport, string kbId, json? filter,
         int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error
     => callRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, numberOfResults, (), nextToken);
 
-// Pages a `Retrieve` (filtered or not) up to `KB_DELETE_ENUMERATION_MAX_PAGES`,
-// collecting each result's source value.
 isolated function enumerateDeleteIdentities(BedrockTransport dataTransport, string kbId, json? filter,
         string sourceUriKey, DeleteRetrieveCaller retrieveCaller, DataSourceScope scope)
         returns DeleteEnumeration|ai:Error {
@@ -1100,7 +1085,6 @@ isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, D
     return [toDelete, indeterminate, truncated];
 }
 
-// The `equals` leaf that restricts a `Retrieve` to the scoped data source.
 isolated function dataSourceLeaf(DataSourceScope scope) returns json
     => {'equals: {key: scope.key, value: scope.id}};
 
@@ -1205,8 +1189,7 @@ isolated function assertDefinitionMatches(string kbId, map<json> expectedCreateB
         "These fields are fixed at creation time, so the definition passed is not the one in effect.");
 }
 
-// Paths where `expected`'s leaves disagree with `actual`. Numeric-aware, so an `int`
-// the module sent and a `decimal` AWS echoes back are not reported as a difference.
+// Numeric-aware: an `int` sent and a `decimal` echoed back are not a difference.
 isolated function jsonDiffPaths(json expected, json actual, string path) returns string[] {
     if expected is map<json> {
         if actual !is map<json> {
@@ -1236,7 +1219,6 @@ isolated function jsonDiffPaths(json expected, json actual, string path) returns
         string `${actual.toJsonString()})`];
 }
 
-// `1024` sent as an `int` comes back as a `decimal`; that is not a mismatch.
 isolated function jsonScalarEquals(json expected, json actual) returns boolean {
     if expected is int|float|decimal && actual is int|float|decimal {
         return <decimal>expected == <decimal>actual;

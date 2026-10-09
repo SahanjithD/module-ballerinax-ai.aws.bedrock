@@ -17,8 +17,7 @@ import ballerina/ai;
 // OpenAI Chat Completions, used on Chat Completions routes and by the OpenAI-shaped
 // InvokeModel vendors. The system prompt is a `role: system` message here.
 
-// Encodes an OpenAI Chat-Completions request body for a non-OpenAI model, which
-// takes the output cap as `max_tokens`.
+// Non-OpenAI models take the output cap as `max_tokens`.
 isolated function encodeOpenAIChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeOpenAIChatBody("max_tokens", system, messages, tools, stop, params);
@@ -78,7 +77,6 @@ isolated function encodeOpenAIChatBody(string maxTokensKey, string? system, Reso
     return body;
 }
 
-// Maps one resolved message to an OpenAI Chat-Completions message.
 isolated function openAIMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
         return {"role": "user", "content": openAIContentParts(m.parts)};
@@ -103,8 +101,6 @@ isolated function openAIMessage(ResolvedMessage m) returns json {
     return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
 }
 
-// Decodes an OpenAI Chat-Completions response. Always populates
-// `usage` and `stopReason`.
 isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {
@@ -171,8 +167,7 @@ isolated function decodeOpenAIChat(json response) returns DecodedResponse|ai:Err
 const REASONING_START = "<reasoning>";
 const REASONING_END = "</reasoning>";
 
-// gpt-oss on InvokeModel and Chat Completions puts `<reasoning>…</reasoning>` before the
-// answer (seen live 2026-10-09). Only a block at the very start is removed.
+// gpt-oss puts `<reasoning>…</reasoning>` before the answer.
 isolated function withoutReasoning(string content) returns string {
     if !content.startsWith(REASONING_START) {
         return content;

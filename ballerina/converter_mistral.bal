@@ -70,7 +70,6 @@ isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
     return body;
 }
 
-// Maps one resolved message to a Mistral chat-completion message.
 isolated function mistralChatMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
         return {"role": "user", "content": openAIContentParts(m.parts)};
@@ -95,8 +94,7 @@ isolated function mistralChatMessage(ResolvedMessage m) returns json {
     return {"role": "tool", "tool_call_id": m.id ?: m.name, "content": m.content ?: ""};
 }
 
-// Decodes a Mistral chat-completion response. The stop reason is
-// `stop_reason` — NOT OpenAI's `finish_reason`.
+// The stop reason is `stop_reason`, not OpenAI's `finish_reason`.
 isolated function decodeMistralChat(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {
@@ -232,8 +230,7 @@ isolated function mistralInstructPrompt(string? system, ResolvedMessage[] messag
     return prompt;
 }
 
-// Decodes a Mistral text-completion response: `outputs[].text` +
-// `outputs[].stop_reason`. This dialect returns no token counts and no id.
+// This format returns no token counts and no id.
 isolated function decodeMistralText(json response) returns DecodedResponse|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {

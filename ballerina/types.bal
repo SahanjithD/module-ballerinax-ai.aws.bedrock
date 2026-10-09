@@ -116,15 +116,9 @@ public enum Effort {
     // Sonnet 4.6 rejects it.
     # Deeper than `high`. Opus 5 and Opus 4.6 only
     EFFORT_XHIGH = "xhigh",
-    // Accepted on Sonnet 4.6 too (verified live). A refusal lists the accepted values.
     # No limit on depth. Support varies by model
     EFFORT_MAX = "max"
 }
-
-// Measured 2026-09-24 (us-east-1): gpt-oss-120b on InvokeModel accepts low, medium and
-// high; gpt-5.4 on Mantle Responses accepts none, low, medium, high and xhigh. The set
-// AWS lists in a 400 is not what it accepts, so the enum is everything seen, not a
-// promise.
 
 // A top-level `reasoning_effort` on Chat Completions, `reasoning: {effort}` on Responses.
 
@@ -132,7 +126,6 @@ public enum Effort {
 public enum ReasoningEffort {
     # No reasoning. GPT-5.x only
     REASONING_NONE = "none",
-    // Refused by both as of 2026-09-24; kept for models that may accept it.
     # Minimal reasoning. Not accepted by current models
     REASONING_MINIMAL = "minimal",
     # Light reasoning, lowest latency
@@ -143,7 +136,6 @@ public enum ReasoningEffort {
     REASONING_HIGH = "high",
     # Deeper than `high`. GPT-5.x only
     REASONING_XHIGH = "xhigh",
-    // Refused by gpt-oss, and by gpt-5.4 as of 2026-09-24.
     # No limit on depth. Not accepted by current models
     REASONING_MAX = "max"
 }
@@ -193,8 +185,7 @@ enum ToolChoiceStyle {
 # once at construction by `structuredOutputStyleFor`.
 enum StructuredOutputStyle {
     # Converse `outputConfig.textFormat` with a JSON schema that AWS validates against.
-    # Not selected yet: a live test on 2026-08-11 saw the sibling `outputConfig.effort`
-    # rejected on the wire, so it needs a live check first.
+    # Not selected by any route yet.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
     NATIVE_OUTPUT_CONFIG,
     # Force a single tool whose input schema is the target type, then read the

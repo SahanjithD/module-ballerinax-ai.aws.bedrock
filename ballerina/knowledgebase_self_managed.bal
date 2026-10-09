@@ -79,10 +79,7 @@ public distinct isolated client class SelfManagedKnowledgeBase {
             ? rerankingConfiguration.cloneReadOnly() : ();
     }
 
-    // Chunks client-side when the data source does not chunk, then waits until every
-    // document is indexed or `ingestTimeout` passes. Document ids come from
-    // `ai:Metadata.id`; a document split into several chunks submits `<id>#0`,
-    // `<id>#1`, and so on. Two documents with the same id in one call are refused.
+    // A document split into several chunks submits `<id>#0`, `<id>#1`, and so on.
 
     # Ingests documents into the knowledge base.
     #
@@ -195,11 +192,8 @@ public distinct isolated client class SelfManagedKnowledgeBase {
         return matches;
     }
 
-    // Bedrock has no delete-by-metadata, so this lists the data source's documents and
-    // checks each against the filter through `Retrieve` (see `resolveDataSourceDeletes`).
-    // A maintenance operation, not one for a request path. `filters` must constrain
-    // something, so deleting everything is never an accident. Only this class's data
-    // source is touched.
+    // Bedrock has no delete-by-metadata, so each listed document is checked against the
+    // filter through `Retrieve` (see `resolveDataSourceDeletes`).
 
     # Deletes documents that match the given metadata filters.
     #

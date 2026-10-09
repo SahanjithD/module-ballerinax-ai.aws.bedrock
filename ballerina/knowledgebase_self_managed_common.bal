@@ -261,9 +261,8 @@ isolated function vectorChunkingConfigurationJson(VectorDataSourceDefinition def
         "'validateVectorDataSource' before reaching the request builder");
 }
 
-// The `vectorSearchConfiguration` branch. Reranking goes through
-// `rerankingConfiguration`; `overrideSearchType` is sent only when set, so Bedrock
-// otherwise picks one suited to the store.
+// `overrideSearchType` is sent only when set, so Bedrock otherwise picks one suited to
+// the store.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_KnowledgeBaseVectorSearchConfiguration.html
 isolated function vectorSearchConfigJson(json? filter, int numberOfResults, SearchType? overrideSearchType,
         VectorRerankingConfig? reranking) returns json {
@@ -301,7 +300,6 @@ isolated function rerankingConfigJson(VectorRerankingConfig reranking, int numbe
 // README instead.
 // ============================================================================
 
-// Refuses a data source definition Bedrock would reject, with the field and its bound.
 isolated function validateVectorDataSource(VectorDataSourceDefinition def) returns ai:Error? {
     if def.chunkingStrategy == HIERARCHICAL || def.chunkingStrategy == SEMANTIC {
         return errorWithDetail(
@@ -381,8 +379,8 @@ isolated function validateStorageConfiguration(StorageConfiguration storage) ret
     return;
 }
 
-// Checks the knowledge base is ACTIVE and `VECTOR`; a managed one needs the other
-// search branch and reserved-field spelling. Returns it for the definition check.
+// A managed knowledge base needs the other search branch. Returns it for the
+// definition check.
 isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransport, string kbId)
         returns map<json>|ai:Error {
     map<json> kb = check getKnowledgeBase(controlTransport, kbId);
@@ -453,7 +451,6 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthCon
     }
 }
 
-// An id attaches; a definition is found by name or created, as on the managed path.
 isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
         string|SelfManagedKnowledgeBaseDefinition knowledgeBase) returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
@@ -483,7 +480,6 @@ isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
     return {knowledgeBaseId: kbId, createdDataSourceId: dsId};
 }
 
-// The self-managed counterpart of `createKnowledgeBaseRecoveringFromConflict`.
 isolated function createVectorKnowledgeBaseRecoveringFromConflict(BedrockTransport controlTransport,
         SelfManagedKnowledgeBaseDefinition def) returns KbCreateOutcome|ai:Error {
     map<json> body = createVectorKnowledgeBaseRequestBody(def);
@@ -533,8 +529,6 @@ isolated function createVectorCustomDataSource(BedrockTransport controlTransport
 // Retrieval.
 // ============================================================================
 
-// One `Retrieve` call on the vector search branch. Returns the results and the next
-// page token.
 isolated function callVectorRetrieve(BedrockTransport dataTransport, string kbId, string query, json? filter,
         int numberOfResults, SearchType? overrideSearchType, VectorRerankingConfig? reranking, string? nextToken)
         returns [json[], string?]|ai:Error {

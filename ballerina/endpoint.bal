@@ -35,8 +35,7 @@ const MANTLE_ENDPOINT_PREFIX = "bedrock-mantle";
 const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
 const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
 
-// The origin for a route: a `customEndpoint`, else the AWS SDK endpoint metadata. Uses
-// the route's region, so an ARN's region wins. The signing scope never depends on it.
+// Uses the route's region, so an ARN's region wins.
 isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error {
     boolean mantle = route.endpoint == MANTLE;
     string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
@@ -59,9 +58,8 @@ isolated function resolveServiceUrlCore(string serviceName, string region,
             {fips: config.fips, dualstack: forceDualstack || config.dualstack}));
 }
 
-// Only `bedrock-mantle` has a dualstack host; the others do not resolve (checked in DNS).
-// `aws:resolveEndpoint` would still build one, which then fails as a confusing
-// connection error. A `customEndpoint` skips this check.
+// Only `bedrock-mantle` has a dualstack host. `aws:resolveEndpoint` would still build
+// one for the others, which then fails as a confusing connection error.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 isolated function guardDualstack(string serviceName, string region, boolean dualstack) returns error? {
     if !dualstack || serviceName == MANTLE_ENDPOINT_PREFIX {
@@ -106,9 +104,7 @@ isolated function hostOf(string baseUrl) returns string {
     return slash is int ? rest.substring(0, slash) : rest;
 }
 
-// The endpoint for a route. Fails before any I/O for hosts AWS cannot serve. A
-// `customEndpoint` replaces only the origin (the path still comes from the route) and
-// skips the host checks.
+// A `customEndpoint` replaces only the origin and skips the host checks.
 isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig = ())
         returns Endpoint|error {
     boolean derived = (endpointConfig?.customEndpoint) !is string;
@@ -148,8 +144,7 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
     };
 }
 
-// The `bedrock-runtime` path for an API. Converse and InvokeModel carry the encoded
-// model id; the others are fixed paths with the model in the body.
+// Converse and InvokeModel carry the model id in the path; the others in the body.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
 isolated function runtimePath(Route route) returns string|error {
     match route.api {
@@ -175,12 +170,10 @@ isolated function runtimePath(Route route) returns string|error {
     return error(string `no bedrock-runtime path for api '${route.api}'`);
 }
 
-// Whether the API names the model in the URL rather than the body.
 isolated function isPathAddressed(ApiFamily api) returns boolean
     => api == CONVERSE || api == INVOKE;
 
-// The endpoint for a knowledge-base plane. The path is left empty because one
-// transport serves many paths. A `customEndpoint` applies to both planes.
+// No path: one transport serves many paths.
 isolated function buildAgentEndpoint(AgentPlane plane, string region,
         aws:EndpointConfig? endpointConfig = ()) returns Endpoint|error {
     if (endpointConfig?.customEndpoint) !is string {

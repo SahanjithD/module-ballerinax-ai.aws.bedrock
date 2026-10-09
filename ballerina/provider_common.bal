@@ -26,7 +26,6 @@ import ballerinax/aws.auth;
 // https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
 const BEDROCK_PROVIDER_NAME = "aws.bedrock";
 
-// The `chat()` implementation every provider class calls. Owns the span.
 isolated function runChat(ApiFamily api, string wireModelId,
         readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:ChatMessage[]|ai:ChatUserMessage messages,
@@ -79,8 +78,6 @@ isolated function runChat(ApiFamily api, string wireModelId,
     return decoded.message;
 }
 
-// One round trip for `chat()` and `generate()`: names the model in the body where the
-// API needs it, sends, decodes, and records the response on the span when there is one.
 isolated function sendAndDecode(observe:LlmSpan? span, ApiFamily api, string wireModelId,
         readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
         json encoded) returns DecodedResponse|ai:Error {
@@ -110,12 +107,10 @@ isolated function recordResponse(observe:LlmSpan span, DecodedResponse decoded) 
     }
 }
 
-// A short error, with the reasoning in its cause.
 isolated function errorWithDetail(string message, string detail) returns ai:Error
     => error ai:Error(message, error(detail));
 
-// Builds `InferenceParams` once at construction. Vendor extras are already folded into
-// `additionalModelRequestFields`.
+// Vendor extras are already folded into `additionalModelRequestFields`.
 isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
         string[]? stopSequences, AdditionalRequestFields? additionalModelRequestFields,
         ServiceTier? serviceTier,
@@ -160,7 +155,7 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
     return params.cloneReadOnly();
 }
 
-// Every route-specific request header. The rules follow the API, not the vendor.
+// The rules follow the API, not the vendor.
 isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, BedrockAuthConfig creds,
         InferenceParams? params = ()) returns map<string> {
     map<string> headers = {};
@@ -185,8 +180,7 @@ isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, Bed
     return headers;
 }
 
-// `serviceTier` and `latencyOptimized` as InvokeModel request headers. An unset or
-// `false` latency flag sends nothing, since `standard` is the default.
+// An unset or `false` latency flag sends nothing, since `standard` is the default.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
 isolated function addInvokeRequestOptionHeaders(map<string> headers, InferenceParams? params) {
     if params is () {
@@ -259,9 +253,8 @@ isolated function validateParamsForRoute(string providerName, ApiFamily api,
 isolated function apiCarriesRequestOptions(ApiFamily api) returns boolean
     => api == CONVERSE || api == INVOKE;
 
-// `x-api-key` on the Mantle Messages path, which rejects a request carrying both it and
-// `Authorization` (verified live). Only a Bedrock API key can supply it; the transport
-// then drops its `Authorization: Bearer` header.
+// The Mantle Messages path takes the API key as `x-api-key` and rejects a request that
+// also has `Authorization`, so the transport then drops its Bearer header.
 isolated function addNativeApiKeyHeader(map<string> headers, Route route, BedrockAuthConfig creds) {
     if usesApiKeyHeader(route.api) && creds is BearerToken {
         headers["x-api-key"] = creds.apiKey;
@@ -320,8 +313,6 @@ isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiFamily api,
     }
 }
 
-// Construction for every provider: route, checks, endpoint, converter, transport. All
-// failures surface here.
 isolated function resolveSpine(string providerName, BedrockAuthConfig credentials,
         Route|error resolved, aws:EndpointConfig? endpointConfig,
         http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail)
@@ -346,7 +337,6 @@ isolated function resolveSpine(string providerName, BedrockAuthConfig credential
     }
 }
 
-// The passthrough as a request-body object, or `()` when empty.
 isolated function additionalFieldsToJson(AdditionalRequestFields? fields) returns map<json>? {
     if fields is () || fields.length() == 0 {
         return ();
@@ -368,7 +358,6 @@ isolated function foldRequestFields(AdditionalRequestFields? base, map<json> ext
     return merged.length() > 0 ? merged : ();
 }
 
-// Names the model in the body, for the APIs that do not take it in the URL.
 isolated function injectModel(json body, string modelId) returns json {
     if body is map<json> {
         map<json> withModel = body.clone();
@@ -378,8 +367,7 @@ isolated function injectModel(json body, string modelId) returns json {
     return body;
 }
 
-// Messages as recorded on a span. Images become `[image <mime>, <n> bytes]` rather than
-// their bytes going to the telemetry backend.
+// Images become `[image <mime>, <n> bytes]`, so their bytes never reach telemetry.
 isolated function messagesForSpan(string? system, ResolvedMessage[] messages) returns json {
     json[] out = [];
     if system is string {
@@ -401,8 +389,7 @@ isolated function messagesForSpan(string? system, ResolvedMessage[] messages) re
     return out;
 }
 
-// The thinking-budget rules AWS enforces with a 400, checked before sending. With
-// `maxTokens = ()` there is no ceiling to compare against.
+// AWS enforces these with a 400. With `maxTokens = ()` there is no ceiling to check.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
 isolated function validateThinking(ThinkingConfig thinking, int? maxTokens) returns ai:Error? {
     int? budget = thinking?.budgetTokens;

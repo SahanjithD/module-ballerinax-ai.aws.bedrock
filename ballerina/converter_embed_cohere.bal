@@ -37,15 +37,14 @@ final readonly & EmbeddingConverter COHERE_EMBED_V4_CONVERTER = {
     decode: decodeCohereEmbed
 };
 
-// Whether an id uses the v4 format; anything else is treated as v3. Strips a
-// cross-region prefix first, since v4 has `us.` and `global.` ids.
+// v4 has `us.` and `global.` ids, so the cross-region prefix is stripped first.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-cohere-embed-v4.html
 isolated function usesCohereEmbedV4(string modelId) returns boolean {
     [string, string?] [bareId, _] = normalizeModelId(modelId);
     return bareId.startsWith("cohere.embed-v4");
 }
 
-// The part both formats share. `input_type` is required.
+// `input_type` is required.
 isolated function cohereEmbedBase(string[] texts, EmbeddingParams params) returns map<json>|ai:Error {
     if texts.length() > COHERE_MAX_BATCH {
         return error ai:Error(string `Cohere accepts at most ${COHERE_MAX_BATCH} texts per call; ` +
@@ -58,7 +57,7 @@ isolated function cohereEmbedBase(string[] texts, EmbeddingParams params) return
     return {"texts": texts, "input_type": inputType}; // an ARRAY, never a string
 }
 
-// Merges the passthrough-style merge last, so a caller can always override us.
+// Merged last, so the caller's passthrough always wins.
 isolated function cohereApplyExtra(map<json> body, EmbeddingParams params) returns json {
     map<json>? extra = additionalFieldsToJson(params?.additionalModelRequestFields);
     if extra is map<json> {
@@ -69,7 +68,6 @@ isolated function cohereApplyExtra(map<json> body, EmbeddingParams params) retur
     return body;
 }
 
-// Encodes a Cohere Embed **v3** request.
 isolated function encodeCohereEmbedV3(string[] texts, EmbeddingParams params) returns json|ai:Error {
     map<json>|ai:Error base = cohereEmbedBase(texts, params);
     if base is ai:Error {
@@ -85,7 +83,6 @@ isolated function encodeCohereEmbedV3(string[] texts, EmbeddingParams params) re
     return cohereApplyExtra(body, params);
 }
 
-// Encodes a Cohere Embed **v4** request.
 isolated function encodeCohereEmbedV4(string[] texts, EmbeddingParams params) returns json|ai:Error {
     map<json>|ai:Error base = cohereEmbedBase(texts, params);
     if base is ai:Error {
@@ -117,8 +114,7 @@ isolated function cohereV4Truncate(Truncate truncate) returns string {
     return "NONE";
 }
 
-// Decodes a Cohere embedding response. Cohere reports NO
-// token count — `inputTokenCount` is `()`, and the span call must be guarded.
+// Cohere reports no token count, so `inputTokenCount` is `()`.
 isolated function decodeCohereEmbed(json response) returns DecodedEmbedding|ai:Error {
     map<json>|error rr = response.ensureType();
     if rr is error {

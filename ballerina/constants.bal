@@ -35,10 +35,8 @@ const int MIN_THINKING_BUDGET_TOKENS = 1024;
 // https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html
 final readonly & string[] CRIS_PREFIXES = ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
 
-// Models served on bedrock-mantle and the base path each one uses; a model not listed
-// is refused by the Mantle classes. The base path differs per model even within one
-// vendor (see `MantleEntry`), so it has to be recorded. Converse and InvokeModel need
-// no table: their request path comes from the model id.
+// Models served on bedrock-mantle and each one's base path, which differs per model
+// even within one vendor. A model not listed is refused by the Mantle classes.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 final readonly & map<MantleEntry> MANTLE_CAPABLE = {
     // Anthropic: `/anthropic/v1`, Messages only.
@@ -130,8 +128,7 @@ isolated function refusesForcedToolChoice(string wireModelId) returns boolean {
     return FORCED_TOOL_UNSUPPORTED.indexOf(bareId) is int;
 }
 
-// Whether Anthropic thinking is on, via `thinking` or the passthrough. With thinking
-// on, Anthropic accepts only an `auto` or `none` tool choice.
+// With thinking on, Anthropic accepts only an `auto` or `none` tool choice.
 // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 isolated function thinkingEnabled(InferenceParams params) returns boolean {
     ThinkingConfig? thinking = params?.thinking;

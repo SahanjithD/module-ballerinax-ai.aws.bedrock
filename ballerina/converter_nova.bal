@@ -17,8 +17,7 @@ import ballerina/ai;
 // Nova on InvokeModel: Converse-shaped, plus a required `"schemaVersion": "messages-v1"`.
 // The response matches Converse, so the decoder is shared.
 
-// Encodes a Nova InvokeModel request body. Reuses Converse message/
-// tool mapping and prepends the mandatory `schemaVersion`.
+// Reuses the Converse mapping and adds the mandatory `schemaVersion`.
 isolated function encodeNovaInvoke(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     json[] wire = [];

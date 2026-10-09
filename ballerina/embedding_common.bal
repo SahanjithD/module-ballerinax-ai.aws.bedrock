@@ -64,8 +64,7 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockAuthConfig c
     }
 }
 
-// `batchEmbed`: splits the texts into wire-sized windows and puts the results back in
-// input order.
+// Results are put back in input order.
 isolated function runBatchEmbed(string wireModelId,
         readonly & EmbeddingConverter converter, ModelTransport transport,
         readonly & EmbeddingParams params, ai:Chunk[] chunks) returns ai:Embedding[]|ai:Error {
@@ -132,7 +131,6 @@ isolated function runBatchEmbed(string wireModelId,
     return result;
 }
 
-// `embed` is just `batchEmbed([chunk])[0]` — exactly one code path.
 isolated function runEmbed(string wireModelId, readonly & EmbeddingConverter converter,
         ModelTransport transport, readonly & EmbeddingParams params, ai:Chunk chunk)
         returns ai:Embedding|ai:Error {
@@ -144,7 +142,6 @@ isolated function runEmbed(string wireModelId, readonly & EmbeddingConverter con
     return embeddings[0];
 }
 
-// Splits texts into wire-sized windows, one request each.
 isolated function partitionTexts(string[] texts, int maxBatchSize) returns string[][] {
     string[][] windows = [];
     int index = 0;
@@ -159,11 +156,9 @@ isolated function partitionTexts(string[] texts, int maxBatchSize) returns strin
     return windows;
 }
 
-// `true` when every chunk carries text.
 isolated function isAllTextChunks(ai:Chunk[] chunks) returns boolean
     => chunks.every(chunk => chunk is ai:TextChunk|ai:TextDocument);
 
-// Converts a JSON number array to an `ai:Vector` (`float[]`).
 isolated function toVector(json[] raw) returns ai:Vector|ai:Error {
     float[] vector = [];
     foreach json value in raw {

@@ -83,13 +83,11 @@ isolated client class BedrockTransport {
         self.retryConfig = rc.cloneReadOnly();
     }
 
-    // POSTs a signed request to the route's path, with retries. `extraHeaders` are
-    // signed too.
+    // `extraHeaders` are signed too.
     isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error
         => self.executeRequest("POST", self.wirePath, body, extraHeaders);
 
-    // Method and path per call, for the knowledge-base planes. A `()` body is signed
-    // as the empty string.
+    // A `()` body is signed as the empty string.
     isolated function executeRequest(string method, string path, json? body, map<string> extraHeaders = {})
             returns TransportResponse|ai:Error {
         TransportResponse|ConflictError|ai:Error result =
@@ -107,7 +105,7 @@ isolated client class BedrockTransport {
             map<string> extraHeaders = {}) returns TransportResponse|ConflictError|ai:Error
         => self.executeRequestRetrying(method, path, body, extraHeaders);
 
-    // The retry loop. A 409 is not retried.
+    // A 409 is not retried.
     isolated function executeRequestRetrying(string method, string path, json? body, map<string> extraHeaders)
             returns TransportResponse|ConflictError|ai:Error {
         RetryConfig rc = self.retryConfig;
@@ -132,8 +130,7 @@ isolated client class BedrockTransport {
         }
     }
 
-    // One signed round trip. The path goes out single-encoded; the signature uses it
-    // double-encoded.
+    // The path goes out single-encoded; the signature uses it double-encoded.
     isolated function executeRequestOnce(string method, string path, json? body, map<string> extraHeaders)
             returns TransportResponse|RetryableError|ConflictError|ai:Error {
         string payload = body is () ? "" : body.toJsonString();
@@ -228,8 +225,8 @@ isolated client class BedrockTransport {
         }
     }
 
-    // AWS's message from the body. Bedrock uses `message`; OpenAI-compatible paths use
-    // `{"error": {"message", "code"}}`, or a bare `error` string.
+    // Bedrock uses `message`; OpenAI-compatible paths use `{"error": {"message", "code"}}`
+    // or a bare `error` string.
     isolated function errorDetail(http:Response resp) returns string {
         json|error j = resp.getJsonPayload();
         if j !is map<json> {
@@ -254,7 +251,6 @@ isolated client class BedrockTransport {
         return string `status ${resp.statusCode}`;
     }
 
-    // SigV4 (or bearer) headers for a `POST` to the route's path.
     isolated function signedHeaders(string payload, map<string> extraHeaders,
             [string, string]? fixedClock = ()) returns map<string>|error
         => self.signedHeadersFor("POST", self.wirePath, payload, extraHeaders, fixedClock);
@@ -270,8 +266,7 @@ isolated client class BedrockTransport {
 
         // Bedrock API key: no SigV4.
         if bearerCreds is BearerToken {
-            // The Mantle Messages path rejects a request with both `Authorization` and
-            // `x-api-key` (verified live), so no Bearer when `x-api-key` is present.
+            // The Mantle Messages path rejects both `Authorization` and `x-api-key`.
             if !hasApiKeyHeader(headers) {
                 headers["Authorization"] = string `Bearer ${bearerCreds.apiKey}`;
             }
@@ -330,7 +325,6 @@ isolated client class BedrockTransport {
     }
 }
 
-// Whether `headers` has an `x-api-key` in any casing.
 isolated function hasApiKeyHeader(map<string> headers) returns boolean {
     foreach string name in headers.keys() {
         if name.toLowerAscii() == "x-api-key" {
@@ -351,7 +345,6 @@ isolated function amzTimestamps() returns [string, string]|error {
     return formatAmzTimestamps(time:utcToCivil(time:utcNow()));
 }
 
-// Split out so the format can be tested at a fixed clock.
 isolated function formatAmzTimestamps(time:Civil c) returns [string, string]|error {
     string y = pad(c.year, 4);
     string mo = pad(c.month, 2);
@@ -389,7 +382,6 @@ isolated function getSignatureKey(string secretKey, string dateStamp, string reg
     return crypto:hmacSha256(AWS4_REQUEST.toBytes(), kService);
 }
 
-// `httpConfig` with `timeout` set to `defaultTimeout`, unless the caller changed it.
 isolated function withDefaultTimeout(http:ClientConfiguration? httpConfig, decimal defaultTimeout)
         returns http:ClientConfiguration {
     // A copy, so the caller's record is never written to.

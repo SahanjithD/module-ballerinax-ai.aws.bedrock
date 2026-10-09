@@ -16,10 +16,8 @@ import ballerina/ai;
 import ballerina/http;
 import ballerina/lang.array;
 
-// Flattens an `ai:Prompt` into ordered parts (text and images) once, before any
-// converter runs. All I/O (fetching image URLs) happens here, so the converters stay
-// pure. Images are kept as bytes plus a MIME type, the one form every API can be built
-// from: Converse has no URL source, and Anthropic on Bedrock takes base64 only.
+// All I/O (fetching image URLs) happens here, so the converters stay pure. Images are
+// kept as bytes: Converse has no URL source, and Anthropic on Bedrock takes base64 only.
 // https://platform.claude.com/docs/en/build-with-claude/vision
 
 // The only image formats any Bedrock API accepts.
@@ -57,8 +55,7 @@ isolated function resolveMessages(ai:ChatMessage[] messages)
     return [system, rest];
 }
 
-// A user turn's content as ordered parts. Adjacent text is merged, so a text-only
-// prompt is one part.
+// Adjacent text is merged, so a text-only prompt is one part.
 isolated function contentToParts(string|ai:Prompt content) returns ContentPart[]|ai:Error {
     if content is string {
         return content == "" ? [] : [{text: content}];
@@ -172,7 +169,6 @@ isolated function normalizeMimeType(string? raw) returns string? {
     return value == "image/jpg" ? "image/jpeg" : value;
 }
 
-// Identifies the four supported formats from their magic bytes.
 isolated function sniffImageMime(byte[] data) returns string? {
     if startsWithBytes(data, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return "image/png";
@@ -207,8 +203,8 @@ isolated function startsWithBytes(byte[] data, int[] prefix) returns boolean {
 // Download (the only I/O here)
 // ---------------------------------------------------------------------------
 
-// Fetches an image URL. Redirects are followed by hand so every hop is checked; this
-// connector holds AWS credentials, so it must not be bounced to an internal address.
+// Redirects are followed by hand so every hop is checked: this client holds AWS
+// credentials and must not be bounced to an internal address.
 isolated function downloadImage(string url) returns [byte[], string?]|ai:Error {
     string target = url;
     int redirects = 0;
@@ -253,7 +249,6 @@ isolated function downloadImage(string url) returns [byte[], string?]|ai:Error {
     }
 }
 
-// Only http and https may be fetched.
 isolated function validateDownloadTarget(string url) returns ai:Error? {
     string lower = url.toLowerAscii();
     if lower.startsWith("https://") || lower.startsWith("http://") {
@@ -263,7 +258,6 @@ isolated function validateDownloadTarget(string url) returns ai:Error? {
         "Pass the image as a byte array instead.");
 }
 
-// Splits an absolute URL into [origin, path-with-query].
 isolated function splitUrl(string url) returns [string, string]|ai:Error {
     int? schemeEnd = url.indexOf("://");
     if schemeEnd is () {
@@ -278,7 +272,6 @@ isolated function splitUrl(string url) returns [string, string]|ai:Error {
     return [url.substring(0, hostStart + slash), rest.substring(slash)];
 }
 
-// Resolves a Location header against the URL it came from (absolute or root-relative).
 isolated function resolveRedirect(string base, string location) returns string {
     string target = location.trim();
     if target.toLowerAscii().startsWith("http://") || target.toLowerAscii().startsWith("https://") {
@@ -316,7 +309,6 @@ isolated function converseContentBlocks(ContentPart[] parts) returns json[] {
     return blocks;
 }
 
-// Anthropic Messages content blocks (InvokeModel and Messages).
 // https://platform.claude.com/docs/en/api/messages
 isolated function anthropicContentBlocks(ContentPart[] parts) returns json[] {
     json[] blocks = [];
@@ -337,8 +329,8 @@ isolated function anthropicContentBlocks(ContentPart[] parts) returns json[] {
     return blocks;
 }
 
-// OpenAI Chat Completions content, also used by Mistral chat. A plain string when
-// there is no image, as text-only models expect.
+// Also used by Mistral chat. A plain string when there is no image, as text-only
+// models expect.
 isolated function openAIContentParts(ContentPart[] parts) returns json {
     if !hasImage(parts) {
         return partsText(parts);
@@ -388,8 +380,7 @@ isolated function hasImage(ContentPart[] parts) returns boolean {
 public configurable boolean enableUnverifiedImageRoutes = false;
 
 // Refuses an image on an API that cannot carry one, or whose image support is
-// unverified (`unverifiedOnly`, which `enableUnverifiedImageRoutes` lifts), before the
-// body is built.
+// unverified (`unverifiedOnly`).
 isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect,
         boolean unverifiedOnly = false) returns ai:Error? {
     if unverifiedOnly && enableUnverifiedImageRoutes {

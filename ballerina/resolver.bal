@@ -77,7 +77,7 @@ isolated function resolveMantleRoute(string model, string region) returns Route|
     };
 }
 
-// ARN routing for bedrock-runtime. The ARN's region and partition win over the caller's.
+// The ARN's region and partition win over the caller's.
 isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api) returns Route|error {
     ParsedArn arn = check parseArn(arnStr);
 
@@ -131,7 +131,6 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
     };
 }
 
-// Looks up a bare id in `MANTLE_CAPABLE`.
 isolated function mantleEntryForBare(string bareId) returns [string, MantleEntry]|error {
     MantleEntry? entry = MANTLE_CAPABLE[bareId];
     if entry is MantleEntry {
@@ -164,7 +163,6 @@ isolated function normalizeModelId(string id) returns [string, string?] {
 isolated function applyGeoPrefix(string bareId, string? geoPrefix) returns string
     => geoPrefix is string ? string `${geoPrefix}.${bareId}` : bareId;
 
-// The partition for a region; ARNs carry their own.
 isolated function partitionForRegion(string region) returns string {
     if region.startsWith("us-gov-") {
         return "aws-us-gov";

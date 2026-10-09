@@ -17,8 +17,7 @@ import ballerina/ai;
 // Shared converter helpers. Converters stay pure and span-free so the
 // golden-file tests are trivial.
 
-// Maps an `ai:ChatCompletionFunctions` tool to its JSON-schema parameters, reused
-// by tool-forcing. Falls back to an empty object schema.
+// Falls back to an empty object schema.
 isolated function toolParameters(ai:ChatCompletionFunctions tool) returns map<json> {
     map<json>? params = tool.parameters;
     return params ?: {"type": "object", "properties": {}};
@@ -34,7 +33,6 @@ isolated function setTemperature(map<json> body, InferenceParams params, string 
     }
 }
 
-// Sets the output cap only when the caller set it. `key` is the API's own name for it.
 isolated function setMaxTokens(map<json> body, InferenceParams params, string key) {
     int? maxTokens = params?.maxTokens;
     if maxTokens is int {
@@ -82,8 +80,7 @@ isolated function invokeGuardrailAction(map<json> body) returns GuardrailAction?
     return action.toUpperAscii() == "INTERVENED" ? INTERVENED : NONE;
 }
 
-// Augments a decoded response with the request id, which arrives in a RESPONSE
-// HEADER rather than the body. No-op when the converter already set it.
+// The request id arrives in a response header, not the body.
 isolated function augmentFromHeaders(DecodedResponse decoded, map<string> headers) {
     if decoded.responseId is () {
         string? requestId = headers[REQUEST_ID_HEADER];

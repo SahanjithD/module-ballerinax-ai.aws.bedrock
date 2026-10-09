@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// `true` if `model` is an ARN.
 isolated function isArn(string model) returns boolean => model.startsWith("arn:");
 
 // Splits an ARN: five `:` segments, then the resource (`type/id`, or rarely `type:id`).

@@ -74,10 +74,7 @@ public distinct isolated client class ManagedKnowledgeBase {
         self.rerankingModelType = rerankingModelType;
     }
 
-    // Chunks client-side when the data source does not chunk, then waits until every
-    // document is indexed or `ingestTimeout` passes. Document ids come from
-    // `ai:Metadata.id`; a document split into several chunks submits `<id>#0`,
-    // `<id>#1`, and so on. Two documents with the same id in one call are refused.
+    // A document split into several chunks submits `<id>#0`, `<id>#1`, and so on.
 
     # Ingests documents into the knowledge base.
     #
@@ -189,11 +186,8 @@ public distinct isolated client class ManagedKnowledgeBase {
         return matches;
     }
 
-    // Bedrock has no delete-by-metadata, so this lists the data source's documents and
-    // checks each against the filter through `Retrieve` (see `resolveDataSourceDeletes`).
-    // A maintenance operation, not one for a request path. `filters` must constrain
-    // something, so deleting everything is never an accident. Only this class's data
-    // source is touched.
+    // Bedrock has no delete-by-metadata, so each listed document is checked against the
+    // filter through `Retrieve` (see `resolveDataSourceDeletes`).
 
     # Deletes documents that match the given metadata filters.
     #
@@ -264,8 +258,8 @@ isolated function guessChunkerForKb(ai:Document|ai:Chunk doc) returns ai:Chunker
     return new ai:GenericRecursiveChunker();
 }
 
-// Client-side chunking for both classes. Chunks of a split document get `<id>#<n>` ids,
-// because chunkers copy the parent's `id` and Bedrock would keep only one of them.
+// Chunks of a split document get `<id>#<n>` ids: chunkers copy the parent's `id`, and
+// Bedrock would keep only one of them.
 isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chunk|ai:Document)[] items)
         returns KbIngestItem[]|ai:Error {
     if chunker is ai:DISABLE {
@@ -288,7 +282,6 @@ isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chun
     return prepared;
 }
 
-// `Retrieve` rejects an empty query, so it is refused before sending.
 isolated function guardRetrieveQuery(string query) returns ai:Error? {
     if query.trim().length() == 0 {
         return error ai:Error("'query' must be a non-empty, non-whitespace string — Bedrock's 'Retrieve' " +
@@ -297,8 +290,7 @@ isolated function guardRetrieveQuery(string query) returns ai:Error? {
     return;
 }
 
-// A filter that constrains nothing would delete every document, so it is refused.
-// Both an empty group and a filter with no leaves count.
+// An empty filter would delete every document.
 isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters) returns ai:Error? {
     if userFilter is () || filterLeafCount(filters) == 0 {
         return errorWithDetail(
@@ -310,8 +302,7 @@ isolated function guardDeleteFilter(json? userFilter, ai:MetadataFilters filters
     return;
 }
 
-// Reports, in one error, everything that could not be confirmed, after every possible
-// delete has been made.
+// Called after every possible delete, so one error reports everything left.
 isolated function deleteByFilterOutcome(UnresolvedCandidate[] indeterminate, string[] notDeleted,
         string[] refused = []) returns ai:Error? {
     string[] problems = [];
@@ -385,7 +376,6 @@ isolated function sampleOfIds(UnresolvedCandidate[] candidates) returns string {
     return remainder > 0 ? string `${listed}, and ${remainder} more` : listed;
 }
 
-// Refuses a `numberOfResults` outside 1-100 before sending.
 isolated function validateManagedRetrievalConfig(ManagedKnowledgeBaseConfig config) returns ai:Error? {
     int? numberOfResults = config?.numberOfResults;
     if numberOfResults is int && (numberOfResults < 1 || numberOfResults > KB_MAX_RESULTS_PER_CALL) {
