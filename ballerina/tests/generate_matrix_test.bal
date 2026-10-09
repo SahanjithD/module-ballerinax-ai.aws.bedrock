@@ -188,7 +188,7 @@ function testTypedGenerateOnChatCompletions() returns error? {
 
 @test:Config {}
 function testTypedGenerateOnResponses() returns error? {
-    check runTypedMatrix("Responses", NATIVE_RESPONSES_CONVERTER, RESPONSES, "us.openai.gpt-5.6-sol",
+    check runTypedMatrix("Responses", NATIVE_RESPONSES_CONVERTER, RESPONSES, GPT_6_SOL,
             responsesReply, responsesForced);
 }
 

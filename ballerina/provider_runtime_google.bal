@@ -70,7 +70,7 @@ public isolated distinct client class RuntimeGoogleModelProvider {
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 auth, resolvedParams).cloneReadOnly();
         self.structuredOutput =
-            structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice);
+            structuredOutputStyleFor(converter.toolChoice);
     }
 
     # Sends a chat request to the model.

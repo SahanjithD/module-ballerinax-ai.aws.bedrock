@@ -371,7 +371,7 @@ isolated function hasImage(ContentPart[] parts) returns boolean {
     return false;
 }
 
-// The OpenAI-shaped Mantle and InvokeModel APIs and Mistral chat: no AWS page confirms
+// The OpenAI-shaped APIs and Mistral chat: no AWS page confirms
 // image input there. Set in Config.toml:
 //     [ballerinax.ai.aws.bedrock]
 //     enableUnverifiedImageRoutes = true

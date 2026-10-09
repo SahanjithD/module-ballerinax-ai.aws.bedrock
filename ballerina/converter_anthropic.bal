@@ -22,7 +22,7 @@ isolated function encodeInvokeAnthropic(string? system, ResolvedMessage[] messag
     => encodeAnthropicMessages(system, messages, tools, stop, params, true);
 
 // No body version field: the `anthropic-version` header carries it.
-isolated function encodeMantleMessages(string? system, ResolvedMessage[] messages,
+isolated function encodeNativeMessages(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error
     => encodeAnthropicMessages(system, messages, tools, stop, params, false);
 
@@ -146,7 +146,7 @@ isolated function decodeAnthropicMessages(json response) returns DecodedResponse
         inputTokens = intField(usage, "input_tokens") ?: 0;
         outputTokens = intField(usage, "output_tokens") ?: 0;
     }
-    // On InvokeModel a fired guardrail is a body field; absent on Mantle.
+    // On InvokeModel a fired guardrail is a body field.
     GuardrailAction? guardrailAction = ();
     string? action = strField(r, "amazon-bedrock-guardrailAction");
     if action is string {

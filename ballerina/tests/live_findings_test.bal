@@ -108,45 +108,6 @@ function testAnUnknownButWellShapedRegionStillConstructs() returns error? {
         check new ("amazon.nova-pro-v1:0", TEST_CREDS, "ap-southeast-9");
 }
 
-// --- N9: the id printed on a Mantle model card is accepted ------------------------
-
-@test:Config {}
-function testTheMantleSideIdIsAcceptedByTheMantleClass() returns error? {
-    // The table is keyed on the bedrock-runtime id so both endpoints share one lookup
-    // key, but the id a user reads off the Mantle model card is the Mantle one.
-    // Refusing it was this module's bookkeeping leaking into the public surface.
-    Route route = check resolveMantleRoute("openai.gpt-oss-120b", "us-east-1");
-    test:assertEquals(route.effectiveModelId, "openai.gpt-oss-120b",
-            "the Mantle id must reach the wire unchanged");
-    test:assertEquals(route.api, CHAT_COMPLETIONS);
-}
-
-@test:Config {}
-function testTheRuntimeSideIdStillResolvesOnMantle() returns error? {
-    // The canonical key must keep working — this is an addition, not a replacement.
-    Route route = check resolveMantleRoute("openai.gpt-oss-120b-1:0", "us-east-1");
-    test:assertEquals(route.effectiveModelId, "openai.gpt-oss-120b");
-}
-
-@test:Config {}
-function testBothQwenMantleCardIdsResolve() returns error? {
-    Route coder = check resolveMantleRoute("qwen.qwen3-coder-480b-a35b-instruct", "us-east-1");
-    test:assertEquals(coder.effectiveModelId, "qwen.qwen3-coder-480b-a35b-instruct");
-    Route small = check resolveMantleRoute("qwen.qwen3-32b", "us-east-1");
-    test:assertEquals(small.effectiveModelId, "qwen.qwen3-32b");
-}
-
-@test:Config {}
-function testAGenuinelyUnknownMantleIdIsStillRefused() {
-    // The reverse lookup must not turn the clean "not on Mantle" refusal into a
-    // silent match on some other model.
-    Route|error route = resolveMantleRoute("acme.not-a-model", "us-east-1");
-    test:assertTrue(route is error);
-    if route is error {
-        test:assertTrue(route.message().includes("not available on bedrock-mantle"), route.message());
-    }
-}
-
 // --- N1: the Haiku 4.5 runtime id is the dated, versioned profile -----------------
 
 @test:Config {}

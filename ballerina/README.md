@@ -4,23 +4,15 @@ This module provides native [Ballerina `ai`](https://central.ballerina.io/baller
 embedding providers for **AWS Bedrock**, implementing the standard `ai:ModelProvider` and
 `ai:EmbeddingProvider` contracts.
 
-Bedrock exposes LLMs through **two endpoints**, and this module gives each its own set of provider
-classes so that what an endpoint can and cannot do is visible in the type you construct:
+The model providers call the `bedrock-runtime` endpoint, which AWS recommends for new applications:
 
 | Endpoint | Inference APIs | Signing scope | IAM |
 | --- | --- | --- | --- |
-| `bedrock-runtime.{region}.amazonaws.com` **(recommended)** | Converse, InvokeModel, Chat Completions, Responses, Messages | `bedrock` | `bedrock:InvokeModel` |
-| `bedrock-mantle.{region}.api.aws` (compatibility) | Chat Completions, Responses, Messages | `bedrock-mantle` | `bedrock-mantle:CreateInference` |
-
-AWS recommends `bedrock-runtime` for new applications and describes `bedrock-mantle` as the
-compatibility surface. Reach for a `Mantle*` class only when the model or capability you need
-is not on `bedrock-runtime` — GPT-5.4/5.5 and Gemma 4 are Mantle-only, for instance. Guardrails and
-cross-region inference are runtime-only. Typed `generate()` works on both endpoints except the Mantle
-Anthropic Messages route.
+| `bedrock-runtime.{region}.amazonaws.com` | Converse, InvokeModel, Chat Completions, Responses, Messages | `bedrock` | `bedrock:InvokeModel` |
 
 ### Key features
 
-- Chat completion through one `ai:ModelProvider` contract, on either endpoint
+- Chat completion through one `ai:ModelProvider` contract
 - `ConverseModelProvider` reaches **every** model Bedrock serves on Converse — 15 of AWS's 17
   providers, including the ten with no dedicated class here
 - Structured output (`generate()`) by tool-forcing, on every API that supports tool calling
@@ -34,7 +26,7 @@ Anthropic Messages route.
 
 ### Providers
 
-The public surface is split **by endpoint, then by vendor**. Every class is a thin typed facade over one
+The public surface is split **by vendor**. Every class is a thin typed facade over one
 shared internal spine (resolver → endpoint builder → converter → SigV4 transport).
 
 **Any vendor, Converse** — `ConverseModelProvider`. Takes a model id as a plain `string` and reaches
@@ -46,12 +38,6 @@ and Stability. Start here unless you need a vendor-specific knob or a non-Conver
 `RuntimeMistralModelProvider`, `RuntimeQwenModelProvider`,
 `RuntimeGoogleModelProvider` (Gemma), `RuntimeDeepSeekModelProvider`.
 
-**`bedrock-mantle`, per vendor** — the same six minus Amazon:
-`MantleAnthropicModelProvider`, `MantleOpenAIModelProvider`,
-`MantleMistralModelProvider`, `MantleQwenModelProvider`,
-`MantleGoogleModelProvider`, `MantleDeepSeekModelProvider`. There is no Amazon Mantle
-class because AWS serves no Amazon model on that endpoint.
-
 **Embeddings** — `TitanEmbeddingProvider`, `CohereEmbeddingProvider` (InvokeModel on `bedrock-runtime`).
 
 **Knowledge base** — `ManagedKnowledgeBase` (Bedrock owns the vector store) and
@@ -59,10 +45,8 @@ class because AWS serves no Amazon model on that endpoint.
 [Knowledge bases](#knowledge-bases) and [Self-managed knowledge bases](#self-managed-knowledge-bases).
 
 A model AWS ships before this module updates an enum is still usable — pass its id as a `string`. Every
-provider takes `<Vendor><Endpoint>Model|string`, so the enums are autocomplete and documentation, never a
-gate. On a runtime class an unrecognised id simply goes on the wire and AWS answers for it. A brand-new
-*Mantle* model is the one case that needs a module release, because its request path cannot be derived
-from its id.
+provider takes `<Vendor>RuntimeModelNames|string`, so the enums are autocomplete and documentation, never a
+gate. On a runtime class an unrecognised id simply goes on the wire and AWS answers for it.
 
 ### Choosing the API family
 
@@ -79,12 +63,9 @@ property of its type, so an unreachable combination does not compile:
 | `RuntimeDeepSeekModelProvider` | `DeepSeekRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
 | `RuntimeAmazonModelProvider` | `AmazonRuntimeApi` | `CONVERSE`, `INVOKE` |
 | `ConverseModelProvider` | — | Converse only |
-| `Mantle*ModelProvider` | — | the model's own family |
 
 `CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that family for DeepSeek, Gemma 3, Mistral,
-Qwen3 and others. **Mantle classes take no `apiType` argument at all.** Each Mantle model has exactly one route this module
-takes, so there is nothing for a caller to choose — the model decides. (`openai.gpt-oss-120b` is
-published on both Responses and Chat Completions; this module takes Chat Completions.)
+Qwen3 and others.
 
 Per-model gaps remain and are left for AWS to report — GPT OSS serves Chat Completions, Converse and
 Invoke on `bedrock-runtime` but not Responses, for example.
@@ -100,9 +81,7 @@ Before using this module in your Ballerina application, complete the following:
    credential chain picks up the instance profile, task role, or IRSA service account. Elsewhere,
    supply IAM access keys, an assumed role, a named profile, or a
    [Bedrock API key](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html).
-4. Attach the IAM permissions for the endpoint you will reach: `bedrock:InvokeModel` for
-   Converse/InvokeModel, and **additionally `bedrock-mantle:CreateInference`** for Mantle routes. See
-   [Mantle needs a separate IAM permission](#mantle-needs-a-separate-iam-permission).
+4. Attach the `bedrock:InvokeModel` IAM permission for the models you will call.
 
 ## Quickstart
 
@@ -136,9 +115,6 @@ because both are decisions you make at the same moment you pick the model and re
 ```ballerina
 final ai:ModelProvider nova = check new bedrock:RuntimeAmazonModelProvider(
         bedrock:NOVA_PRO, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
-// GPT-5.4 is Mantle-only, so it takes the Mantle class.
-final ai:ModelProvider gpt = check new bedrock:MantleOpenAIModelProvider(
-        bedrock:MANTLE_GPT_5_4, auth:DEFAULT_CREDENTIALS, aws:US_EAST_2);
 // Any vendor at all, over Converse.
 final ai:ModelProvider llama = check new bedrock:ConverseModelProvider(
         "us.meta.llama3-3-70b-instruct-v1:0", auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
@@ -210,13 +186,8 @@ type Review record {| string sentiment; int score; |};
 Review review = check claude->generate(`Rate this review: ${text}`);
 ```
 
-> **Typed `generate()` works everywhere except Mantle Messages.** On `bedrock-runtime` and on the
-> OpenAI-shaped Mantle routes (Responses, Chat Completions) a typed target is obtained by forcing a
-> tool. The one exception is `MantleAnthropicModelProvider`, which resolves to the Anthropic
-> Messages API: AWS documents that route as rejecting `output_config.format`, and this module does not
-> force a tool there either, so it returns an `ai:Error` for any non-`string` target type, naming the
-> model. Claude is dual-homed, so the fix is `RuntimeAnthropicModelProvider` instead — there is no
-> silent cross-endpoint fallback.
+> **Typed `generate()` works on every API with tool calling.** A typed target is obtained by forcing a
+> tool whose schema is the target type.
 >
 > A `string` target always returns text normally, and `chat()` is unaffected in every case.
 >
@@ -225,8 +196,8 @@ Review review = check claude->generate(`Rate this review: ${text}`);
 > Converse shape supports typed generation for every Mistral model.
 
 > **With thinking on, the result tool is offered rather than forced.** Anthropic accepts only an
-> `auto` tool choice while thinking is on, and `CLAUDE_OPUS_5_5` and `CLAUDE_FABLE_5_1` (and their
-> `MANTLE_` twins) reject a forced tool on every request. In those cases `generate()` offers the result
+> `auto` tool choice while thinking is on, and `CLAUDE_OPUS_5_5` and `CLAUDE_FABLE_5_1` reject a forced tool
+> on every request. In those cases `generate()` offers the result
 > tool, asks the model to call it, and checks the reply against the expected type. A model that answers
 > in plain text instead returns an `ai:LlmInvalidGenerationError`. This applies when `thinking` is set
 > to `ADAPTIVE` or `ENABLED`, or when a `thinking` object is passed in `additionalModelRequestFields`.
@@ -245,16 +216,7 @@ ai:Embedding vector = check titan->embed({content: "hello", 'type: "text-chunk"}
 `batchEmbed` preserves input order. Note the wire asymmetry: Titan's `inputText` is a single string, so
 n chunks is n sequential round trips; Cohere batches up to 96 per call.
 
-## Two callouts that will silently cost you
-
-### Mantle needs a separate IAM permission
-
-**Mantle is a different IAM namespace.** Working `bedrock:InvokeModel` permissions are **not** enough —
-Mantle requires **`bedrock-mantle:CreateInference`**, with its own managed policies. Without it you get
-`AccessDenied` from a service you never meant to call, with no clue why. (This module's 403 error message
-names the action for you.)
-
-See [IAM for Bedrock powered by AWS Mantle](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrockpoweredbyawsmantle.html).
+## A callout that will silently cost you
 
 ### Cohere `inputType` decides your retrieval quality
 
@@ -281,15 +243,8 @@ final ai:EmbeddingProvider ingest = check new bedrock:CohereEmbeddingProvider(
 
 ## Routing
 
-You pick the endpoint by picking the class, and the API family with `apiType`. What is left for the module to
-resolve is the model id and the request path, and that happens once, at construction — before any
-network call.
-
-**There is no automatic endpoint selection.** Earlier versions of this module had an `AUTO` mode that
-preferred `bedrock-mantle` for any Mantle-capable model. That is gone: it sent flagship models to the
-endpoint with no guardrails, no cross-region inference and no structured output, and — because Mantle
-authorizes under a *separate* IAM namespace — produced `AccessDenied` for credentials that were
-perfectly valid for Bedrock. The endpoint is now yours to state, and the type system holds you to it.
+You pick the API family with `apiType`. What is left for the module to resolve is the model id and
+the request path, and that happens once, at construction — before any network call.
 
 ### On a `Runtime*` class (or `ConverseModelProvider`)
 
@@ -307,80 +262,43 @@ Current Claude models are served on `bedrock-runtime` through cross-region infer
 the `AnthropicRuntimeModelNames` constants carry a `us.` prefix. A bare Claude id here fails with
 `on-demand throughput isn't supported`.
 
-### On a `Mantle*` class
-
-| You pass | Resolves to |
-| --- | --- |
-| a bare id in `MANTLE_CAPABLE` | that model's own published path (`/v1/…`, `/openai/v1/…` or `/anthropic/v1/messages`) |
-| a bare id not in the table | **construction error** naming the model |
-| a CRIS-prefixed id | **construction error** — cross-region inference is runtime-only |
-| any ARN | **construction error** — ARNs name `bedrock-runtime` resources |
-
-### Why Mantle needs a routing table and `bedrock-runtime` does not
-
-On `bedrock-runtime` the request path is a pure function of the **shape** —
-`/model/{id}/converse`, `/openai/v1/responses` and the rest never vary by model — so the module derives
-it and needs no data at all. Any id you pass just goes on the wire.
-
-On `bedrock-mantle` the **base path is a per-model fact**, and AWS says so on each model card because it
-is irregular. Two of its own notes contradict each other across models of the same vendor:
-
-> **gpt-oss-120b** — "On `bedrock-mantle`, both APIs use the `/v1` base path, not `/openai/v1`."
-> **GPT-5.6 Sol** — "On `bedrock-mantle`, both APIs use the `/openai/v1` base path, not `/v1`."
-
-`google.gemma-3-*` (`/v1`) versus `google.gemma-4-*` (`/openai/v1`) is the same story. So the base path
-follows neither the vendor prefix nor the API family, and something has to record it — that is the entire
-job of `MANTLE_CAPABLE`, and the only per-model datum in it. The path suffix, the dialect, the
-converter and the auth-header style are all derived from the API family.
-
-The cost is that a Mantle model AWS ships after a release is unreachable until the table carries it.
-An id absent from the table is refused by name rather than sent to a guessed URL.
-
 ### Escape hatches
 
 ```ballerina
-// 1. Pick the endpoint by picking the class.
-check new bedrock:MantleAnthropicModelProvider("anthropic.claude-haiku-4-5", creds, "us-east-1");
-
-// 2. Pick the wire shape with `apiType`. Only the shapes AWS serves for that vendor compile.
+// 1. Pick the wire shape with `apiType`. Only the shapes AWS serves for that vendor compile.
 check new bedrock:RuntimeAnthropicModelProvider("us.anthropic.claude-haiku-4-5", creds,
         "us-east-1", apiType = bedrock:MESSAGES);
 
-// 3. Any raw model id string is always accepted — the model enums are
+// 2. Any raw model id string is always accepted — the model enums are
 //    conveniences, never a gate. A model AWS shipped after this release works today.
 check new bedrock:RuntimeAmazonModelProvider("amazon.nova-something-new-v1:0", creds, "us-east-1");
 
-// 4. A vendor with no class of its own — Converse reaches all of them.
+// 3. A vendor with no class of its own — Converse reaches all of them.
 check new bedrock:ConverseModelProvider("us.writer.palmyra-x5-v1:0", creds, "us-east-1");
 ```
 
-The `mantle/`, `converse/` and `invoke/` model-id string prefixes are **gone**. They were a way to
+The `converse/` and `invoke/` model-id string prefixes are **gone**. They were a way to
 override a resolver that no longer exists; the class and the `apiType` argument say the same thing in
 the type system.
 
-**A brand-new model needs no module release on `bedrock-runtime`** — pass its id as a string. The one
-exception is a brand-new **Mantle** model: its request path is per-model data that cannot be derived
-from the id, so it needs a table entry, and an id absent from `MANTLE_CAPABLE` is refused rather than
-guessed at.
+**A brand-new model needs no module release** — pass its id as a string.
 
 ### Endpoint configuration (`endpoint`)
 
 The host is derived from the region and the resolved route, entirely through AWS SDK endpoint
 metadata. That is correct in every partition and for every route without you doing anything:
 
-| Region | Converse / Invoke | Mantle |
-|---|---|---|
-| `us-east-1` | `bedrock-runtime.us-east-1.amazonaws.com` | `bedrock-mantle.us-east-1.api.aws` |
-| `us-gov-west-1` | `bedrock-runtime.us-gov-west-1.amazonaws.com` | `bedrock-mantle.us-gov-west-1.api.aws` |
-| `us-iso-east-1` | `bedrock-runtime.us-iso-east-1.c2s.ic.gov` | *(not served)* |
-| `eusc-de-east-1` | `bedrock-runtime.eusc-de-east-1.amazonaws.eu` | *(not served)* |
+| Region | Host |
+|---|---|
+| `us-east-1` | `bedrock-runtime.us-east-1.amazonaws.com` |
+| `us-gov-west-1` | `bedrock-runtime.us-gov-west-1.amazonaws.com` |
+| `us-iso-east-1` | `bedrock-runtime.us-iso-east-1.c2s.ic.gov` |
+| `eusc-de-east-1` | `bedrock-runtime.eusc-de-east-1.amazonaws.eu` |
 
-Note the suffix flips between routes — `amazonaws.com` for runtime, `api.aws` for Mantle — and again
-per partition. Hand-writing these is the main way to get an unexplained DNS failure, so don't.
+Note the suffix changes per partition. Hand-writing these is the main way to get an unexplained DNS failure, so don't.
 
-> **`dualstack: true` is refused on every route but Mantle.** `bedrock-mantle` is the only name in this
-> service family that publishes a dualstack (`.api.aws`) host — the module already forces it there, which
-> is why every Mantle call works. `bedrock-runtime` (Converse, Invoke, and **both embedding providers**),
+> **`dualstack: true` is refused.** No service this module calls publishes a dualstack (`.api.aws`) host:
+> `bedrock-runtime` (Converse, Invoke, and **both embedding providers**),
 > `bedrock-agent` and `bedrock-agent-runtime` (**both knowledge-base planes**) have no `.api.aws` record
 > in any region, verified by DNS. Setting the flag on those used to build the unservable host happily and
 > die at call time as a bare connection error after a full retry cycle. It is now a construction error
@@ -418,30 +336,19 @@ service.
 Setting `customEndpoint` also **skips the host-shape guards** below — they validate a host we would
 otherwise derive, and a concrete origin means there is nothing left to validate.
 
-### FIPS, GovCloud and Mantle
+### FIPS
 
-FIPS applies to `bedrock-runtime` only. There is **no** `bedrock-mantle` FIPS host, so `fips` on a
-Mantle-resolved model is a **construction error** rather than a DNS failure at call time.
-
-This bites hardest in GovCloud, so read this before deploying there:
-
-- **FIPS is opt-in**, not automatic, matching AWS SDK behaviour. If your posture requires FIPS
-  endpoints you must set `endpoint = {fips: true}` yourself.
-- **There is no `bedrock-mantle` FIPS host.** `endpoint = {fips: true}` on any `Mantle*` class
-  is a construction error. Use the matching `Runtime*` class for a FIPS-compliant call.
-- **`us-gov-west-1` has Mantle; `us-gov-east-1` does not.** We deliberately do not encode region
-  lists — they go stale — so a `Mantle*` class on `us-gov-east-1` builds a Mantle host and gets
-  AWS's own error at call time, which names the real problem better than a stale list could.
+**FIPS is opt-in**, not automatic, matching AWS SDK behaviour. If your posture requires FIPS
+endpoints you must set `endpoint = {fips: true}` yourself.
 
 ### Partitions
 
 - **China (`cn-`) is rejected at construction, on every API family.** Amazon Bedrock is not offered
-  in the AWS China partition at all — not Mantle, not `bedrock-runtime`. The endpoint resolver would
+  in the AWS China partition at all. The endpoint resolver would
   still happily build a well-formed host (it is a string builder and never fails), so without this
   guard the first call fails with a bare connection error naming nothing.
 - **ISO and EU Sovereign partitions** (`us-iso-`, `us-isob-`, `us-isof-`, `eusc-`) reach
-  `bedrock-runtime` normally. They serve no Mantle host, so constructing any `Mantle*` class
-  there is a construction error naming the partition.
+  `bedrock-runtime` normally.
 
 ### Inference parameters
 
@@ -451,7 +358,7 @@ prompt-caching `cache_control`, Nova `reasoningConfig`, sampling knobs beyond `t
 The module deliberately exposes only `maxTokens` and `temperature` as first-class inference knobs — the
 two an integration developer actually reaches for. Anything finer-grained (`top_p`, `top_k`, …) goes
 through `additionalModelRequestFields` rather than cluttering the config record. It is honoured on
-**every** dialect — Converse's `additionalModelRequestFields`, and the top level of each Invoke/Mantle
+**every** dialect — Converse's `additionalModelRequestFields`, and the top level of each
 vendor body — and it is spliced **untouched**: the module never renames, reshapes or adds to what you put
 there.
 
@@ -460,7 +367,7 @@ there.
 Several config fields only exist on some routes. When a field cannot reach the wire on the route your
 model resolved to, **construction fails and names it** — it is never accepted and quietly ignored:
 
-| Field | Converse | Invoke | Mantle |
+| Field | Converse | Invoke | Messages, Chat Completions, Responses |
 |---|---|---|---|
 | `serviceTier` | `serviceTier` body field | `X-Amzn-Bedrock-Service-Tier` header | **refused** |
 | `latencyOptimized` | `performanceConfig` body field | `X-Amzn-Bedrock-PerformanceConfig-Latency` header | **refused** |
@@ -473,17 +380,14 @@ Worth knowing before you upgrade:
 > **`reasoningEffort` is one field with three wire shapes, and you no longer have to care which.** The
 > Responses API nests it (`reasoning: {effort: "low"}`) while Chat Completions keeps it flat
 > (`reasoning_effort: "low"`). Pass the value; the resolved route picks the spelling. Sending the flat
-> form to a GPT-5.x model on `/openai/v1/responses` is a hard `400 Unknown parameter:
+> form to `/openai/v1/responses` is a hard `400 Unknown parameter:
 > 'reasoning_effort'`, which is what this used to do.
 
-> **`serviceTier` / `latencyOptimized` do not exist on the Mantle classes at all.** They live on
-> `CommonRuntimeConfig` and not on `CommonMantleConfig`, so setting one on a `Mantle*` class is a
-> *compile* error rather than something discovered at construction or, worse, silently dropped on the
-> wire. Use the matching `Runtime*` class to send them as Bedrock defines them. Mantle's vendor-compatible surfaces do have a `service_tier` body field, but with the
-> **vendor's** value set (`auto|default|flex|fast|priority|ultrafast`) rather than Bedrock's
-> (`default|priority|flex|reserved`) — two first-party sources, one field name, different vocabularies —
-> so this module will not guess a mapping. If you know your model's, send it through
-> `additionalModelRequestFields`.
+> **`serviceTier` / `latencyOptimized` are refused on the vendor-compatible APIs.** Those APIs have a
+> `service_tier` body field, but with the **vendor's** value set (`auto|default|flex|fast|priority|ultrafast`)
+> rather than Bedrock's (`default|priority|flex|reserved`) — two first-party sources, one field name,
+> different vocabularies — so this module will not guess a mapping. If you know your model's, send it
+> through `additionalModelRequestFields`, or use the CONVERSE or INVOKE API.
 
 > **`temperature` has no default, and that is deliberate.** Leave it unset and the field is omitted from
 > the request entirely, so the model applies its own default. This is not a style choice: Anthropic
@@ -492,17 +396,14 @@ Worth knowing before you upgrade:
 > `400 temperature is deprecated for this model`, so a module-level default would make them unusable out
 > of the box.
 >
-> Acceptance is per model, not per family — `MANTLE_GPT_5_4` accepts `temperature = 0.5` (verified live
-> 2026-09-24), so do not assume the GPT-5.x models refuse it. Set `temperature` when you know the model
-> takes it, and let AWS refuse it otherwise.
+> Acceptance is per model, not per family: set `temperature` when you know the model takes it, and let
+> AWS refuse it otherwise.
 
 > **`reasoningEffort` is a `ReasoningEffort` enum, and no member is accepted everywhere.** The members —
 > `REASONING_NONE`, `REASONING_MINIMAL`, `REASONING_LOW`, `REASONING_MEDIUM`, `REASONING_HIGH`,
-> `REASONING_XHIGH`, `REASONING_MAX` — are the union of every value seen on the OpenAI models on Bedrock.
-> Measured on 2026-09-24 in `us-east-1` by sending each value: `openai.gpt-oss-120b` (Invoke) accepted
-> `low`, `medium` and `high`; `openai.gpt-5.4` (Mantle Responses) accepted `none`, `low`, `medium`,
-> `high` and `xhigh`. **`minimal` was refused by both**, even though gpt-oss lists it as valid in its
-> own 400. The module does not enforce a per-model set — which values a model accepts is the model's
+> `REASONING_XHIGH`, `REASONING_MAX` — are the union of the values the OpenAI models document. gpt-oss,
+> for example, takes `low`, `medium` and `high`, and refuses `minimal` even though it lists it as valid
+> in its own 400. The module does not enforce a per-model set — which values a model accepts is the model's
 > contract and changes over time — so an unsupported value comes back as AWS's 400.
 
 `maxTokens` **does** default (to 4096). It is capped per model — Nova Pro/Lite/Micro top out at 5K output
@@ -549,8 +450,7 @@ the split entirely.
 > **`The provided model identifier is invalid` is not always about the id.** AWS uses that message for
 > a model your account has not been granted access to as well as for one that does not exist in the
 > region. If a documented id fails in a region its model card lists — `QWEN3_CODER_480B` in `us-east-1`,
-> say — check **Model access** in the Bedrock console before suspecting the id. Access is per endpoint,
-> so the Mantle class can work while the runtime class does not.
+> say — check **Model access** in the Bedrock console before suspecting the id.
 
 ### DeepSeek does too
 
@@ -969,9 +869,10 @@ credential chain is walked), which is charged to `init`, not to the call.
 | --- | --- |
 | Converse | `guardrailConfig` body field |
 | Invoke | `X-Amzn-Bedrock-Guardrail*` request headers; the fired signal returns in the response body |
-| Mantle | not supported → construction error pointing at `ApplyGuardrail` |
+| Chat Completions | `X-Amzn-Bedrock-Guardrail*` request headers |
+| Responses, Messages | not supported → construction error pointing at `ApplyGuardrail` |
 
-A fired guardrail is never silently dropped on either supported route: the trace's finish reason is
+A fired guardrail is never silently dropped on a supported route: the trace's finish reason is
 `content_filter`. Every API's stop reason is mapped to the same set on the trace — `stop`, `length`,
 `tool_calls`, `content_filter` or `error` — so traces read the same whichever API answered.
 
@@ -981,15 +882,10 @@ Construction errors are reserved for what AWS *cannot* diagnose for you:
 
 - an `imported-model/` ARN (AWS applies no default chat template to imported weights)
 - any route in the AWS China partition (`cn-`) — Bedrock is not offered there at all
-- a `Mantle*` class on a model with no known Mantle request path
-- a `Mantle*` class on a partition that serves no Mantle host (ISO, EU Sovereign); GovCloud and
-  commercial **are** supported
-- a `Mantle*` class given an ARN, or a cross-region-prefixed id
-- `fips` on a Mantle-resolved model (there is no `bedrock-mantle-fips` host)
-- a guardrail on a Mantle route (the error names the standalone `ApplyGuardrail` API)
+- a guardrail on the Responses or Messages API (the error names the standalone `ApplyGuardrail` API)
 - a `custom-model/` ARN (an artifact, not a deployment)
-- `dualstack` on any route but Mantle (no `.api.aws` host exists for the other four service names)
-- any inference knob the resolved route cannot carry — `serviceTier`/`latencyOptimized` on Mantle,
+- `dualstack` (no `.api.aws` host exists for the services this module calls)
+- any inference knob the resolved route cannot carry — `serviceTier`/`latencyOptimized` on the vendor-compatible APIs,
   `stopSequences` on OpenAI Responses, `thinking`/`effort`/`reasoningEffort` on a dialect with no such
   concept. **A field the module cannot honour is refused, never dropped:** a silent drop is
   indistinguishable, from the `ai:ModelProvider` contract, from a request that honoured it
@@ -1017,9 +913,9 @@ network call**, with an `ai:Error` naming the dialect — never silently dropped
 | Route | Images | Notes |
 | --- | --- | --- |
 | Converse (and Nova on InvokeModel) | ✅ | Native `image` content block |
-| Anthropic Messages (InvokeModel **and** Mantle) | ✅ | base64 source |
-| OpenAI chat completions (Mantle + GPT-OSS Invoke) | ❌ | unverified — see below |
-| OpenAI Responses (Mantle, GPT-5.x) | ❌ | unverified — see below |
+| Anthropic Messages (InvokeModel **and** Messages API) | ✅ | base64 source |
+| OpenAI chat completions (Chat Completions API + GPT-OSS Invoke) | ❌ | unverified — see below |
+| OpenAI Responses | ❌ | unverified — see below |
 | Mistral chat (InvokeModel) | ❌ | sources disagree — see below |
 | Mistral instruct / DeepSeek-R1 | ❌ | single prompt string; no content-part array |
 | Any `ChatSystemMessage` | ❌ | `system` is text-only on every Bedrock route |
@@ -1042,7 +938,7 @@ are followed manually so every hop is re-checked, and the download is capped at 
 > the body this module builds, the default flips permanently.
 >
 > **Why some routes refuse.** Image support is enabled only where a primary source
-> confirms the wire shape. AWS's Mantle pages are JS-rendered and state nothing about
+> confirms the wire shape. AWS's pages for the OpenAI-shaped APIs state nothing about
 > image parts, and for Mistral's InvokeModel dialect AWS documents `content` as a
 > string while Mistral's own API documents image chunks — two first-party sources
 > disagreeing. Rather than guess and ship the silent-wrong-answer bug this feature
@@ -1052,15 +948,11 @@ are followed manually so every hop is re-checked, and the download is capped at 
 Images are redacted in the observability span (`[image image/png, 12043 bytes]`), so
 the payload never reaches your telemetry backend.
 
-## Migrating to the endpoint-split surface
+## Migrating from the vendor classes
 
-The seven vendor classes were replaced by fourteen endpoint-specific ones. This is a clean break —
-there are no deprecated aliases.
+The seven vendor classes were renamed. This is a clean break — there are no deprecated aliases.
 
-**1. Pick the class for the endpoint you want.** `<Vendor>ModelProvider` becomes
-`Runtime<Vendor>ModelProvider` in almost every case — that is where AWS recommends you be, and
-it is what the old `apiFamily = CONVERSE` produced. Use `Mantle<Vendor>ModelProvider` only for a
-model or capability that exists only there.
+**1. Add the `Runtime` prefix.** `<Vendor>ModelProvider` becomes `Runtime<Vendor>ModelProvider`.
 
 ```ballerina
 // before
@@ -1070,14 +962,13 @@ check new bedrock:AnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_
 check new bedrock:RuntimeAnthropicModelProvider(bedrock:CLAUDE_SONNET_5, creds, aws:US_EAST_1);
 ```
 
-**2. `apiFamily` became `apiType`, and lost `AUTO` and `MANTLE`.**
+**2. `apiFamily` became `apiType`, and lost `AUTO`.**
 
 ```ballerina
 apiFamily = bedrock:AUTO       → (removed) pick the class instead
 apiFamily = bedrock:CONVERSE   → apiType = bedrock:CONVERSE   // now the default
 apiFamily = bedrock:INVOKE     → apiType = bedrock:INVOKE
-apiFamily = bedrock:MANTLE     → use the Mantle* class
-"mantle/<id>" / "converse/<id>" / "invoke/<id>"  → (removed) use the class and `apiType`
+"converse/<id>" / "invoke/<id>"  → (removed) use `apiType`
 ```
 
 `apiType` also gained the three vendor-native shapes — `MESSAGES`, `CHAT_COMPLETIONS` and `RESPONSES` —
@@ -1085,28 +976,15 @@ which `bedrock-runtime` now serves directly. Which of them a class accepts is pa
 
 **3. Behaviour that changed, not just spelling.**
 
-- **No endpoint is chosen for you.** Previously a bare Mantle-capable id resolved to `bedrock-mantle`,
-  which needs the separate `bedrock-mantle:CreateInference` permission. Code that relied on that now
-  reaches `bedrock-runtime` unless you construct a Mantle class.
-- **`generate()` no longer silently switches endpoints.** It used to resolve a second Converse spine so
-  a typed `generate()` worked on a Mantle-routed model — meaning one object needed two IAM permissions.
-  One class, one endpoint now: a typed `generate()` on a `Mantle*` class uses that endpoint's own tool
-  calling, and returns an `ai:Error` only on the Mantle Anthropic Messages route.
-- **`guardrail`, `serviceTier` and `latencyOptimized` are gone from the Mantle config records**, so
-  setting them there is now a compile error rather than a construction error.
 - **Guardrails are refused on the `RESPONSES` and `MESSAGES` shapes.** AWS states guardrails do not
   apply to the Responses API, and documents no guardrail parameters for `/anthropic/v1/messages`; the
   module refuses rather than sending headers it cannot confirm are honoured.
-- **Mantle classes reject ARNs and cross-region-prefixed ids**, both of which are runtime-only concepts.
 
-**4. Model enums split per endpoint.** `<Vendor>Model` became `<Vendor>RuntimeModel` and
-`<Vendor>MantleModel`. Runtime constants carry the CRIS prefix where AWS requires one; Mantle constants
-are bare. **Mantle enum members are prefixed `MANTLE_`** (`MANTLE_CLAUDE_OPUS_5`, `MANTLE_GPT_5_4`)
-because Ballerina enum members share one module namespace.
+**4. Model enums were renamed.** `<Vendor>Model` became `<Vendor>RuntimeModelNames`. The constants carry
+the CRIS prefix where AWS requires one.
 
 **5. `anthropic.claude-mythos-preview` was removed** — AWS publishes no model card or endpoint-table row
-for it. `anthropic.claude-mythos-5` (bedrock-mantle only) and `anthropic.claude-mythos-5.1`
-(bedrock-runtime only) are real and documented; see the endpoint-availability table.
+for it.
 
 **6. `ConverseModelProvider` is new.** If you were passing raw id strings to a vendor class just to
 reach a model that class did not enumerate, this is the better home for it — it takes any Converse-

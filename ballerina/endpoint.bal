@@ -21,31 +21,21 @@ import ballerinax/aws;
 // Every `bedrock-runtime` path signs as `bedrock`, the OpenAI and Anthropic paths too.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
 const SIGNING_BEDROCK = "bedrock";
-// "SigV4 signature with service name `bedrock-mantle`".
-// https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html
-const SIGNING_BEDROCK_MANTLE = "bedrock-mantle";
 
-// Mantle's hosts use the partition's dualstack suffix (`api.aws` and others), which
-// `aws:resolveEndpoint` picks.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 const RUNTIME_ENDPOINT_PREFIX = "bedrock-runtime";
-const MANTLE_ENDPOINT_PREFIX = "bedrock-mantle";
 
 // Knowledge-base hosts. Both still sign as `bedrock` (botocore `signingName`).
 const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
 const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
 
 // Uses the route's region, so an ARN's region wins.
-isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error {
-    boolean mantle = route.endpoint == MANTLE;
-    string serviceName = mantle ? MANTLE_ENDPOINT_PREFIX : RUNTIME_ENDPOINT_PREFIX;
-    // Mantle is only on the dualstack host; the plain one does not resolve.
-    return resolveServiceUrlCore(serviceName, route.region, endpointConfig, mantle);
-}
+isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error
+    => resolveServiceUrlCore(RUNTIME_ENDPOINT_PREFIX, route.region, endpointConfig);
 
 // Every host this module dials is built here, so the dualstack check lives here.
 isolated function resolveServiceUrlCore(string serviceName, string region,
-        aws:EndpointConfig? endpointConfig, boolean forceDualstack) returns string|error {
+        aws:EndpointConfig? endpointConfig) returns string|error {
     aws:EndpointConfig config = endpointConfig ?: {};
     string? custom = config?.customEndpoint;
     if custom is string {
@@ -55,21 +45,20 @@ isolated function resolveServiceUrlCore(string serviceName, string region,
     }
     check guardDualstack(serviceName, region, config.dualstack);
     return trimTrailingSlash(aws:resolveEndpoint(serviceName, region,
-            {fips: config.fips, dualstack: forceDualstack || config.dualstack}));
+            {fips: config.fips, dualstack: config.dualstack}));
 }
 
-// Only `bedrock-mantle` has a dualstack host. `aws:resolveEndpoint` would still build
-// one for the others, which then fails as a confusing connection error.
+// AWS publishes no dualstack host for these services. `aws:resolveEndpoint` would still
+// build one, which then fails as a confusing connection error.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 isolated function guardDualstack(string serviceName, string region, boolean dualstack) returns error? {
-    if !dualstack || serviceName == MANTLE_ENDPOINT_PREFIX {
+    if !dualstack {
         return;
     }
-    return error(string `'dualstack' is not available on '${serviceName}': AWS publishes a dualstack ` +
-        string `('.api.aws') host for 'bedrock-mantle' only, so '${serviceName}.${region}.api.aws' does ` +
-        string `not resolve and every request would fail as a connection error. Drop 'dualstack' ` +
-        string `(the standard host is reached over IPv4), use a Mantle*ModelProvider if you ` +
-        string `need the dualstack endpoint family, or set 'customEndpoint' to dial a specific origin.`);
+    return error(string `'dualstack' is not available on '${serviceName}': AWS publishes no dualstack ` +
+        string `('.api.aws') host for it, so '${serviceName}.${region}.api.aws' does not resolve and ` +
+        string `every request would fail as a connection error. Drop 'dualstack', or set ` +
+        string `'customEndpoint' to dial a specific origin.`);
 }
 
 isolated function trimTrailingSlash(string url) returns string
@@ -85,12 +74,6 @@ isolated function guardBedrockPartition(string partition, string region) returns
             string `Use a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
     }
 }
-
-// Partitions that can form a `bedrock-mantle` host. Host shape only: which regions
-// actually serve Mantle is left for AWS to answer, so new regions work.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
-isolated function mantleServedOnPartition(string partition) returns boolean
-    => partition == "aws" || partition == "aws-us-gov";
 
 isolated function hostOf(string baseUrl) returns string {
     string rest = baseUrl;
@@ -110,29 +93,6 @@ isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig 
     boolean derived = (endpointConfig?.customEndpoint) !is string;
     if derived {
         check guardBedrockPartition(route.partition, route.region);
-    }
-
-    if route.endpoint == MANTLE {
-        if derived && (endpointConfig?.fips ?: false) {
-            // There is no `bedrock-mantle-fips` host.
-            // https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html
-            return error("'fips' is not available on the bedrock-mantle endpoint: there is no " +
-                "bedrock-mantle FIPS host. Use a Runtime*ModelProvider for a " +
-                "FIPS-compliant Bedrock call.");
-        }
-        if derived && !mantleServedOnPartition(route.partition) {
-            return error(string `bedrock-mantle is not available on partition '${route.partition}': no ` +
-                string `bedrock-mantle host is served there. Use a Runtime*ModelProvider, or a ` +
-                string `commercial ('aws') or GovCloud ('aws-us-gov') region.`);
-        }
-        MantleEntry entry = check route.mantleEntry.ensureType();
-        string mantleBase = check resolveServiceUrl(route, endpointConfig);
-        return {
-            baseUrl: mantleBase,
-            host: hostOf(mantleBase),
-            path: check mantlePathFor(entry.basePath, route.api),
-            signingService: SIGNING_BEDROCK_MANTLE
-        };
     }
 
     string base = check resolveServiceUrl(route, endpointConfig);
@@ -180,7 +140,7 @@ isolated function buildAgentEndpoint(AgentPlane plane, string region,
         check guardBedrockPartition(partitionForRegion(region), region);
     }
     string serviceName = plane == AGENT_DATA ? AGENT_RUNTIME_ENDPOINT_PREFIX : AGENT_ENDPOINT_PREFIX;
-    string base = check resolveServiceUrlCore(serviceName, region, endpointConfig, false);
+    string base = check resolveServiceUrlCore(serviceName, region, endpointConfig);
     return {baseUrl: base, host: hostOf(base), path: "", signingService: SIGNING_BEDROCK};
 }
 

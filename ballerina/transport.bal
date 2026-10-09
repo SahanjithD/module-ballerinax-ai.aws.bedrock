@@ -55,8 +55,6 @@ isolated client class BedrockTransport {
     private final string wirePath; // model-id segment single-encoded (from buildEndpoint)
     private final http:Client httpClient;
     private final readonly & RetryConfig retryConfig;
-    // For the `bedrock-mantle:CreateInference` hint on a 403.
-    private final boolean isMantleRoute;
     // A knowledge-base plane: different 400/403/404 hints, and 402/409 handling.
     private final boolean isAgentRoute;
 
@@ -74,7 +72,6 @@ isolated client class BedrockTransport {
         self.region = region;
         // From the route only: a `customEndpoint` changes the host, not the signing name.
         self.signingService = ep.signingService;
-        self.isMantleRoute = ep.signingService == SIGNING_BEDROCK_MANTLE;
         self.isAgentRoute = isAgentRoute;
         self.host = ep.host;
         self.wirePath = ep.path;
@@ -177,7 +174,6 @@ isolated client class BedrockTransport {
         if requestId is string {
             detail += string ` (request id: ${requestId})`;
         }
-        boolean mantle = self.isMantleRoute;
         boolean agent = self.isAgentRoute;
         match status {
             // 502 and 504 come from the load balancers; they are transient too.
@@ -186,7 +182,7 @@ isolated client class BedrockTransport {
             }
             400 => {
                 // Only when AWS gave no reason, and only on a runtime model route.
-                string hint = !agent && !mantle && detail.startsWith("status ")
+                string hint = !agent && detail.startsWith("status ")
                     ? " The model may not support this API; try 'apiType = INVOKE' (or CONVERSE)."
                     : "";
                 return error ai:Error(string `Bedrock ValidationException (HTTP 400): ${detail}.${hint}`);
@@ -197,10 +193,7 @@ isolated client class BedrockTransport {
                 return error ai:Error(string `Bedrock ServiceQuotaExceededException (HTTP 402): ${detail}`);
             }
             403 => {
-                string hint = mantle
-                    ? " Mantle needs the separate 'bedrock-mantle:CreateInference' IAM action — " +
-                        "'bedrock:InvokeModel' permissions are NOT sufficient."
-                    : agent
+                string hint = agent
                     ? " Knowledge base ingestion needs BOTH 'bedrock:StartIngestionJob' and " +
                         "'bedrock:IngestKnowledgeBaseDocuments' — either alone is insufficient."
                     : "";
@@ -266,7 +259,7 @@ isolated client class BedrockTransport {
 
         // Bedrock API key: no SigV4.
         if bearerCreds is BearerToken {
-            // The Mantle Messages path rejects both `Authorization` and `x-api-key`.
+            // The Messages API takes the key as `x-api-key` instead.
             if !hasApiKeyHeader(headers) {
                 headers["Authorization"] = string `Bearer ${bearerCreds.apiKey}`;
             }

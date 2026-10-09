@@ -68,23 +68,23 @@ function testSignedHeadersUseTheDoubleEncodedCanonicalUriForAnArn() returns erro
 }
 
 @test:Config {}
-function testSignedHeadersUseTheMantleScopeAndSignExtraHeaders() returns error? {
-    // Mantle signs `bedrock-mantle`, not `bedrock` — and every extra header must be
-    // in the canonical request AND the SignedHeaders list, sorted.
-    BedrockTransport transport = check transportFor("bedrock-mantle.us-east-1.api.aws",
-            "/anthropic/v1/messages", SIGNING_BEDROCK_MANTLE, "us-east-1");
+function testSignedHeadersSignExtraHeaders() returns error? {
+    // Every extra header must be in the canonical request AND the SignedHeaders list,
+    // sorted.
+    BedrockTransport transport = check transportFor("bedrock-runtime.us-east-1.amazonaws.com",
+            "/anthropic/v1/messages", SIGNING_BEDROCK, "us-east-1");
     map<string> extra = {"anthropic-version": "2023-06-01", "x-api-key": "secret-key"};
     map<string> headers =
-        check transport.signedHeaders("{\"model\":\"anthropic.claude-mythos-preview\"}", extra, FIXED_CLOCK);
+        check transport.signedHeaders("{\"model\":\"anthropic.claude-opus-5\"}", extra, FIXED_CLOCK);
     test:assertEquals(headers["Authorization"],
-            "AWS4-HMAC-SHA256 Credential=AKIATEST/20260717/us-east-1/bedrock-mantle/aws4_request, " +
+            "AWS4-HMAC-SHA256 Credential=AKIATEST/20260717/us-east-1/bedrock/aws4_request, " +
             "SignedHeaders=anthropic-version;content-type;host;x-amz-date;x-api-key, " +
-            "Signature=f51554fbe37b913ad9d3af1dfda5cefebab3934ce04c14b47435ddd4ad9d55f0");
+            "Signature=8c94470317ac709ad3744d4ac9159c1d999e6d0a073811e4a387dbef2513a489");
 }
 
 @test:Config {}
 function testBearerCredentialsSkipSigV4Entirely() returns error? {
-    // A Bedrock API key is first-class on both endpoints: no signature.
+    // A Bedrock API key needs no signature.
     BedrockTransport transport = check new ({apiKey: "bedrock-api-key"}, "us-east-1",
             {baseUrl: string `https://bedrock-runtime.us-east-1.amazonaws.com`, host: "bedrock-runtime.us-east-1.amazonaws.com", path: "/model/m/converse",
                 signingService: SIGNING_BEDROCK});
@@ -94,21 +94,17 @@ function testBearerCredentialsSkipSigV4Entirely() returns error? {
 }
 
 @test:Config {}
-function testBearerWithXApiKeyMantleRouteSendsOnlyXApiKey() returns error? {
-    // REGRESSION (live 401, 2026-08-03): an X_API_KEY Mantle route on a bearer credential
-    // attaches `x-api-key` (addMantleApiKeyHeader); the transport must then NOT also add
-    // `Authorization: Bearer`, because Anthropic's Mantle surface rejects a request carrying
-    // BOTH with 401 "must not include both 'authorization' and 'x-api-key' headers".
-    // Exactly one auth header may reach the wire. The merged set had no coverage, which is
-    // how the collision shipped.
+function testBearerWithXApiKeySendsOnlyXApiKey() returns error? {
+    // The Messages API takes the key as `x-api-key`; the transport must then NOT also
+    // add `Authorization: Bearer`. Exactly one auth header may reach the wire.
     BedrockTransport transport = check new ({apiKey: "bedrock-api-key"}, "us-east-1",
-            {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`, host: "bedrock-mantle.us-east-1.api.aws", path: "/anthropic/v1/messages",
-                signingService: SIGNING_BEDROCK_MANTLE});
+            {baseUrl: string `https://bedrock-runtime.us-east-1.amazonaws.com`, host: "bedrock-runtime.us-east-1.amazonaws.com", path: "/anthropic/v1/messages",
+                signingService: SIGNING_BEDROCK});
     map<string> headers = check transport.signedHeaders("{}",
             {"x-api-key": "bedrock-api-key", "anthropic-version": "2023-06-01"}, FIXED_CLOCK);
     test:assertEquals(headers["x-api-key"], "bedrock-api-key");
     test:assertFalse(headers.hasKey("Authorization"),
-            "must not send Authorization alongside x-api-key — Anthropic Mantle 401s on both");
+            "must not send Authorization alongside x-api-key");
 }
 
 @test:Config {}
@@ -117,8 +113,8 @@ function testBearerWithMixedCaseXApiKeyStillSuppressesAuthorization() returns er
     // `routeOverrides` entry using `X-Api-Key` must not slip past the guard and resurrect
     // both headers.
     BedrockTransport transport = check new ({apiKey: "bedrock-api-key"}, "us-east-1",
-            {baseUrl: string `https://bedrock-mantle.us-east-1.api.aws`, host: "bedrock-mantle.us-east-1.api.aws", path: "/anthropic/v1/messages",
-                signingService: SIGNING_BEDROCK_MANTLE});
+            {baseUrl: string `https://bedrock-runtime.us-east-1.amazonaws.com`, host: "bedrock-runtime.us-east-1.amazonaws.com", path: "/anthropic/v1/messages",
+                signingService: SIGNING_BEDROCK});
     map<string> headers = check transport.signedHeaders("{}",
             {"X-Api-Key": "bedrock-api-key"}, FIXED_CLOCK);
     test:assertFalse(headers.hasKey("Authorization"),

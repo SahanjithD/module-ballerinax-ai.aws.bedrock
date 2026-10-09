@@ -14,12 +14,12 @@
 
 import ballerina/ai;
 
-// OpenAI Responses on both endpoints. The system prompt is `instructions`, turns are
+// OpenAI Responses. The system prompt is `instructions`, turns are
 // `input` items, and the reply is in `output` items.
 
 isolated function encodeResponses(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
-    // UNVERIFIED: image support on the Mantle /openai/v1/responses path is not stated
+    // UNVERIFIED: image support on the /openai/v1/responses path is not stated
     // by any first-party source. Refuse rather than guess — see README.
     check rejectImagesIn(messages, "the OpenAI Responses dialect", true);
     json[] input = [];
@@ -128,7 +128,7 @@ isolated function decodeResponses(json response) returns DecodedResponse|ai:Erro
                 } else if itemType == "message" {
                     // Only `output_text` from `message` items: `reasoning` items and
                     // `refusal` blocks also have `text`, which would leak into the reply.
-                    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+                    // https://platform.openai.com/docs/api-reference/responses/object
                     json[]? content = arrField(item, "content");
                     if content is json[] {
                         foreach json block in content {

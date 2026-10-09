@@ -43,14 +43,12 @@ isolated function resolveEmbeddingSpine(string providerName, BedrockAuthConfig c
         }
         // Embeddings: InvokeModel only — no Converse equivalent, no streaming.
         Route route = {
-            endpoint: RUNTIME,
             api: INVOKE,
             bareModelId: bareId,
             geoPrefix,
             effectiveModelId: applyGeoPrefix(bareId, geoPrefix), // CRIS restored on the wire
             region,
-            partition: partitionForRegion(region),
-            mantleEntry: ()
+            partition: partitionForRegion(region)
         };
         Endpoint ep = check buildEndpoint(route, endpointConfig);
         BedrockTransport transport =

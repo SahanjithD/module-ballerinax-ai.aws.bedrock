@@ -55,9 +55,9 @@ function testHttpClientSendsEncodedPathVerbatim() returns error? {
 }
 
 // ---- error-body extraction across the three gateway shapes ----
-// Bedrock's own APIs, the OpenAI-compatible Mantle paths, and bare-string upstream
-// errors all report differently. Reading only the first shape degraded every
-// Mantle-route 400 to "status 400" — no clue what was actually wrong.
+// Bedrock's own APIs, the OpenAI-compatible paths, and bare-string upstream errors
+// all report differently. Reading only the first shape degraded every OpenAI-path
+// 400 to "status 400" — no clue what was actually wrong.
 
 @test:Config {}
 function testErrorDetailReadsAllThreeErrorBodyShapes() returns error? {
@@ -68,8 +68,8 @@ function testErrorDetailReadsAllThreeErrorBodyShapes() returns error? {
     test:assertEquals(t.errorDetail(jsonResponse(400, {"message": "ValidationException detail"})),
             "ValidationException detail");
 
-    // 2. The OpenAI convention used by the Mantle paths — the shape that used to be
-    //    dropped entirely. This is the "model does not support images" case.
+    // 2. The OpenAI convention used by the OpenAI-compatible paths — the shape that
+    //    used to be dropped entirely. This is the "model does not support images" case.
     test:assertEquals(
             t.errorDetail(jsonResponse(400,
                     {"error": {"code": "validation_error", "message": "Model does not support image modality"}})),

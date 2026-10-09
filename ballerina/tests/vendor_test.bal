@@ -14,13 +14,9 @@
 
 import ballerina/test;
 
-// The vendor facades. The public surface is cut by ENDPOINT: a
-// `Runtime<V>ModelProvider` can only ever reach `bedrock-runtime` and a
-// `Mantle<V>ModelProvider` only `bedrock-mantle`, so "which endpoint did my
-// model end up on" is answered by the type at the call site rather than by a
-// routing ladder at runtime.
+// The vendor facades: one `Runtime<V>ModelProvider` per vendor, on `bedrock-runtime`.
 
-// ---- construction smoke tests for all fourteen classes (no I/O) ----
+// ---- construction smoke tests for every class (no I/O) ----
 
 @test:Config {}
 function testEveryRuntimeProviderConstructs() returns error? {
@@ -32,18 +28,6 @@ function testEveryRuntimeProviderConstructs() returns error? {
     RuntimeQwenModelProvider _ = check new (QWEN3_32B, TEST_CREDS, REGION);
     RuntimeGoogleModelProvider _ = check new (GEMMA_3_27B_IT, TEST_CREDS, REGION);
     RuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_R1, TEST_CREDS, REGION);
-}
-
-@test:Config {}
-function testEveryMantleProviderConstructs() returns error? {
-    // Six, not seven: Amazon has no model on bedrock-mantle, so there is no
-    // `MantleAmazonModelProvider` to construct.
-    MantleAnthropicModelProvider _ = check new (MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION);
-    MantleOpenAIModelProvider _ = check new (MANTLE_GPT_5_5, TEST_CREDS, REGION);
-    MantleMistralModelProvider _ = check new (MANTLE_MISTRAL_LARGE_3, TEST_CREDS, REGION);
-    MantleQwenModelProvider _ = check new (MANTLE_QWEN3_32B, TEST_CREDS, REGION);
-    MantleGoogleModelProvider _ = check new (MANTLE_GEMMA_4_31B, TEST_CREDS, REGION);
-    MantleDeepSeekModelProvider _ = check new (MANTLE_DEEPSEEK_V3_2, TEST_CREDS, REGION);
 }
 
 @test:Config {}
@@ -138,7 +122,7 @@ function testOpenAIChatDecodePopulatesUsageAndStopReason() returns error? {
     test:assertEquals(decoded.responseId, "chatcmpl-1");
 }
 
-// ---- Responses converter (GPT-5.x, Gemma 4) ----
+// ---- Responses converter ----
 
 @test:Config {}
 function testResponsesDecodePopulatesUsageAndStopReason() returns error? {
@@ -164,74 +148,12 @@ function testResponsesEncodesSystemAsInstructions() returns error? {
     test:assertEquals(body["max_output_tokens"], 100);
 }
 
-// ---- Mantle: per-model paths, all table data ----
-
 @test:Config {}
-function testOpenAIMantleOnlyModelResolvesToTheResponsesPath() returns error? {
-    // GPT-5.4 exists only on Mantle — the reason the Mantle classes exist.
-    Route route = check resolveMantleRoute("openai.gpt-5.4", REGION);
-    Endpoint ep = check buildEndpoint(route);
-    test:assertEquals(ep.path, "/openai/v1/responses");
-    test:assertEquals(ep.signingService, "bedrock-mantle");
-}
-
-@test:Config {}
-function testGemma3AndGemma4SplitAcrossTwoMantlePathFamilies() returns error? {
-    // One vendor prefix, two Mantle dialects: Gemma 3 speaks Chat Completions on
-    // `/v1` and Gemma 4 speaks Responses on `/openai/v1`. This is exactly why the
-    // path is per-model table data and never derived from the prefix.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
-    Route gemma3 = check resolveMantleRoute("google.gemma-3-27b-it", REGION);
-    Endpoint ep3 = check buildEndpoint(gemma3);
-    test:assertEquals(ep3.path, "/v1/chat/completions", "Gemma 3 uses Chat Completions, not Responses");
-    test:assertEquals(gemma3.api, CHAT_COMPLETIONS);
-
-    Route gemma4 = check resolveMantleRoute("google.gemma-4-31b", REGION);
-    Endpoint ep4 = check buildEndpoint(gemma4);
-    test:assertEquals(ep4.path, "/openai/v1/responses");
-    test:assertEquals(gemma4.api, RESPONSES);
-}
-
-@test:Config {}
-function testGemma3IsAlsoReachableOnTheRuntimeClass() returns error? {
-    // Gemma 3 is dual-homed, so the runtime class reaches it on `bedrock-runtime`
-    // with the `bedrock` signing scope. Nothing about the Mantle entry changes that.
+function testGemma3ResolvesOnTheRuntimeEndpoint() returns error? {
     Route runtime = check resolveRuntimeRoute("google.gemma-3-27b-it", REGION, CONVERSE);
     Endpoint ep = check buildEndpoint(runtime);
     test:assertEquals(ep.signingService, "bedrock");
     test:assertTrue(ep.host.startsWith("bedrock-runtime."));
-}
-
-@test:Config {}
-function testGemma4IsMantleOnlyAndSignsAsMantle() returns error? {
-    // The Gemma 4 support matrix marks bedrock-runtime / Converse / Invoke / Messages
-    // all NO, and there is no `RuntimeGoogleModelProvider` id for it. Signing
-    // scope `bedrock` against a Mantle-only model is a 403 on every single call.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-4-31b.html
-    foreach string id in ["google.gemma-4-31b", "google.gemma-4-e2b", "google.gemma-4-26b-a4b"] {
-        Route route = check resolveMantleRoute(id, REGION);
-        test:assertEquals(route.endpoint, MANTLE, id + " is served ONLY on bedrock-mantle");
-        Endpoint ep = check buildEndpoint(route);
-        test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
-        test:assertTrue(ep.host.startsWith("bedrock-mantle."), "wrong host for " + id);
-        // The card is explicit that this path differs from the `/v1/responses`
-        // other Mantle models use.
-        test:assertEquals(ep.path, "/openai/v1/responses", "wrong Mantle path for " + id);
-    }
-}
-
-@test:Config {}
-function testGemma4CanStillForceAToolOnItsResponsesPath() returns error? {
-    // NOT a structured-output refusal any more. `structuredOutputStyleFor` refuses
-    // only Mantle + MESSAGES; the OpenAI-compatible Mantle shapes keep tool forcing,
-    // and Grok 4.3's card — structured outputs supported on bedrock-mantle — is the
-    // evidence a blanket "Mantle has none" would contradict.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-3.html
-    Route route = check resolveMantleRoute("google.gemma-4-31b", REGION);
-    readonly & ModelConverter converter = check selectConverter(route);
-    test:assertEquals(structuredOutputStyleFor(route.endpoint, route.api, converter.toolChoice),
-            TOOL_FORCING);
 }
 
 @test:Config {}
@@ -246,60 +168,16 @@ function testGptOssModelIdWithColonIsEncodedOnTheWire() returns error? {
 }
 
 @test:Config {}
-function testAllKnownMantleOnlyModelsResolveOnTheMantleEndpoint() returns error? {
-    // Cross-checked against AWS's endpoint-availability table, which is the only
-    // page listing runtime-vs-mantle for every model in one place. Each id below is
-    // marked `bedrock-runtime: NO` there and verified against its own card.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-    map<string> mantleOnly = {
-        "openai.gpt-5.5": "/openai/v1/responses",
-        "openai.gpt-5.4": "/openai/v1/responses",
-        "openai.gpt-5.6-sol": "/openai/v1/responses",
-        "openai.gpt-5.6-terra": "/openai/v1/responses",
-        "openai.gpt-5.6-luna": "/openai/v1/responses",
-        "google.gemma-4-31b": "/openai/v1/responses",
-        "google.gemma-4-e2b": "/openai/v1/responses",
-        "google.gemma-4-26b-a4b": "/openai/v1/responses"
-    };
-    foreach [string, string] [id, expectedPath] in mantleOnly.entries() {
-        Route route = check resolveMantleRoute(id, REGION);
-        test:assertEquals(route.endpoint, MANTLE, id + " is served ONLY on bedrock-mantle");
-        Endpoint ep = check buildEndpoint(route);
-        test:assertEquals(ep.signingService, "bedrock-mantle", "wrong signing scope for " + id);
-        test:assertEquals(ep.path, expectedPath, "wrong Mantle path for " + id);
-    }
-}
-
-@test:Config {}
-function testDualHomedModelsResolveOnBothEndpointsWithNoTableOnTheRuntimeSide() returns error? {
-    // The asymmetry the design rests on: a Mantle route needs a table row because its
-    // base path is per-model data, while the SAME model on bedrock-runtime resolves
-    // with no lookup at all, because there the path is a pure function of the shape.
+function testRuntimeIdsResolveWithNoLookupTable() returns error? {
+    // On bedrock-runtime the path is a pure function of the shape, so any id
+    // resolves with no lookup at all.
     foreach string id in ["anthropic.claude-haiku-4-5", "anthropic.claude-opus-4-8",
             "anthropic.claude-opus-5", "anthropic.claude-sonnet-5", "zai.glm-5", "deepseek.v3.2",
             "mistral.mistral-large-3-675b-instruct", "qwen.qwen3-coder-480b-a35b-v1:0",
             "qwen.qwen3-32b-v1:0", "google.gemma-3-27b-it", "google.gemma-3-12b-it",
             "google.gemma-3-4b-it", "openai.gpt-oss-120b-1:0"] {
-        Route mantle = check resolveMantleRoute(id, REGION);
-        test:assertEquals(mantle.endpoint, MANTLE, id);
         Route runtime = check resolveRuntimeRoute(id, REGION, CONVERSE);
-        test:assertEquals(runtime.endpoint, RUNTIME, id);
         test:assertEquals((check buildEndpoint(runtime)).path,
                 string `/model/${encodePathSegment(id)}/converse`, id);
-    }
-}
-
-@test:Config {}
-function testRuntimeOnlyModelsHaveNoMantleEntryAtAll() returns error? {
-    // The table-driven safety: we reach Mantle only where we hold a verified wire
-    // shape, never by guessing. sonnet-4-6 is genuinely runtime-only (its card marks
-    // bedrock-mantle NO); nova-pro simply has no entry.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
-    foreach string id in ["anthropic.claude-sonnet-4-6", "amazon.nova-pro-v1:0",
-            "mistral.mistral-large-2407-v1:0"] {
-        test:assertFalse(MANTLE_CAPABLE.hasKey(id), id + " must have no Mantle entry");
-        test:assertTrue(resolveMantleRoute(id, REGION) is error, id + " must be refused on Mantle");
-        Route runtime = check resolveRuntimeRoute(id, REGION, CONVERSE);
-        test:assertEquals(runtime.endpoint, RUNTIME, id);
     }
 }

@@ -71,7 +71,7 @@ function testConverseGuardrailIsBodyField() returns error? {
     test:assertEquals(guardrailConfig["guardrailIdentifier"], "gr-1");
 }
 
-// ---- Invoke-Anthropic vs Mantle Messages encode ----
+// ---- Invoke-Anthropic vs Messages encode ----
 
 @test:Config {}
 function testInvokeAnthropicEmitsBedrockVersionBodyField() returns error? {
@@ -82,11 +82,11 @@ function testInvokeAnthropicEmitsBedrockVersionBodyField() returns error? {
 }
 
 @test:Config {}
-function testMantleMessagesOmitsBedrockVersionBodyField() returns error? {
-    // Mantle carries anthropic-version in the HEADER, not the body.
+function testNativeMessagesOmitsBedrockVersionBodyField() returns error? {
+    // The Messages API carries anthropic-version in the HEADER, not the body.
     InferenceParams params = {temperature: 0.5, maxTokens: 100};
-    map<json> body = check encodeMantleMessages(SAMPLE_SYSTEM, SAMPLE_MESSAGES, [], (), params).ensureType();
-    test:assertFalse(body.hasKey("anthropic_version"), "Mantle must NOT emit the Invoke body version field");
+    map<json> body = check encodeNativeMessages(SAMPLE_SYSTEM, SAMPLE_MESSAGES, [], (), params).ensureType();
+    test:assertFalse(body.hasKey("anthropic_version"), "Messages must NOT emit the Invoke body version field");
 }
 
 // ---- Converse decode: usage + stopReason always populated ----
@@ -398,7 +398,7 @@ function testConverseOmitsPerformanceConfigWhenUnsetOrFalse() returns error? {
 
 @test:Config {}
 function testResponsesDecodeDropsReasoningAndRefusalText() returns error? {
-    // GPT-5.x on Mantle returns `reasoning` items alongside `message` items, and a
+    // Responses can return `reasoning` items alongside `message` items, and a
     // `message` item's content can hold a `refusal` block. Both carry a `text`
     // field. Appending every block's text leaks the model's chain-of-thought into
     // ai:ChatAssistantMessage.content and hands it back to the caller as output.
@@ -478,8 +478,8 @@ function testIntFieldRejectsAFractionalDecimal() {
 
 @test:Config {}
 function testTemperatureIsOmittedFromEveryConverterWhenUnset() returns error? {
-    // Not a cosmetic default. Claude 4.7+/Opus 5/Sonnet 5/Mythos 5 and OpenAI's
-    // GPT-5.x reject `temperature` outright, so a module default made those model
+    // Not a cosmetic default. Claude 4.7+/Opus 5/Sonnet 5 and some reasoning models
+    // reject `temperature` outright, so a module default made those model
     // ids return 400 on every single request. Unset MUST mean absent on the wire.
     InferenceParams bare = {maxTokens: 100};
 

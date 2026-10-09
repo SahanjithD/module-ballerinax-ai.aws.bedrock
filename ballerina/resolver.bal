@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Route resolution: pure, no I/O. The provider class fixes the endpoint, so a model
-// never ends up on an endpoint the caller did not choose.
+// Route resolution: pure, no I/O.
 
 // Resolves a model id (bare, cross-region or ARN) for `bedrock-runtime`. An unknown id
 // is not an error: it is sent as given and AWS answers, so new models work at once.
@@ -23,7 +22,6 @@ isolated function resolveRuntimeRoute(string model, string region, ApiFamily api
     }
     [string, string?] [bareId, geoPrefix] = normalizeModelId(model);
     return {
-        endpoint: RUNTIME,
         api,
         bareModelId: bareId,
         geoPrefix,
@@ -31,49 +29,7 @@ isolated function resolveRuntimeRoute(string model, string region, ApiFamily api
         // https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html
         effectiveModelId: applyGeoPrefix(bareId, geoPrefix),
         region,
-        partition: partitionForRegion(region),
-        mantleEntry: ()
-    };
-}
-
-// Resolves a model id for `bedrock-mantle`. Stricter: the request path is per-model data,
-// so an id not in `MANTLE_CAPABLE` is refused by name.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
-isolated function resolveMantleRoute(string model, string region) returns Route|error {
-    // ARNs name bedrock-runtime resources; none exist on Mantle.
-    if isArn(model) {
-        return error(string `'${model}' is an ARN, which the bedrock-mantle endpoint does not accept: ` +
-            string `provisioned models, inference profiles and custom-model deployments are ` +
-            string `bedrock-runtime resources. Pass a bare Mantle model id, or use the matching ` +
-            string `Runtime*ModelProvider.`);
-    }
-
-    [string, string?] [bareId, geoPrefix] = normalizeModelId(model);
-    if geoPrefix is string {
-        // Refused rather than stripped: the caller asked for cross-region inference,
-        // which Mantle does not have.
-        // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-        return error(string `'${model}' carries the cross-region inference prefix '${geoPrefix}.', ` +
-            string `which the bedrock-mantle endpoint does not support — cross-region inference is ` +
-            string `available on bedrock-runtime only. Pass the bare id '${bareId}' for Mantle, or use ` +
-            string `the matching Runtime*ModelProvider to keep the prefix.`);
-    }
-
-    [string, MantleEntry] [canonicalId, entry] = check mantleEntryForBare(bareId);
-    // The model decides the API; the Mantle classes take no API argument. `apis` stays
-    // a list because some models serve more than one.
-    ApiFamily resolvedApi = entry.apis[0];
-
-    return {
-        endpoint: MANTLE,
-        api: resolvedApi,
-        bareModelId: canonicalId,
-        geoPrefix: (),
-        // Some models have a different id on each endpoint.
-        effectiveModelId: entry?.modelId ?: canonicalId,
-        region,
-        partition: partitionForRegion(region),
-        mantleEntry: entry
+        partition: partitionForRegion(region)
     };
 }
 
@@ -92,14 +48,12 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
     if arn.resourceType == "foundation-model" {
         [string, string?] [bareId, geoPrefix] = normalizeModelId(arn.resourceId);
         return {
-            endpoint: RUNTIME,
-            api,
+                api,
             bareModelId: bareId,
             geoPrefix,
             effectiveModelId: applyGeoPrefix(bareId, geoPrefix),
             region: arnRegion,
-            partition: arn.partition,
-            mantleEntry: ()
+            partition: arn.partition
         };
     }
 
@@ -120,32 +74,13 @@ isolated function resolveRuntimeArn(string arnStr, string region, ApiFamily api)
 
     // Any other ARN (provisioned model, inference profile, deployment) is sent as is.
     return {
-        endpoint: RUNTIME,
         api,
         bareModelId: arnStr,
         geoPrefix: (),
         effectiveModelId: arnStr,
         region: arnRegion,
-        partition: arn.partition,
-        mantleEntry: ()
+        partition: arn.partition
     };
-}
-
-isolated function mantleEntryForBare(string bareId) returns [string, MantleEntry]|error {
-    MantleEntry? entry = MANTLE_CAPABLE[bareId];
-    if entry is MantleEntry {
-        return [bareId, entry];
-    }
-    // Also accept the Mantle-side id, which is what the Mantle model card shows.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
-    foreach [string, MantleEntry] [key, candidate] in MANTLE_CAPABLE.entries() {
-        if candidate?.modelId == bareId {
-            return [key, candidate];
-        }
-    }
-    return error(string `model '${bareId}' is not available on bedrock-mantle (no known request ` +
-        string `path). Use the matching Runtime*ModelProvider, or upgrade the module if AWS ` +
-        string `has since added it to bedrock-mantle`);
 }
 
 // Splits a cross-region geo prefix off: [bareId, geoPrefix?].

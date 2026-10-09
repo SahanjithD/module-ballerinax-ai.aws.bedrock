@@ -23,7 +23,7 @@ import ballerinax/aws.auth;
 
 # A Bedrock API key.
 public type BearerToken record {|
-    // `Authorization: Bearer`, or `x-api-key` on the Mantle Messages path.
+    // `Authorization: Bearer`, or `x-api-key` on the Messages API.
     # The Bedrock API key
     string apiKey;
 |};
@@ -59,25 +59,24 @@ public type AdditionalRequestFields record {|
     json...;
 |};
 
-// `bedrock-runtime` serves all five; `bedrock-mantle` only the last three.
+// All five are served on `bedrock-runtime`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
 
 # A Bedrock API a model provider can call.
 public enum ApiFamily {
-    // `POST /model/{id}/converse`. `bedrock-runtime` only.
+    // `POST /model/{id}/converse`.
     # Bedrock's Converse API, one request format for every model
     CONVERSE,
-    // `POST /model/{id}/invoke`, vendor-keyed. `bedrock-runtime` only.
+    // `POST /model/{id}/invoke`, vendor-keyed.
     # InvokeModel, in the model's own request format
     INVOKE,
-    // `/openai/v1/...` on `bedrock-runtime`; `/v1/...` or `/openai/v1/...` on
-    // `bedrock-mantle`, per model.
+    // `POST /openai/v1/chat/completions`.
     # OpenAI-compatible Chat Completions API
     CHAT_COMPLETIONS,
-    // `/openai/v1/responses` on `bedrock-runtime`.
+    // `POST /openai/v1/responses`.
     # OpenAI-compatible Responses API
     RESPONSES,
-    // `/anthropic/v1/messages` on both endpoints.
+    // `POST /anthropic/v1/messages`.
     # Anthropic-compatible Messages API
     MESSAGES
 }
@@ -124,7 +123,7 @@ public enum Effort {
 
 # How much an OpenAI model reasons before answering. Accepted values vary by model.
 public enum ReasoningEffort {
-    # No reasoning. GPT-5.x only
+    # No reasoning. Support varies by model
     REASONING_NONE = "none",
     # Minimal reasoning. Not accepted by current models
     REASONING_MINIMAL = "minimal",
@@ -134,7 +133,7 @@ public enum ReasoningEffort {
     REASONING_MEDIUM = "medium",
     # Deep reasoning
     REASONING_HIGH = "high",
-    # Deeper than `high`. GPT-5.x only
+    # Deeper than `high`. Support varies by model
     REASONING_XHIGH = "xhigh",
     # No limit on depth. Not accepted by current models
     REASONING_MAX = "max"
@@ -143,19 +142,6 @@ public enum ReasoningEffort {
 // ============================================================================
 // Module-private: routing.
 // ============================================================================
-
-# Which Bedrock endpoint a route targets, fixed by the provider class. Decides the host,
-# the SigV4 signing name and the IAM namespace.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-enum BedrockEndpoint {
-    # `bedrock-runtime.{region}.amazonaws.com`, signing name `bedrock`, IAM
-    # `bedrock:InvokeModel`. AWS's recommended endpoint for new applications.
-    RUNTIME,
-    # `bedrock-mantle.{region}.api.aws`, signing name `bedrock-mantle`, IAM
-    # `bedrock-mantle:CreateInference` — a SEPARATE namespace, which is why
-    # credentials that work on the runtime endpoint can still 403 here.
-    MANTLE
-}
 
 # How a converter forces one named tool. A property of the converter, not the route:
 # Nova on InvokeModel uses the Converse form, and Mistral chat forces with `"any"`.
@@ -202,45 +188,22 @@ enum GuardrailAction {
     NONE
 }
 
-# A Mantle model's base path, APIs and wire id. Unlike bedrock-runtime, the base path
-# differs per model even within one vendor (gpt-oss `/v1`, GPT-5.6 `/openai/v1`), so it
-# has to be recorded.
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
-# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
-type MantleEntry record {|
-    # The base path — the ONE per-model fact here. `/v1`, `/openai/v1` or
-    # `/anthropic/v1`. The full request path is this plus the API family's own suffix,
-    # which IS derivable (see `mantlePathFor`).
-    string basePath;
-    # The shapes this model serves on that base path. More than one is normal —
-    # gpt-oss serves both Responses and Chat Completions on `/v1` — and the `api`
-    # argument selects among them. The first entry is the default.
-    ApiFamily[] apis;
-    # The Mantle id, when it differs from the bedrock-runtime one (gpt-oss drops `-1:0`).
-    string modelId?;
-|};
-
 # The resolved route, produced once at construction; the endpoint, converter and
 # transport all read from it.
 type Route record {|
-    # Which endpoint this route targets. Fixed by the provider class.
-    BedrockEndpoint endpoint;
     # The resolved wire dialect.
     ApiFamily api;
     # Lookup key with any CRIS geo prefix stripped, e.g. `anthropic.claude-opus-4-8`.
     string bareModelId;
-    # The stripped cross-region prefix, put back on the wire. Always `()` on Mantle.
+    # The stripped cross-region prefix, put back on the wire.
     string? geoPrefix;
-    # The id that goes on the wire — CRIS-prefixed on `bedrock-runtime`, the Mantle
-    # id on Mantle, or the raw ARN for opaque ARNs.
+    # The id that goes on the wire: CRIS-prefixed, or the raw ARN for opaque ARNs.
     string effectiveModelId;
     # Region. An ARN's region segment overrides `config.region`.
     string region;
     # Partition: `aws`, `aws-cn`, `aws-us-gov`, or one of the isolated/EU Sovereign
     # partitions — see `partitionForRegion`.
     string partition;
-    # Present only on a MANTLE route.
-    MantleEntry? mantleEntry;
 |};
 
 // ============================================================================
@@ -263,10 +226,10 @@ type InferenceParams record {|
     # Converse `additionalModelRequestFields` passthrough.
     AdditionalRequestFields additionalModelRequestFields?;
     # Processing tier: Converse `serviceTier` body field, or the Invoke
-    # `X-Amzn-Bedrock-Service-Tier` header. Refused on Mantle at construction.
+    # `X-Amzn-Bedrock-Service-Tier` header. Refused on the other APIs at construction.
     ServiceTier serviceTier?;
     # Converse `performanceConfig.latency = "optimized"`, or the Invoke
-    # `X-Amzn-Bedrock-PerformanceConfig-Latency` header. Refused on Mantle.
+    # `X-Amzn-Bedrock-PerformanceConfig-Latency` header. Refused on the other APIs.
     boolean latencyOptimized?;
     # Anthropic thinking. Emitted as a top-level `thinking` body field on the Anthropic
     # Messages dialects, and through `additionalModelRequestFields` on Converse

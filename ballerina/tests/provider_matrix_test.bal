@@ -117,10 +117,7 @@ function providerCases() returns ProviderCase[] => [
     ["RuntimeGoogle CONVERSE", false], ["RuntimeGoogle INVOKE", false], ["RuntimeGoogle CHAT_COMPLETIONS", false],
     ["RuntimeDeepSeek CONVERSE", false], ["RuntimeDeepSeek INVOKE", false],
     ["RuntimeDeepSeek CHAT_COMPLETIONS", false],
-    ["ConverseModelProvider", false],
-    // Mantle Anthropic Messages has no structured-output path; typed generate() is refused.
-    ["MantleAnthropic", true], ["MantleOpenAI GPT-5.4", false], ["MantleOpenAI gpt-oss", false],
-    ["MantleMistral", false], ["MantleQwen", false], ["MantleGoogle", false], ["MantleDeepSeek", false]
+    ["ConverseModelProvider", false]
 ];
 
 function matrixProvider(string name) returns ai:ModelProvider|error {
@@ -145,7 +142,7 @@ function matrixProvider(string name) returns ai:ModelProvider|error {
             return new RuntimeOpenAIModelProvider(GPT_OSS_120B, TEST_CREDS, "us-east-1", CHAT_COMPLETIONS, ep);
         }
         "RuntimeOpenAI RESPONSES" => {
-            return new RuntimeOpenAIModelProvider("us.openai.gpt-5.6-sol", TEST_CREDS, "us-east-1", RESPONSES, ep);
+            return new RuntimeOpenAIModelProvider(GPT_6_SOL, TEST_CREDS, "us-east-1", RESPONSES, ep);
         }
         "RuntimeAmazon CONVERSE" => {
             return new RuntimeAmazonModelProvider(NOVA_PRO, TEST_CREDS, "us-east-1", endpoint = ep);
@@ -191,27 +188,6 @@ function matrixProvider(string name) returns ai:ModelProvider|error {
         }
         "ConverseModelProvider" => {
             return new ConverseModelProvider("us.meta.llama3-3-70b-instruct-v1:0", TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleAnthropic" => {
-            return new MantleAnthropicModelProvider(MANTLE_CLAUDE_SONNET_5, TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleOpenAI GPT-5.4" => {
-            return new MantleOpenAIModelProvider(MANTLE_GPT_5_4, TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleOpenAI gpt-oss" => {
-            return new MantleOpenAIModelProvider(MANTLE_GPT_OSS_120B, TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleMistral" => {
-            return new MantleMistralModelProvider(MANTLE_MISTRAL_LARGE_3, TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleQwen" => {
-            return new MantleQwenModelProvider(MANTLE_QWEN3_32B, TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleGoogle" => {
-            return new MantleGoogleModelProvider(MANTLE_GEMMA_3_27B_IT, TEST_CREDS, "us-east-1", ep);
-        }
-        "MantleDeepSeek" => {
-            return new MantleDeepSeekModelProvider(MANTLE_DEEPSEEK_V3_2, TEST_CREDS, "us-east-1", ep);
         }
     }
     return error(string `no provider case named '${name}'`);

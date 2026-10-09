@@ -110,13 +110,7 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             "RuntimeMistralModelProvider",
             "RuntimeQwenModelProvider",
             "RuntimeGoogleModelProvider",
-            "RuntimeDeepSeekModelProvider",
-            "MantleAnthropicModelProvider",
-            "MantleOpenAIModelProvider",
-            "MantleMistralModelProvider",
-            "MantleQwenModelProvider",
-            "MantleGoogleModelProvider",
-            "MantleDeepSeekModelProvider"
+            "RuntimeDeepSeekModelProvider"
     };
 
     private final AiAwsBedrockCodeModifier.AnalysisData analysisData;

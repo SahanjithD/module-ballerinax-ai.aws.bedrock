@@ -21,42 +21,17 @@ import ballerina/test;
 final BedrockAuthConfig TEST_CREDS = {accessKeyId: "AKIATEST", secretAccessKey: "secret"};
 
 // ---------------------------------------------------------------------------
-// Guardrails. The endpoint is now fixed by the CLASS, so `guardrail` does not even
-// exist on `CommonMantleConfig` — a guardrail on a Mantle class is a COMPILE error
-// and cannot be asserted from here. What remains testable, and what actually
-// decides the outcome, is the shared guard.
+// Guardrails: refused on the APIs that would not apply them.
 // ---------------------------------------------------------------------------
 
 @test:Config {}
-function testGuardrailIsRefusedOnEveryMantleRoute() {
-    // AWS's feature-availability table marks Guardrails supported on bedrock-runtime
-    // and unsupported on bedrock-mantle — for every shape Mantle serves.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-    GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"};
-    ApiFamily[] apis = [MESSAGES, CHAT_COMPLETIONS, RESPONSES];
-    foreach ApiFamily api in apis {
-        ai:Error? e = guardGuardrailSupport(MANTLE, api, guardrail);
-        test:assertTrue(e is ai:Error, string `Mantle/${api} must refuse a guardrail`);
-        if e is ai:Error {
-            test:assertTrue(e.message().includes("ApplyGuardrail"), e.message());
-        }
-    }
-}
-
-@test:Config {}
-function testGuardrailIsRefusedOnTheResponsesShapeOnEitherEndpoint() {
-    // Stated verbatim: "Guardrails don't apply to the Responses API. To apply a
-    // guardrail to a GPT model on this endpoint, call the Converse API instead."
+function testGuardrailIsRefusedOnTheResponsesApi() {
+    // "Guardrails don't apply to the Responses API."
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
-    GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"};
-    BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
-    foreach BedrockEndpoint endpoint in endpoints {
-        ai:Error? e = guardGuardrailSupport(endpoint, RESPONSES, guardrail);
-        test:assertTrue(e is ai:Error, string `${endpoint}/RESPONSES must refuse a guardrail`);
-    }
-    ai:Error? runtimeResponses = guardGuardrailSupport(RUNTIME, RESPONSES, guardrail);
-    if runtimeResponses is ai:Error {
-        test:assertTrue(runtimeResponses.message().includes("Responses"), runtimeResponses.message());
+    ai:Error? e = guardGuardrailSupport(RESPONSES, {guardrailIdentifier: "gr-1", guardrailVersion: "1"});
+    test:assertTrue(e is ai:Error, "RESPONSES must refuse a guardrail");
+    if e is ai:Error {
+        test:assertTrue(e.message().includes("Responses"), e.message());
     }
 }
 
@@ -67,7 +42,7 @@ function testGuardrailIsRefusedOnTheMessagesShapeAsAPolicyChoice() {
     // nothing about `/anthropic/v1/messages`. Accepting them there and quietly not
     // applying them would leave a caller believing traffic is screened when it is
     // not, so the module refuses instead. Reversible the moment AWS documents it.
-    ai:Error? e = guardGuardrailSupport(RUNTIME, MESSAGES,
+    ai:Error? e = guardGuardrailSupport(MESSAGES,
             {guardrailIdentifier: "gr-1", guardrailVersion: "1"});
     test:assertTrue(e is ai:Error);
     if e is ai:Error {
@@ -83,20 +58,16 @@ function testGuardrailIsAllowedOnConverseInvokeAndChatCompletions() {
     GuardrailConfig guardrail = {guardrailIdentifier: "gr-1", guardrailVersion: "1"};
     ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS];
     foreach ApiFamily api in apis {
-        test:assertTrue(guardGuardrailSupport(RUNTIME, api, guardrail) is (),
-                string `RUNTIME/${api} must accept a guardrail`);
+        test:assertTrue(guardGuardrailSupport(api, guardrail) is (), string `${api} must accept a guardrail`);
     }
 }
 
 @test:Config {}
 function testNoGuardrailIsNeverRefusedAnywhere() {
     // The guard keys on the guardrail being SET, not on the route.
-    BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
-    foreach BedrockEndpoint endpoint in endpoints {
-        ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-        foreach ApiFamily api in apis {
-            test:assertTrue(guardGuardrailSupport(endpoint, api, ()) is ());
-        }
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiFamily api in apis {
+        test:assertTrue(guardGuardrailSupport(api, ()) is ());
     }
 }
 
@@ -122,15 +93,12 @@ function testGuardrailOnARefusingRuntimeShapeFailsAtConstruction() returns error
 // ---------------------------------------------------------------------------
 
 @test:Config {}
-function testMantleOnChinaPartitionFailsAtConstruction() {
-    // Mantle's `api.aws` host is not partition-templated, and Bedrock is not offered
-    // in `aws-cn` on any endpoint at all.
-    MantleAnthropicModelProvider|ai:Error provider = new (
-            MANTLE_CLAUDE_OPUS_5, TEST_CREDS, "cn-north-1");
+function testChinaPartitionFailsAtConstruction() {
+    // Bedrock is not offered in `aws-cn`.
+    RuntimeAnthropicModelProvider|ai:Error provider = new ("anthropic.claude-opus-5", TEST_CREDS, "cn-north-1");
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
-        test:assertTrue(provider.message().toLowerAscii().includes("partition") ||
-                provider.message().toLowerAscii().includes("mantle"), provider.message());
+        test:assertTrue(provider.message().includes("China"), provider.message());
     }
 }
 
@@ -171,49 +139,13 @@ function testTheVendorAgnosticClassConstructsOnAnyId() returns error? {
     ConverseModelProvider _ = check new ("acme.brand-new-model-v9", TEST_CREDS, "us-east-1");
 }
 
-// ---------------------------------------------------------------------------
-// The endpoint is the CLASS's. An id the other endpoint owns is either sent
-// verbatim (runtime, which is model-agnostic) or refused by name (Mantle, whose
-// request path is per-model table data).
-// ---------------------------------------------------------------------------
-
 @test:Config {}
-function testAMantleOnlyIdOnARuntimeClassJustGoesOnTheWire() returns error? {
-    // NOT an error. Converse is model-agnostic — an id this module has never heard
-    // of goes on the wire as-is and AWS answers for it, which is what keeps a model
-    // AWS ships tomorrow usable today. The old resolver's "unknown id → Mantle by
-    // elimination" failure mode is unrepresentable now.
-    RuntimeOpenAIModelProvider _ = check new ("openai.gpt-5.5", TEST_CREDS, "us-east-1");
-    Route route = check resolveRuntimeRoute("openai.gpt-5.5", "us-east-1", CONVERSE);
-    test:assertEquals(route.endpoint, RUNTIME);
-    test:assertEquals(route.effectiveModelId, "openai.gpt-5.5");
-    test:assertEquals(route.mantleEntry, ());
-}
-
-@test:Config {}
-function testANonMantleIdOnAMantleClassIsACleanConstructionError() {
-    // Sonnet 4.6's card marks bedrock-mantle NO, so there is no path to build and
-    // nothing to guess at. The refusal must name the model.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-    MantleAnthropicModelProvider|ai:Error provider = new (
-            "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1");
-    test:assertTrue(provider is ai:Error);
-    if provider is ai:Error {
-        test:assertTrue(provider.message().includes("anthropic.claude-sonnet-4-6"), provider.message());
-        test:assertTrue(provider.message().includes("bedrock-mantle"), provider.message());
-    }
-}
-
-@test:Config {}
-function testAnUnknownIdOnAMantleClassIsRefusedRatherThanGuessed() {
-    // The table is the only source of a Mantle request path. Absence is a refusal,
-    // never a fabricated URL.
-    MantleOpenAIModelProvider|ai:Error provider = new (
-            "acme.totally-new", TEST_CREDS, "us-east-1");
-    test:assertTrue(provider is ai:Error);
-    if provider is ai:Error {
-        test:assertTrue(provider.message().includes("acme.totally-new"), provider.message());
-    }
+function testAnUnknownIdOnARuntimeClassJustGoesOnTheWire() returns error? {
+    // Not an error: an id this module does not know goes on the wire as is and AWS
+    // answers for it, so a new model works at once.
+    RuntimeOpenAIModelProvider _ = check new ("openai.brand-new-model", TEST_CREDS, "us-east-1");
+    Route route = check resolveRuntimeRoute("openai.brand-new-model", "us-east-1", CONVERSE);
+    test:assertEquals(route.effectiveModelId, "openai.brand-new-model");
 }
 
 // ---------------------------------------------------------------------------

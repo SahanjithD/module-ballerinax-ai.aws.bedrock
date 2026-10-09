@@ -10,17 +10,11 @@ This module provides native [Ballerina `ai`](https://central.ballerina.io/baller
 embedding providers for **AWS Bedrock**, implementing the standard `ai:ModelProvider` and
 `ai:EmbeddingProvider` contracts.
 
-Bedrock exposes LLMs through **two endpoints**, and this module gives each its own provider classes:
+The model providers call the `bedrock-runtime` endpoint, which AWS recommends for new applications:
 
 | Endpoint | Inference APIs | Signing scope | IAM |
 | --- | --- | --- | --- |
-| `bedrock-runtime.{region}.amazonaws.com` **(recommended)** | Converse, InvokeModel, Chat Completions, Responses, Messages | `bedrock` | `bedrock:InvokeModel` |
-| `bedrock-mantle.{region}.api.aws` (compatibility) | Chat Completions, Responses, Messages | `bedrock-mantle` | `bedrock-mantle:CreateInference` |
-
-AWS recommends `bedrock-runtime` for new applications. `bedrock-mantle` remains the only way to reach
-some models — GPT-5.4, GPT-5.5 and Gemma 4 among them — and it authorizes under a **separate IAM
-namespace**, which is why the endpoint is part of the class you construct rather than something the
-module picks for you.
+| `bedrock-runtime.{region}.amazonaws.com` | Converse, InvokeModel, Chat Completions, Responses, Messages | `bedrock` | `bedrock:InvokeModel` |
 
 For usage details, the routing table, and the full provider list, see the
 [module documentation](ballerina/README.md).

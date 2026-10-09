@@ -108,9 +108,8 @@ function testReasoningEffortEnumMembersReachTheWireAsBareValues() returns error?
 
 @test:Config {}
 function testReasoningEffortMinimalIsNotRefusedByTheModule() returns error? {
-    // `minimal` is the one value the two OpenAI families disagree on: gpt-oss accepts
-    // it, every gpt-5.x answers `400 Invalid value: 'minimal'`. That is a per-MODEL
-    // contract AWS documents nowhere, so the module forwards it and lets the endpoint
+    // Which reasoning values a model accepts is a per-MODEL contract AWS documents
+    // nowhere, so the module forwards it and lets the endpoint
     // refuse — a hard-coded per-model table here would only go stale. The enum names
     // the value; it does not promise every model takes it.
     readonly & InferenceParams params =
@@ -122,11 +121,6 @@ function testReasoningEffortMinimalIsNotRefusedByTheModule() returns error? {
 // ============================================================================
 // `serviceTier` / `latencyOptimized` — honoured on Converse AND Invoke, refused on
 // every vendor-native shape. Never dropped.
-//
-// On the Mantle CLASSES these two fields do not exist at all: `CommonMantleConfig`
-// omits them, so setting one is a COMPILE error rather than the construction-time
-// refusal it used to be. That is the payoff of splitting the surface by endpoint,
-// and it is why the refusal tests below are all runtime-class tests.
 // ============================================================================
 
 @test:Config {}
@@ -234,18 +228,13 @@ function testExplicitlyDisablingLatencyOptimizationIsNotRefusedAnywhere() return
 function testConfiguredStopSequencesAreRefusedOnTheResponsesDialect() {
     // The Responses API has no stop-sequence parameter. The encoder already refused a
     // per-call `stop`; a CONFIGURED one now fails at construction, before any I/O.
-    MantleOpenAIModelProvider|ai:Error provider = new (
-            MANTLE_GPT_5_6_SOL, TEST_CREDS, "us-east-1", stopSequences = ["END"]);
+    RuntimeOpenAIModelProvider|ai:Error provider = new (
+            GPT_6_SOL, TEST_CREDS, "us-east-1", RESPONSES, stopSequences = ["END"]);
     test:assertTrue(provider is ai:Error);
     if provider is ai:Error {
         test:assertTrue(provider.message().includes("stopSequences"), provider.message());
         test:assertTrue(provider.message().includes("OpenAI Responses"), provider.message());
     }
-    // ...and the same refusal on the runtime endpoint's Responses shape, because it
-    // is the DIALECT that lacks the field, not the endpoint.
-    RuntimeOpenAIModelProvider|ai:Error runtime = new (
-            GPT_OSS_120B, TEST_CREDS, "us-east-1", RESPONSES, stopSequences = ["END"]);
-    test:assertTrue(runtime is ai:Error);
 }
 
 @test:Config {}
@@ -286,7 +275,7 @@ function testThePassthroughIsSplicedOnTheAnthropicMessagesDialects() returns err
     test:assertEquals(invoke["anthropic_beta"], ["context-1m-2025-08-07"]);
     test:assertEquals(invoke["anthropic_version"], "bedrock-2023-05-31");
 
-    map<json> messages = <map<json>>check encodeMantleMessages((), [userText("hi")], [], (), params);
+    map<json> messages = <map<json>>check encodeNativeMessages((), [userText("hi")], [], (), params);
     test:assertEquals(messages["top_k"], 40);
     test:assertFalse(messages.hasKey("anthropic_version"), messages.toJsonString());
 }
@@ -353,17 +342,9 @@ function testDualstackIsRefusedOnBothKnowledgeBaseAgentPlanes() returns error? {
 }
 
 @test:Config {}
-function testDualstackIsStillHonouredWhereItExists() returns error? {
-    // Mantle is the one host family that HAS a dualstack host, and the module forces
-    // it there. The guard must not touch that.
-    MantleAnthropicModelProvider _ = check new (
-            MANTLE_CLAUDE_OPUS_5, TEST_CREDS, "us-east-1", endpoint = {dualstack: true});
-}
-
-@test:Config {}
 function testACustomEndpointStillOutranksTheDualstackGuard() returns error? {
     // A concrete origin means there is no derived host to validate — the same
-    // doctrine the China-partition and Mantle+FIPS guards follow. It is also the
+    // doctrine the China-partition guard follows. It is also the
     // escape hatch if AWS publishes a dualstack host this guard does not know about.
     RuntimeAnthropicModelProvider _ = check new (
             "anthropic.claude-sonnet-4-6", TEST_CREDS, "us-east-1", CONVERSE,

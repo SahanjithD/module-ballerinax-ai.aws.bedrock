@@ -208,34 +208,17 @@ final readonly & json CONVERSE_OK = {
 @test:Config {}
 function testStructuredOutputStyleIsNoneWhenTheDialectCannotForceATool() {
     // Mistral text completion has no tool-calling at all, so neither mechanism is
-    // available regardless of endpoint or shape.
-    test:assertEquals(structuredOutputStyleFor(RUNTIME, INVOKE, NO_TOOL_CHOICE), NO_STRUCTURED_OUTPUT);
-    test:assertEquals(structuredOutputStyleFor(MANTLE, CHAT_COMPLETIONS, NO_TOOL_CHOICE),
-            NO_STRUCTURED_OUTPUT);
+    // available.
+    test:assertEquals(structuredOutputStyleFor(NO_TOOL_CHOICE), NO_STRUCTURED_OUTPUT);
 }
 
 @test:Config {}
-function testStructuredOutputStyleIsNoneOnMantleMessagesOnly() {
-    // Anthropic Messages on bedrock-mantle rejects `output_config.format` AND
-    // `strict: true` on a tool, so tool forcing does not rescue it either. Every
-    // OTHER Mantle shape keeps tool forcing — "Mantle has no structured output" as a
-    // blanket rule is wrong, and Grok 4.3's card is the counter-example.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-structured-outputs.html
-    test:assertEquals(structuredOutputStyleFor(MANTLE, MESSAGES, ANTHROPIC_TOOL_CHOICE),
-            NO_STRUCTURED_OUTPUT);
-    test:assertEquals(structuredOutputStyleFor(MANTLE, CHAT_COMPLETIONS, OPENAI_CHAT_TOOL_CHOICE),
-            TOOL_FORCING);
-    test:assertEquals(structuredOutputStyleFor(MANTLE, RESPONSES, RESPONSES_TOOL_CHOICE), TOOL_FORCING);
-}
-
-@test:Config {}
-function testMessagesOnTheRuntimeEndpointStillDoesToolForcing() {
-    // The refusal is keyed on the ENDPOINT + shape pair, not the shape alone: the
-    // same Anthropic Messages dialect on `bedrock-runtime` is not the surface AWS
-    // documents the rejection for.
-    test:assertEquals(structuredOutputStyleFor(RUNTIME, MESSAGES, ANTHROPIC_TOOL_CHOICE), TOOL_FORCING);
-    test:assertEquals(structuredOutputStyleFor(RUNTIME, CONVERSE, CONVERSE_TOOL_CHOICE), TOOL_FORCING);
-    test:assertEquals(structuredOutputStyleFor(RUNTIME, INVOKE, ANTHROPIC_TOOL_CHOICE), TOOL_FORCING);
+function testEveryToolCapableDialectUsesToolForcing() {
+    ToolChoiceStyle[] styles = [CONVERSE_TOOL_CHOICE, ANTHROPIC_TOOL_CHOICE, OPENAI_CHAT_TOOL_CHOICE,
+        RESPONSES_TOOL_CHOICE, MISTRAL_TOOL_CHOICE];
+    foreach ToolChoiceStyle style in styles {
+        test:assertEquals(structuredOutputStyleFor(style), TOOL_FORCING, style);
+    }
 }
 
 @test:Config {}
@@ -244,34 +227,11 @@ function testNativeOutputConfigIsImplementedButNotYetSelected() {
     // the one live call that would settle `outputConfig` support is outstanding.
     // Pinned so flipping the single return in `structuredOutputStyleFor` is a
     // deliberate act with a failing test behind it, not a silent edit.
-    BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
-    foreach BedrockEndpoint endpoint in endpoints {
-        ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
-        foreach ApiFamily api in apis {
-            test:assertNotEquals(structuredOutputStyleFor(endpoint, api, CONVERSE_TOOL_CHOICE),
-                    NATIVE_OUTPUT_CONFIG, string `${endpoint}/${api} must not select the native member yet`);
-        }
-    }
-}
-
-@test:Config {}
-function testMantleMessagesRefusesStructuredOutputNamingTheModel() returns error? {
-    // The one route with no typed-generation path at all. It must fail locally,
-    // before any I/O, and the message must name the model and the dialect.
-    CannedTransport transport = new (MESSAGES_OK);
-    anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, MESSAGES,
-            NATIVE_MESSAGES_CONVERTER, transport, "anthropic.claude-opus-5", {}, GEN_PARAMS,
-            `Rate this`, Review);
-    test:assertEquals(transport.requests().length(), 0, "the refusal must happen before any I/O");
-    test:assertTrue(result is ai:Error, "a typed target on Mantle Messages must be a clean error");
-    if result is ai:Error {
-        string message = result.message();
-        test:assertTrue(message.includes("anthropic.claude-opus-5"),
-                "the error must name the model; got: " + message);
-        test:assertTrue(message.includes("Anthropic Messages"),
-                "the error must name the dialect that lacks the capability; got: " + message);
-        test:assertTrue(message.includes("CONVERSE"),
-                "the error must point at the way out; got: " + message);
+    ToolChoiceStyle[] styles = [CONVERSE_TOOL_CHOICE, ANTHROPIC_TOOL_CHOICE, OPENAI_CHAT_TOOL_CHOICE,
+        RESPONSES_TOOL_CHOICE, MISTRAL_TOOL_CHOICE, NO_TOOL_CHOICE];
+    foreach ToolChoiceStyle style in styles {
+        test:assertNotEquals(structuredOutputStyleFor(style), NATIVE_OUTPUT_CONFIG,
+                string `${style} must not select the native member yet`);
     }
 }
 
@@ -288,8 +248,7 @@ function testAStringTargetIsNeverRefusedEvenWithNoStructuredOutput() returns err
 
 @test:Config {}
 function testMistralTextDialectRefusesStructuredOutput() returns error? {
-    // INVOKE on bedrock-runtime, so the endpoint carries structured output — the
-    // refusal must come from the CONVERTER having no tool-calling at all.
+    // The refusal must come from the CONVERTER having no tool-calling at all.
     CannedTransport transport = new (CONVERSE_OK);
     anydata|ai:Error result = structuredGenerate(NO_STRUCTURED_OUTPUT, INVOKE,
             INVOKE_MISTRAL_TEXT_CONVERTER, transport,
@@ -313,10 +272,9 @@ function testMistralTextDialectRejectsToolsRatherThanDroppingThem() {
 // ---- M1: where a forced tool is a 400, the tool is offered unforced ----
 
 @test:Config {}
-function testForcedToolRefusalIsKeyedOnTheBareIdAcrossBothEndpoints() {
+function testForcedToolRefusalIsKeyedOnTheBareId() {
     // Anthropic states the restriction for Claude Opus 5.5 and Claude Fable 5.1. It
-    // must match whether the caller passed the CRIS-prefixed runtime id or the bare
-    // Mantle one — the same model either way.
+    // must match whether the caller passed a CRIS-prefixed id or the bare one.
     // https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5
     foreach string id in ["anthropic.claude-opus-5-5", "us.anthropic.claude-opus-5-5",
             "global.anthropic.claude-opus-5-5", "anthropic.claude-fable-5-1",

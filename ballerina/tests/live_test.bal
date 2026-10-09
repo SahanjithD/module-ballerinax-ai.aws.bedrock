@@ -54,12 +54,6 @@ configurable string liveConverseModelArn = "";
 // A failure here is an availability fact about your region, not a module defect.
 configurable boolean liveFipsEnabled = false;
 
-// Whether the account has bedrock-mantle access. Mantle needs the separate
-// `bedrock-mantle:CreateInference` IAM action, so an account with working
-// `bedrock:InvokeModel` permissions may still 403 here — that is a real access
-// gap, not a module defect, hence its own switch.
-configurable boolean liveMantleEnabled = false;
-
 // Skips the whole suite when nothing is configured.
 function liveCredentials() returns BedrockAuthConfig? {
     if liveAccessKeyId == "" || liveSecretAccessKey == "" {
@@ -122,39 +116,6 @@ function testLiveGenerateOnConverseReturnsTheRecord() returns error? {
     LiveFruit fruit = check provider->generate(`Name one common fruit and its colour.`);
     test:assertTrue(fruit.name.trim().length() > 0, "generate() returned an empty name");
     test:assertTrue(fruit.colour.trim().length() > 0, "generate() returned an empty colour");
-}
-
-// ---- Mantle via openai.gpt-5.4 ----
-
-@test:Config {groups: ["live"], enable: liveTestsEnabled}
-function testLiveMantleChat() returns error? {
-    BedrockAuthConfig? creds = liveCredentials();
-    if creds is () || !liveMantleEnabled {
-        return;
-    }
-    // Mantle is a different host, a different wire dialect, a different SigV4
-    // signing scope, and a different IAM namespace. Nothing about this path is
-    // shared with Converse except the credentials.
-    ai:ModelProvider provider = check new MantleOpenAIModelProvider(MANTLE_GPT_5_4, creds, liveRegion);
-    ai:ChatAssistantMessage response = check provider->chat({role: ai:USER, content: "Say OK."});
-    test:assertTrue((response.content ?: "").trim().length() > 0);
-}
-
-@test:Config {groups: ["live"], enable: liveTestsEnabled}
-function testLiveMantleRefusesStructuredOutputButReturnsText() returns error? {
-    BedrockAuthConfig? creds = liveCredentials();
-    if creds is () || !liveMantleEnabled {
-        return;
-    }
-    MantleAnthropicModelProvider provider = check new (MANTLE_CLAUDE_OPUS_5, creds, liveRegion);
-
-    // A typed target must be refused locally, without spending a call.
-    LiveFruit|ai:Error typed = provider->generate(`Name one common fruit and its colour.`);
-    test:assertTrue(typed is ai:Error, "Mantle must refuse a typed target");
-
-    // ...but a string target still works.
-    string text = check provider->generate(`Say OK.`);
-    test:assertTrue(text.trim().length() > 0);
 }
 
 // ---- Embeddings: Titan V2 + Cohere Embed English v3 ----
@@ -294,35 +255,15 @@ function testLiveConverseEffortIsAccepted() returns error? {
             "Converse rejected the passthrough output_config.effort form too — the finding needs revisiting");
 }
 
-@test:Config {groups: ["live"], enable: liveTestsEnabled}
-function testLiveAdaptiveThinkingOnTheMessagesDialect() returns error? {
-    BedrockAuthConfig? creds = liveCredentials();
-    if creds is () || !liveMantleEnabled {
-        return;
-    }
-    // The regression this whole change exists for: `thinking` used to be folded into
-    // `additionalModelRequestFields`, which the Anthropic Messages encoder ignores —
-    // so the knob was silently dropped on this exact route. It is now a top-level
-    // body field, and `output_config.effort` rides beside it.
-    ai:ModelProvider provider = check new MantleAnthropicModelProvider(
-            MANTLE_CLAUDE_HAIKU_4_5, creds, liveRegion,
-            thinking = {mode: ADAPTIVE},
-            effort = EFFORT_LOW);
-    ai:ChatAssistantMessage response = check provider->chat([
-        {role: ai:USER, content: "Reply with the single word: ok"}
-    ]);
-    test:assertTrue((response.content ?: "").trim().length() > 0);
-}
-
 // ---- Images: does each route actually accept what this module emits? ----
 //
-// These exist because no first-party source states whether the OpenAI-shaped Mantle
+// These exist because no first-party source states whether the OpenAI-shaped
 // and Invoke dialects accept image parts. Crucially they go THROUGH THE MODULE, so
 // what is validated is the exact body it builds — hand-written JSON would only prove
 // that the hand-written JSON works.
 //
-// Converse and Anthropic run by default. The other three need
-// `enableUnverifiedImageRoutes = true` in Config.toml, since the module refuses them
+// Converse and Anthropic run by default. The Mistral one needs
+// `enableUnverifiedImageRoutes = true` in Config.toml, since the module refuses it
 // otherwise; a PASS there is the signal to flip that default permanently.
 
 // A real 1x1 PNG. Must be a decodable image, not a signature stub: the model has to
@@ -367,46 +308,6 @@ function testLiveInvokeAnthropicAcceptsAnImage() returns error? {
         content: `Does this contain an image? Answer yes or no. ${img}`
     });
     test:assertTrue((response.content ?: "").trim().length() > 0, "Invoke-Anthropic rejected the image");
-}
-
-@test:Config {groups: ["live"], enable: liveTestsEnabled}
-function testLiveMantleResponsesImageSupportIsUnknown() returns error? {
-    BedrockAuthConfig? creds = liveCredentials();
-    if creds is () || !liveMantleEnabled || !enableUnverifiedImageRoutes {
-        return;
-    }
-    // UNVERIFIED. A 400 here is a RESULT, not a defect — it tells us the default
-    // refusal is correct. A pass tells us to remove it.
-    ai:ImageDocument img = check onePixelPng();
-    ai:ModelProvider provider = check new MantleOpenAIModelProvider(MANTLE_GPT_5_4, creds, liveRegion);
-    ai:ChatAssistantMessage|ai:Error response = provider->chat({
-        role: ai:USER,
-        content: `Does this contain an image? Answer yes or no. ${img}`
-    });
-    if response is ai:Error {
-        test:assertFail(string `Mantle Responses REJECTED the image — keep the default refusal. ` +
-            string `Error: ${response.message()}`);
-    }
-    test:assertTrue((response.content ?: "").trim().length() > 0);
-}
-
-@test:Config {groups: ["live"], enable: liveTestsEnabled}
-function testLiveMantleChatCompletionsImageSupportIsUnknown() returns error? {
-    BedrockAuthConfig? creds = liveCredentials();
-    if creds is () || !liveMantleEnabled || !enableUnverifiedImageRoutes {
-        return;
-    }
-    ai:ImageDocument img = check onePixelPng();
-    ai:ModelProvider provider = check new MantleGoogleModelProvider(MANTLE_GEMMA_3_27B_IT, creds, liveRegion);
-    ai:ChatAssistantMessage|ai:Error response = provider->chat({
-        role: ai:USER,
-        content: `Does this contain an image? Answer yes or no. ${img}`
-    });
-    if response is ai:Error {
-        test:assertFail(string `Mantle chat-completions REJECTED the image — keep the default ` +
-            string `refusal. Error: ${response.message()}`);
-    }
-    test:assertTrue((response.content ?: "").trim().length() > 0);
 }
 
 @test:Config {groups: ["live"], enable: liveTestsEnabled}

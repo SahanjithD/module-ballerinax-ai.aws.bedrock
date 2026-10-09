@@ -23,7 +23,7 @@ isolated function toolParameters(ai:ChatCompletionFunctions tool) returns map<js
     return params ?: {"type": "object", "properties": {}};
 }
 
-// Sets `temperature` only when the caller set it: Claude 4.7+ and the GPT-5.x reasoning
+// Sets `temperature` only when the caller set it: Claude 4.7+ and some reasoning
 // models reject any value.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 isolated function setTemperature(map<json> body, InferenceParams params, string key = "temperature") {

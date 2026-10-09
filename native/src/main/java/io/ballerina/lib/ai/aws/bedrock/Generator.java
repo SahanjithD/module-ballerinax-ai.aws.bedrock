@@ -53,9 +53,7 @@ public final class Generator {
                 // field is a silent break the compiler cannot see. Any change to a
                 // `private final` field on the provider classes must be mirrored here.
                 //
-                // There is ONE spine per provider now: the endpoint is fixed by the
-                // class, so chat() and generate() share a route, converter and
-                // transport. The former gen* duplicates are gone.
+                // chat() and generate() share one route, converter and transport.
                 modelProvider.get(StringUtils.fromString("structuredOutput")),
                 modelProvider.get(StringUtils.fromString("api")),
                 modelProvider.get(StringUtils.fromString("converter")),

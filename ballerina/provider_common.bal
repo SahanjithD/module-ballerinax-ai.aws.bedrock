@@ -240,8 +240,7 @@ isolated function validateParamsForRoute(string providerName, ApiFamily api,
     if unsupported.length() == 0 {
         return;
     }
-    // Not mapped to a Mantle body field: its `service_tier` values are the vendor's,
-    // not Bedrock's, and AWS does not say which Mantle honours.
+    // Not mapped to a body field: the vendor APIs spell tiers with their own values.
     return errorWithDetail(
         string `${providerName}: ${string:'join(", ", ...unsupported)} ` +
         string `${unsupported.length() == 1 ? "is" : "are"} not supported on the ${api} API. Use the ` +
@@ -253,8 +252,8 @@ isolated function validateParamsForRoute(string providerName, ApiFamily api,
 isolated function apiCarriesRequestOptions(ApiFamily api) returns boolean
     => api == CONVERSE || api == INVOKE;
 
-// The Mantle Messages path takes the API key as `x-api-key` and rejects a request that
-// also has `Authorization`, so the transport then drops its Bearer header.
+// The Messages API takes the API key as `x-api-key`, so the transport sends no Bearer
+// header with it.
 isolated function addNativeApiKeyHeader(map<string> headers, Route route, BedrockAuthConfig creds) {
     if usesApiKeyHeader(route.api) && creds is BearerToken {
         headers["x-api-key"] = creds.apiKey;
@@ -284,21 +283,13 @@ isolated function guardRegion(string region) returns ai:Error? {
 }
 
 // Refuses a guardrail where it would not be applied:
-//  - bedrock-mantle has no guardrails.
-//    https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
 //  - Responses: "Guardrails don't apply to the Responses API."
 //    https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
 //  - Anthropic Messages: AWS does not say whether the guardrail headers apply there,
 //    and a guardrail silently not applied is the dangerous outcome.
-isolated function guardGuardrailSupport(BedrockEndpoint endpoint, ApiFamily api,
-        GuardrailConfig? guardrail) returns ai:Error? {
+isolated function guardGuardrailSupport(ApiFamily api, GuardrailConfig? guardrail) returns ai:Error? {
     if guardrail !is GuardrailConfig {
         return;
-    }
-    // Unreachable today (the Mantle configs have no `guardrail`); kept as a backstop.
-    if endpoint == MANTLE {
-        return error ai:Error("Guardrails are not supported on bedrock-mantle. Use the matching " +
-            "Runtime*ModelProvider, or call the ApplyGuardrail API.");
     }
     if api == RESPONSES {
         return error ai:Error("Guardrails are not supported on the Responses API. Use the CONVERSE " +
@@ -321,7 +312,7 @@ isolated function resolveSpine(string providerName, BedrockAuthConfig credential
         Route route = check resolved;
         // Checks the resolved region: an ARN supplies its own.
         check guardRegion(route.region);
-        check guardGuardrailSupport(route.endpoint, route.api, guardrail);
+        check guardGuardrailSupport(route.api, guardrail);
         Endpoint ep = check buildEndpoint(route, endpointConfig);
         readonly & ModelConverter converter = check selectConverter(route);
         // Last, because resolving credentials can reach the network (IMDS, STS, SSO).

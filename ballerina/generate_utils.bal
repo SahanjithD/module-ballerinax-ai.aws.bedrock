@@ -87,7 +87,7 @@ isolated function structuredGenerate(StructuredOutputStyle structuredOutput, Api
     return generationError(
         string `Model '${wireModelId}' cannot return a typed result on the ${converter.dialect} API. ` +
         "Use a 'string' target, or a model and API that support tool calling (e.g. the CONVERSE API).",
-        string `The ${converter.dialect} route${api == MESSAGES ? " on bedrock-mantle" : ""} offers ` +
+        string `The ${converter.dialect} route offers ` +
         "neither native structured output nor tool forcing, which are the two ways generate() can " +
         "obtain a typed result.");
 }

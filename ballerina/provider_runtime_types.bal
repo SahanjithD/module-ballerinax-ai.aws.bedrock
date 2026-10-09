@@ -159,10 +159,6 @@ public type AnthropicRuntimeConfig record {|
     Effort effort?;
 |};
 
-// The GPT-5.x ids are listed under `OpenAIMantleModelNames`, per their model cards;
-// any id can still be passed as a string.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
-
 # OpenAI model IDs on `bedrock-runtime`.
 public enum OpenAIRuntimeModelNames {
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
@@ -193,8 +189,7 @@ public type OpenAIRuntimeConfig record {|
     ReasoningEffort reasoningEffort?;
 |};
 
-// Nova and Titan have only the Bedrock-native APIs, and no Amazon model is on
-// `bedrock-mantle`.
+// Nova and Titan have only the Bedrock-native APIs.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
 
 # Amazon Nova model IDs.
@@ -251,7 +246,7 @@ public type QwenRuntimeConfig record {|
 
 // Gemma is the open-weight family; Gemini is not on Bedrock.
 
-# Google Gemma model IDs on `bedrock-runtime`. For Gemma 4, use `MantleGoogleModelProvider`.
+# Google Gemma model IDs on `bedrock-runtime`.
 public enum GoogleRuntimeModelNames {
     GEMMA_3_4B_IT = "google.gemma-3-4b-it",
     GEMMA_3_12B_IT = "google.gemma-3-12b-it",

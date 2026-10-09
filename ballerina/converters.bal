@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The converters, chosen once at construction. The Messages, Responses and Chat
-// Completions ones serve both endpoints.
+// The converters, chosen once at construction.
 
 // Converse — model-agnostic, so one converter serves every Converse model.
 final readonly & ModelConverter CONVERSE_CONVERTER = {
@@ -38,7 +37,7 @@ final readonly & ModelConverter INVOKE_ANTHROPIC_CONVERTER = {
 // Anthropic Messages: the version goes in an `anthropic-version` header, not the body.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
 final readonly & ModelConverter NATIVE_MESSAGES_CONVERTER = {
-    encode: encodeMantleMessages,
+    encode: encodeNativeMessages,
     decode: decodeAnthropicMessages,
     toolChoice: ANTHROPIC_TOOL_CHOICE,
     supportsStreaming: false,
@@ -160,25 +159,8 @@ isolated function selectConverter(Route route) returns readonly & ModelConverter
     return selectInvokeConverter(route.bareModelId);
 }
 
-isolated function mantlePathFor(string basePath, ApiFamily api) returns string|error {
-    match api {
-        MESSAGES => {
-            return basePath + "/messages";
-        }
-        RESPONSES => {
-            return basePath + "/responses";
-        }
-        CHAT_COMPLETIONS => {
-            return basePath + "/chat/completions";
-        }
-    }
-    // bedrock-mantle serves neither Converse nor InvokeModel.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
-    return error(string `the bedrock-mantle endpoint does not serve the ${api} API`);
-}
-
-// The Messages path takes a Bedrock API key as `x-api-key`, as in AWS's examples on
-// both endpoints; the OpenAI-compatible paths use `Authorization: Bearer`.
+// The Messages path takes a Bedrock API key as `x-api-key`, as in AWS's examples;
+// the OpenAI-compatible paths use `Authorization: Bearer`.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
 isolated function usesApiKeyHeader(ApiFamily api) returns boolean => api == MESSAGES;
 
@@ -229,16 +211,9 @@ isolated function usesDeepSeekTextDialect(string bareModelId) returns boolean =>
     bareModelId.startsWith("deepseek.r1");
 
 // How `generate()` gets a typed result on a route, decided at construction.
-// Anthropic Messages on bedrock-mantle is refused: it rejects `output_config.format`,
-// and no AWS page confirms tool forcing there.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-structured-outputs.html
-isolated function structuredOutputStyleFor(BedrockEndpoint endpoint, ApiFamily api,
-        ToolChoiceStyle toolChoice) returns StructuredOutputStyle {
+isolated function structuredOutputStyleFor(ToolChoiceStyle toolChoice) returns StructuredOutputStyle {
     // No tool calling at all (Mistral text completion).
     if toolChoice == NO_TOOL_CHOICE {
-        return NO_STRUCTURED_OUTPUT;
-    }
-    if endpoint == MANTLE && api == MESSAGES {
         return NO_STRUCTURED_OUTPUT;
     }
     // Native `outputConfig` is not selected yet; see `StructuredOutputStyle`.

@@ -55,8 +55,8 @@ function testBareIdWirePathHasNoEncodingArtifacts() returns error? {
 
 @test:Config {}
 function testEveryRuntimeShapeHasItsDocumentedPathAndSignsAsBedrock() returns error? {
-    // The three vendor-native shapes are FIXED paths on bedrock-runtime — the model
-    // is named in the body — and, unlike Mantle, they are uniform across models.
+    // The three vendor-native shapes are FIXED paths on bedrock-runtime; the model
+    // is named in the body.
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
     // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
@@ -80,35 +80,13 @@ function testEveryRuntimeShapeHasItsDocumentedPathAndSignsAsBedrock() returns er
 
 @test:Config {}
 function testOnlyConverseAndInvokeAddressTheModelInTheUrl() {
-    // The three vendor-native shapes carry `model` in the request BODY on both
-    // endpoints, so `runChat` must inject it for exactly those three.
+    // The three vendor-native shapes carry `model` in the request BODY, so `runChat`
+    // must inject it for exactly those three.
     test:assertTrue(isPathAddressed(CONVERSE));
     test:assertTrue(isPathAddressed(INVOKE));
     test:assertFalse(isPathAddressed(MESSAGES));
     test:assertFalse(isPathAddressed(CHAT_COMPLETIONS));
     test:assertFalse(isPathAddressed(RESPONSES));
-}
-
-@test:Config {}
-function testMantleEndpointHostAndSigningService() returns error? {
-    Route route = check resolveMantleRoute("anthropic.claude-opus-5", "us-east-1");
-    Endpoint ep = check buildEndpoint(route);
-    test:assertEquals(ep.host, "bedrock-mantle.us-east-1.api.aws");
-    test:assertEquals(ep.path, "/anthropic/v1/messages");
-    test:assertEquals(ep.signingService, "bedrock-mantle");
-}
-
-// GovCloud is a SUPPORTED Mantle partition — `us-gov-west-1` carries bedrock-mantle
-// per AWS's endpoint availability table — so the partition guard must not reject it.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
-@test:Config {}
-function testMantleEndpointOnGovCloudPartition() returns error? {
-    Route route = check resolveMantleRoute("anthropic.claude-opus-5", "us-gov-west-1");
-    test:assertEquals(route.partition, "aws-us-gov");
-
-    Endpoint ep = check buildEndpoint(route);
-    test:assertEquals(ep.host, "bedrock-mantle.us-gov-west-1.api.aws");
-    test:assertEquals(ep.signingService, "bedrock-mantle");
 }
 
 @test:Config {}
@@ -237,20 +215,15 @@ function testCanonicalUriAgreesWithTheWirePathEncoder() returns error? {
 // ---- serviceUrl: the default is a TEMPLATE, not a constant host ----
 //
 // A constant default is impossible here: the origin is decided by the resolved
-// route (`bedrock-runtime` vs `bedrock-mantle`, and three DNS suffixes). The
+// route's region and its partition's DNS suffix. The
 // template resolves per route, and — crucially — substitution is a no-op on a
 // string with no placeholders, so a concrete URL needs no sentinel.
 
 @test:Config {}
-function testDefaultServiceUrlTemplateResolvesPerEndpoint() returns error? {
+function testDefaultServiceUrlFollowsTheRegion() returns error? {
     Route runtime = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "eu-west-1", CONVERSE);
     test:assertEquals((check buildEndpoint(runtime)).baseUrl,
             "https://bedrock-runtime.eu-west-1.amazonaws.com");
-
-    // Same template, different endpoint → the `api.aws` suffix, not `amazonaws.com`.
-    Route mantle = check resolveMantleRoute("openai.gpt-5.4", "eu-west-1");
-    test:assertEquals((check buildEndpoint(mantle)).baseUrl,
-            "https://bedrock-mantle.eu-west-1.api.aws");
 }
 
 @test:Config {}
@@ -312,17 +285,6 @@ function testConcreteServiceUrlPassesThroughAndKeepsTheRouteDerivedPath() return
 }
 
 @test:Config {}
-function testACustomEndpointOnMantleKeepsTheMantleSigningScope() returns error? {
-    // The mirror of the test above: the signing name follows the ENDPOINT the class
-    // chose, never the host. A gateway in front of Mantle still signs bedrock-mantle.
-    Route r = check resolveMantleRoute("openai.gpt-5.4", "us-east-1");
-    Endpoint ep = check buildEndpoint(r, {customEndpoint: "https://gw.corp"});
-    test:assertEquals(ep.baseUrl, "https://gw.corp");
-    test:assertEquals(ep.path, "/openai/v1/responses");
-    test:assertEquals(ep.signingService, SIGNING_BEDROCK_MANTLE);
-}
-
-@test:Config {}
 function testServiceUrlTrailingSlashIsTrimmed() returns error? {
     // Otherwise it doubles up against the leading slash of the route-derived path.
     Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
@@ -345,29 +307,4 @@ function testFipsResolvesToTheFipsHostFromSdkMetadata() returns error? {
     test:assertEquals(ep.host, "bedrock-runtime-fips.us-east-1.amazonaws.com");
     test:assertEquals(ep.signingService, SIGNING_BEDROCK,
             "FIPS changes the HOST only — never the SigV4 signing scope");
-}
-
-@test:Config {}
-function testFipsIsRejectedOnAMantleRouteBeforeAnyIo() returns error? {
-    // There is no `bedrock-mantle-fips` host. Without this guard the SDK fallback
-    // would synthesise one and the failure would surface as an opaque DNS error.
-    Route mantle = check resolveMantleRoute("openai.gpt-5.4", "us-east-1");
-    Endpoint|error ep = buildEndpoint(mantle, {fips: true});
-    test:assertTrue(ep is error);
-    if ep is error {
-        test:assertTrue(ep.message().includes("fips"), ep.message());
-        test:assertTrue(ep.message().includes("mantle"), ep.message());
-    }
-}
-
-@test:Config {}
-function testMantleRequiresTheDualstackVariantToReachApiAws() returns error? {
-    // REGRESSION GUARD. `aws:resolveEndpoint("bedrock-mantle", region)` WITHOUT
-    // dualstack returns `bedrock-mantle.{region}.amazonaws.com`, which does not
-    // resolve — `api.aws` is modelled as the dualstack suffix. If someone drops
-    // the `dualstack: mantle` flag in resolveServiceUrl, every Mantle call breaks
-    // at DNS, and this is the only thing that would catch it.
-    Route mantle = check resolveMantleRoute("openai.gpt-5.4", "us-east-1");
-    test:assertEquals((check buildEndpoint(mantle)).baseUrl,
-            "https://bedrock-mantle.us-east-1.api.aws");
 }

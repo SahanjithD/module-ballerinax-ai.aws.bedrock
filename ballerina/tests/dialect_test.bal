@@ -19,28 +19,13 @@ import ballerina/test;
 // vendor-shaped mental model gets wrong: "OpenAI" is not one format — Responses and
 // Chat Completions disagree, and we serve both.
 
-// A Route built by hand, so the header/dialect rules can be driven without going
-// near a provider class. Mirrors exactly what the resolvers produce.
-function mantleRoute(string bareModelId, string basePath, ApiFamily api) returns Route => {
-    endpoint: MANTLE,
-    api,
-    bareModelId,
-    geoPrefix: (),
-    effectiveModelId: bareModelId,
-    region: "us-east-1",
-    partition: "aws",
-    mantleEntry: {basePath, apis: [api]}
-};
-
 function runtimeRoute(string bareModelId, ApiFamily api) returns Route => {
-    endpoint: RUNTIME,
     api,
     bareModelId,
     geoPrefix: (),
     effectiveModelId: bareModelId,
     region: "us-east-1",
-    partition: "aws",
-    mantleEntry: ()
+    partition: "aws"
 };
 
 // ---- tool_choice: Responses is FLAT, Chat Completions is NESTED ----
@@ -50,7 +35,7 @@ function testResponsesForcesToolsWithTheFlatShape() {
     // REGRESSION: both dialects shared one OPENAI_TOOL_CHOICE emitting the NESTED
     // Chat Completions shape. Responses ignores that, so the tool went unforced —
     // the model answered in prose and generate() failed with "no tool call" on every
-    // GPT-5.x and Gemma 4 request. Sources, first-party and unambiguous:
+    // Responses request. Sources, first-party and unambiguous:
     // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/tool_choice_function.py
     map<json> forced = <map<json>>applyToolChoice({}, NATIVE_RESPONSES_CONVERTER.toolChoice, "my_tool");
     test:assertEquals(forced["tool_choice"], <json>{"type": "function", "name": "my_tool"},
@@ -71,19 +56,6 @@ function testTheTwoOpenAiDialectsDoNotShareAToolChoiceStyle() {
     test:assertNotEquals(NATIVE_RESPONSES_CONVERTER.toolChoice, NATIVE_CHAT_CONVERTER.toolChoice);
     test:assertEquals(INVOKE_OPENAI_CHAT_CONVERTER.toolChoice, NATIVE_CHAT_CONVERTER.toolChoice,
             "gpt-oss on Invoke speaks Chat Completions, like the native chat route");
-}
-
-@test:Config {}
-function testTheSameConvertersServeBothEndpoints() {
-    // The three vendor-native dialects are served on bedrock-runtime AND
-    // bedrock-mantle, so the converters are shared and the endpoints differ only in
-    // host, path and signing name. That is why they are no longer named MANTLE_*.
-    BedrockEndpoint[] endpoints = [RUNTIME, MANTLE];
-    foreach BedrockEndpoint endpoint in endpoints {
-        Route route = endpoint == RUNTIME ? runtimeRoute("m", MESSAGES) : mantleRoute("m", "/anthropic/v1", MESSAGES);
-        readonly & ModelConverter converter = checkpanic selectConverter(route);
-        test:assertEquals(converter.dialect, NATIVE_MESSAGES_CONVERTER.dialect);
-    }
 }
 
 // ---- Responses has no stop-sequence parameter ----
@@ -177,25 +149,19 @@ function testApiKeyHeaderFollowsTheMessagesShapeNotTheProviderClass() returns er
     // honoured there and silently ignored everywhere else. Driven here through
     // `buildRouteHeaders` — the shared path — to prove the route decides, not the
     // class. A Messages shape gets `x-api-key`; see the Bearer case below.
-    Route route = mantleRoute("anthropic.claude-opus-5", "/anthropic/v1", MESSAGES);
+    Route route = runtimeRoute("anthropic.claude-opus-5", MESSAGES);
     map<string> headers = buildRouteHeaders(route, (), {apiKey: "secret-key"});
     test:assertEquals(headers["x-api-key"], "secret-key");
-
-    // ...and it holds on bedrock-runtime too: AWS's documented curl for the Anthropic
-    // Messages path sends `x-api-key` on both hosts.
-    map<string> runtimeHeaders =
-        buildRouteHeaders(runtimeRoute("anthropic.claude-opus-5", MESSAGES), (), {apiKey: "secret-key"});
-    test:assertEquals(runtimeHeaders["x-api-key"], "secret-key");
 }
 
 @test:Config {}
 function testApiKeyHeaderIsAbsentForTheBearerShapes() returns error? {
     // The OpenAI-compatible shapes need nothing extra: the transport's
     // `Authorization: Bearer` already carries the key.
-    Route responses = mantleRoute("openai.gpt-5.4", "/openai/v1", RESPONSES);
+    Route responses = runtimeRoute("openai.gpt-6-sol", RESPONSES);
     test:assertFalse(buildRouteHeaders(responses, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
 
-    Route chat = mantleRoute("deepseek.v3.2", "/v1", CHAT_COMPLETIONS);
+    Route chat = runtimeRoute("deepseek.v3.2", CHAT_COMPLETIONS);
     test:assertFalse(buildRouteHeaders(chat, (), {apiKey: "secret-key"}).hasKey("x-api-key"));
 
     ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES];
@@ -210,7 +176,7 @@ function testApiKeyHeaderIsAbsentForTheBearerShapes() returns error? {
 function testApiKeyHeaderIsAbsentForSigV4Credentials() returns error? {
     // With SigV4 credentials there is no api key to send — the signature alone must
     // authenticate. Emitting the secret access key here would leak it in a header.
-    Route route = mantleRoute("anthropic.claude-opus-5", "/anthropic/v1", MESSAGES);
+    Route route = runtimeRoute("anthropic.claude-opus-5", MESSAGES);
     test:assertFalse(buildRouteHeaders(route, (), TEST_CREDS).hasKey("x-api-key"));
 }
 
@@ -234,13 +200,9 @@ function testAnthropicVersionIsAHeaderOnMessagesAndABodyFieldOnInvoke() returns 
     map<json> invokeBody = <map<json>>check encodeInvokeAnthropic((), [userText("hi")], [], (), params);
     test:assertEquals(invokeBody["anthropic_version"], "bedrock-2023-05-31");
 
-    map<json> messagesBody = <map<json>>check encodeMantleMessages((), [userText("hi")], [], (), params);
+    map<json> messagesBody = <map<json>>check encodeNativeMessages((), [userText("hi")], [], (), params);
     test:assertFalse(messagesBody.hasKey("anthropic_version"),
             "the Messages dialect carries the version in the HEADER, never in the body");
-
-    // And the header belongs to the SHAPE, so it is sent on Mantle's Messages path too.
-    Route mantle = mantleRoute("anthropic.claude-opus-5", "/anthropic/v1", MESSAGES);
-    test:assertEquals(buildRouteHeaders(mantle, (), TEST_CREDS)["anthropic-version"], "2023-06-01");
 }
 
 // ---- guardrail headers: InvokeModel AND Chat Completions ----
@@ -290,12 +252,12 @@ function testNoGuardrailMeansNoGuardrailHeaders() {
 @test:Config {}
 function testThinkingAndEffortReachTheMessagesDialectAsBodyFields() returns error? {
     // REGRESSION: `thinking` used to be folded into additionalModelRequestFields,
-    // but `encodeMantleMessages` ignores that field entirely — so the knob was
+    // but `encodeNativeMessages` ignores that field entirely — so the knob was
     // silently dropped on exactly the two Claude-native dialects. It is now a
     // first-class body field and must actually reach the wire.
     AnthropicRuntimeConfig config = {thinking: {mode: ENABLED, budgetTokens: 1024}, effort: EFFORT_HIGH};
     readonly & InferenceParams params = check anthropicParams(8000, (), config);
-    map<json> body = check encodeMantleMessages((), SAMPLE_MESSAGES, [], (), params).ensureType();
+    map<json> body = check encodeNativeMessages((), SAMPLE_MESSAGES, [], (), params).ensureType();
     test:assertEquals(body["thinking"], <json>{"type": "enabled", "budget_tokens": 1024},
             "thinking must be a top-level body field on the Messages dialect");
 
@@ -319,18 +281,6 @@ function testThinkingBudgetRulesFailAtConstruction() {
 
     // ADAPTIVE alone is the recommended, and default, configuration.
     test:assertTrue(anthropicParams(8000, (), {thinking: {}}) is InferenceParams);
-}
-
-@test:Config {}
-function testThinkingBudgetRulesAlsoFireOnTheMantleClass() {
-    // The validation moved into the shared spine, so it must hold on both endpoints.
-    MantleAnthropicModelProvider|ai:Error provider = new (
-            MANTLE_CLAUDE_OPUS_5, TEST_CREDS, REGION, (), 2000,
-            thinking = {mode: ENABLED, budgetTokens: 4000});
-    test:assertTrue(provider is ai:Error);
-    if provider is ai:Error {
-        test:assertTrue(provider.message().includes("budgetTokens"), provider.message());
-    }
 }
 
 // ---- MU5: `maxTokens = ()` omits the field on EVERY dialect ----
@@ -368,7 +318,7 @@ function testEveryDialectOmitsTheTokenCapWhenItIsUnset() returns error? {
             "OpenAI chat completions — the dialect this finding is about");
     test:assertFalse((<map<json>>check encodeInvokeAnthropic((), msgs, [], (), params)).hasKey("max_tokens"),
             "Invoke-Anthropic");
-    test:assertFalse((<map<json>>check encodeMantleMessages((), msgs, [], (), params)).hasKey("max_tokens"),
+    test:assertFalse((<map<json>>check encodeNativeMessages((), msgs, [], (), params)).hasKey("max_tokens"),
             "Anthropic Messages");
     test:assertFalse((<map<json>>check encodeMistralChat((), msgs, [], (), params)).hasKey("max_tokens"),
             "Mistral chat");
