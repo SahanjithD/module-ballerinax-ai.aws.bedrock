@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import ballerina/ai;
 import ballerina/http;
 import ballerinax/aws.auth;
 
@@ -112,24 +111,14 @@ public type ManagedKnowledgeBaseDefinition record {|
     decimal readyTimeout = 300;
 |};
 
-// `dataSourceId` is resolved automatically when omitted, which requires exactly one
-// `CUSTOM` data source on the knowledge base. `chunker` left unset is detected from the
-// data source's actual `chunkingStrategy` (`ai:DISABLE` unless it is `NONE`, in which
-// case `ai:AUTO`); an explicit `ai:Chunker` against a server-chunking data source is a
-// construction error. `httpConfig`/`retryConfig` are shared by both agent-plane clients.
+// `httpConfig`/`retryConfig` are shared by both agent-plane clients.
 
 # Configuration for `ManagedKnowledgeBase`.
 public type ManagedKnowledgeBaseConfig record {|
-    # The `CUSTOM` data source to use. Detected when unset
-    string dataSourceId?;
-    # Client-side chunker. Detected from the data source when unset
-    ai:Chunker|ai:AUTO|ai:DISABLE chunker?;
     # Seconds to wait for documents to be indexed
     decimal ingestTimeout = 300;
     # Default number of results per retrieval (1-100)
     int numberOfResults?;
-    # Reranking model for retrieval
-    RerankingModelType rerankingModelType?;
     # HTTP client configuration
     http:ClientConfiguration httpConfig?;
     # Retry configuration

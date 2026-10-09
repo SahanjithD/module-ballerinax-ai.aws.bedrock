@@ -111,13 +111,10 @@ function newVectorRetrieveKb(int port, SearchType? overrideSearchType = (),
     if overrideSearchType is SearchType {
         config.overrideSearchType = overrideSearchType;
     }
-    if reranking is VectorRerankingConfig {
-        config.rerankingConfiguration = reranking;
-    }
     if numberOfResults is int {
         config.numberOfResults = numberOfResults;
     }
-    return new (VRET_KB_ID, KB_TEST_CREDS, "us-east-1",
+    return new (VRET_KB_ID, KB_TEST_CREDS, "us-east-1", (), (), reranking,
             {customEndpoint: string `http://localhost:${port}`}, config);
 }
 

@@ -48,33 +48,44 @@ public distinct isolated client class ManagedKnowledgeBase {
 
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
     # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
+    // `dataSourceId` unset needs exactly one `CUSTOM` data source on the knowledge base.
+    // `chunker` unset follows the data source's `chunkingStrategy`: `ai:AUTO` when it is
+    // `NONE`, else `ai:DISABLE`; an explicit `ai:Chunker` against a server-chunking data
+    // source is a construction error.
+
     # + region - AWS region, e.g. `aws:US_EAST_1`
+    # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset
+    # + chunker - Client-side chunker. Chosen from the data source's chunking when unset
+    # + rerankingModelType - Reranking model for retrieval. No reranking when unset
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
-    # + config - Data source, chunking, retrieval and transport options
+    # + config - Ingestion, retrieval and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
     public isolated function init(
             @display {label: "Knowledge Base"} string|ManagedKnowledgeBaseDefinition knowledgeBase,
             @display {label: "Authentication"} KnowledgeBaseAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
+            @display {label: "Data Source ID"} string? dataSourceId = (),
+            @display {label: "Chunker"} ai:Chunker|ai:AUTO|ai:DISABLE? chunker = (),
+            @display {label: "Reranking Model"} RerankingModelType? rerankingModelType = (),
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Configuration"} *ManagedKnowledgeBaseConfig config)
             returns ai:Error? {
         check validateManagedRetrievalConfig(config);
         KbSpine spine = check resolveKbSpine(MANAGED_KB_PROVIDER, auth, region,
-            endpoint, knowledgeBase, config?.dataSourceId, config?.httpConfig, config?.retryConfig,
-            config?.rerankingModelType);
+            endpoint, knowledgeBase, dataSourceId, config?.httpConfig, config?.retryConfig,
+            rerankingModelType);
         self.controlTransport = spine.controlTransport;
         self.dataTransport = spine.dataTransport;
         self.knowledgeBaseId = spine.knowledgeBaseId;
         self.dataSourceId = spine.dataSourceId;
-        self.chunker = check resolveChunker(config?.chunker, spine.chunkingStrategy);
+        self.chunker = check resolveChunker(chunker, spine.chunkingStrategy);
         self.ingestTimeout = config.ingestTimeout;
         self.numberOfResults = config?.numberOfResults;
-        self.rerankingModelType = config?.rerankingModelType;
+        self.rerankingModelType = rerankingModelType;
     }
 
     // Chunks client-side first when the data source's `chunkingStrategy` is `NONE`
-    // (detected at construction — see `ManagedKnowledgeBaseConfig.chunker`). Blocks until
+    // (detected at construction — see the `chunker` parameter of `init`). Blocks until
     // every document reaches a terminal status or `ingestTimeout` elapses, so a
     // `retrieve()` immediately afterward sees them.
     //

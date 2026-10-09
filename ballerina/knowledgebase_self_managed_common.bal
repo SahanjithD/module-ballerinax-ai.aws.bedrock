@@ -429,7 +429,15 @@ isolated function validateVectorDataSource(VectorDataSourceDefinition def) retur
 }
 
 // Rejects retrieve-time configuration Bedrock would reject, before any I/O.
-isolated function validateVectorRetrievalConfig(SelfManagedKnowledgeBaseConfig config) returns ai:Error? {
+# The retrieval settings checked at construction.
+type VectorRetrievalSettings record {|
+    # Default number of results per retrieval
+    int? numberOfResults = ();
+    # Reranking for retrieval
+    VectorRerankingConfig? rerankingConfiguration = ();
+|};
+
+isolated function validateVectorRetrievalConfig(VectorRetrievalSettings config) returns ai:Error? {
     // KnowledgeBaseVectorSearchConfigurationNumberOfResultsInteger: min 1, max 100.
     int? numberOfResults = config?.numberOfResults;
     if numberOfResults is int && (numberOfResults < 1 || numberOfResults > KB_MAX_RESULTS_PER_CALL) {
@@ -537,23 +545,17 @@ isolated function verifyVectorKnowledgeBaseUsable(BedrockTransport controlTransp
 // creators and the knowledge base type guard differ.
 // ============================================================================
 
-// Everything the spine needs beyond the resource itself is read off `config` here
-// rather than being passed alongside it — one source of truth, so a future field
-// cannot be wired at one call site and forgotten at another.
 isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthConfig credentials, string region,
         aws:EndpointConfig? endpointConfig, string|SelfManagedKnowledgeBaseDefinition knowledgeBase,
-        SelfManagedKnowledgeBaseConfig config)
-        returns KbSpine|ai:Error {
+        string? dataSourceIdOverride, VectorRetrievalSettings retrieval, http:ClientConfiguration? httpConfig,
+        RetryConfig? retryConfig) returns KbSpine|ai:Error {
     do {
         check guardRegion(region);
-        check validateVectorRetrievalConfig(config);
+        check validateVectorRetrievalConfig(retrieval);
         if knowledgeBase is SelfManagedKnowledgeBaseDefinition {
             check validateStorageConfiguration(knowledgeBase.storageConfiguration);
             check validateVectorDataSource(knowledgeBase.dataSource);
         }
-        string? dataSourceIdOverride = config?.dataSourceId;
-        http:ClientConfiguration? httpConfig = config?.httpConfig;
-        RetryConfig? retryConfig = config?.retryConfig;
         Endpoint controlEp = check buildAgentEndpoint(AGENT_CONTROL, region, endpointConfig);
         Endpoint dataEp = check buildAgentEndpoint(AGENT_DATA, region, endpointConfig);
         // One provider, both planes.

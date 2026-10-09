@@ -691,7 +691,7 @@ ai:KnowledgeBase kb = check new bedrock:ManagedKnowledgeBase(
 > `deleteByFilter` is how you clear them. Two documents in one `ingest()` call that resolve to the
 > same id are rejected rather than silently overwriting each other.
 
-`ManagedKnowledgeBaseConfig.chunker` is **detected**, not assumed, when left unset: `init` reads the
+The `chunker` parameter is **detected**, not assumed, when left unset: `init` reads the
 resolved data source's actual strategy and defaults to `ai:DISABLE` when Bedrock chunks server-side,
 `ai:AUTO` when it is `NONE`. Passing an explicit `ai:Chunker` against a server-chunking data source
 is a construction error — Bedrock would re-split whatever is submitted, silently overwriting the
