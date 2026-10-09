@@ -433,3 +433,94 @@ function testALongBindFailureTruncatesTheJson() {
         test:assertTrue(message.length() < 800, "the message must stay bounded");
     }
 }
+
+// ---- Converse tool choice: by name on Anthropic and Nova, `any` elsewhere ----
+
+@test:Config {}
+function testConverseForcesTheToolByNameOnlyOnAnthropicAndNova() returns error? {
+    [string, json][] cases = [
+        ["us.anthropic.claude-sonnet-4-6", {"tool": {"name": RESULT_TOOL}}],
+        ["amazon.nova-pro-v1:0", {"tool": {"name": RESULT_TOOL}}],
+        ["mistral.mistral-large-3-675b-instruct", {"any": {}}],
+        ["qwen.qwen3-32b-v1:0", {"any": {}}],
+        ["deepseek.v3.2", {"any": {}}]
+    ];
+    foreach [string, json] [id, expected] in cases {
+        map<json> body = check sentGenerateBody(CONVERSE, CONVERSE_CONVERTER, id, GEN_PARAMS,
+                converseReply((), RESULT_TOOL, {x: 1, y: 2}));
+        map<json> toolConfig = check body["toolConfig"].ensureType();
+        test:assertEquals(toolConfig["toolChoice"], expected, id);
+    }
+}
+
+// Answers the first request with a 400 refusing the tool choice, then with `reply`.
+isolated class RefusesToolChoiceOnce {
+    private final json reply;
+    private json[] sent = [];
+
+    isolated function init(json reply) {
+        self.reply = reply.clone();
+    }
+
+    isolated function execute(json body, map<string> extraHeaders = {}) returns TransportResponse|ai:Error {
+        lock {
+            self.sent.push(body.clone());
+            if self.sent.length() == 1 {
+                return error ai:Error("Bedrock ValidationException (HTTP 400): This model doesn't support the " +
+                    "toolConfig.toolChoice.any field. Remove toolConfig.toolChoice.any and try again..");
+            }
+            return {body: self.reply.clone(), headers: {}};
+        }
+    }
+
+    isolated function requests() returns json[] {
+        lock {
+            return self.sent.clone();
+        }
+    }
+}
+
+@test:Config {}
+function testARejectedToolChoiceFallsBackToAnUnforcedTool() returns error? {
+    RefusesToolChoiceOnce transport = new (converseReply((), RESULT_TOOL, {x: 1, y: 2}));
+    anydata result = check generateLlmResponse(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER, transport,
+            "meta.llama3-70b-instruct-v1:0", {}, GEN_PARAMS, `Give me a point.`, MatrixPoint);
+    test:assertEquals(result, <MatrixPoint>{x: 1, y: 2});
+    json[] requests = transport.requests();
+    test:assertEquals(requests.length(), 2, "one forced attempt, one unforced retry");
+    map<json> second = check requests[1].ensureType();
+    map<json> toolConfig = check second["toolConfig"].ensureType();
+    test:assertFalse(toolConfig.hasKey("toolChoice"), "the retry must not force the tool");
+    test:assertTrue(second.toJsonString().includes(RESULT_TOOL_INSTRUCTION));
+}
+
+@test:Config {}
+function testAnUnrelated400IsNotRetried() {
+    test:assertFalse(rejectsToolChoice(error ai:Error("Bedrock ValidationException (HTTP 400): bad temperature")));
+    test:assertFalse(rejectsToolChoice(error ai:Error("Bedrock transient error (HTTP 503): toolChoice")));
+}
+
+// ---- A response cut off at the token limit is a clear error ----
+
+@test:Config {}
+function testACutOffGenerateAsksToRaiseMaxTokens() {
+    json cutTool = {
+        output: {message: {role: "assistant", content: [{toolUse: {toolUseId: "c", name: RESULT_TOOL, input: {x: 1}}}]}},
+        stopReason: "max_tokens",
+        usage: {inputTokens: 5, outputTokens: 3}
+    };
+    json cutText = {
+        output: {message: {role: "assistant", content: [{text: "Once upon a"}]}},
+        stopReason: "max_tokens",
+        usage: {inputTokens: 5, outputTokens: 3}
+    };
+    foreach [json, typedesc<anydata>] [reply, td] in [[cutTool, MatrixPoint], [cutText, string]] {
+        CannedTransport transport = new (reply);
+        anydata|ai:Error result = generateLlmResponse(TOOL_FORCING, CONVERSE, CONVERSE_CONVERTER, transport,
+                "us.anthropic.claude-sonnet-4-6", {}, GEN_PARAMS, `Write a story.`, td);
+        test:assertTrue(result is ai:LlmInvalidGenerationError, td.toString());
+        if result is ai:Error {
+            test:assertTrue(result.message().includes("maxTokens"), result.message());
+        }
+    }
+}

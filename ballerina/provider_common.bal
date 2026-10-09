@@ -125,14 +125,10 @@ isolated function recordResponse(observe:LlmSpan span, DecodedResponse decoded) 
     // span's finish reason — the one channel that both survives to the caller's
     // observability backend and is already keyed on "why did generation stop".
     //
-    // Converse already reports `guardrail_intervened` as its stopReason, so this
-    // only changes behaviour on the Invoke route, where the body field is the
-    // only source.
-    if decoded.guardrailAction == INTERVENED && decoded.stopReason != "guardrail_intervened" {
-        span.addFinishReason("guardrail_intervened");
-    } else {
-        span.addFinishReason(decoded.stopReason);
-    }
+    // On the Invoke route the body field is the only source of the intervention, so
+    // it overrides whatever stop reason the model reported.
+    span.addFinishReason(decoded.guardrailAction == INTERVENED ? FINISH_CONTENT_FILTER
+            : finishReason(decoded.stopReason));
     string? responseId = decoded.responseId;
     if responseId is string {
         span.addResponseId(responseId);
@@ -584,4 +580,38 @@ isolated function validateThinking(ThinkingConfig thinking, int? maxTokens) retu
         return error ai:Error(string `'budgetTokens' (${budget}) must be less than 'maxTokens' ` +
             string `(${maxTokens}) — the thinking budget is drawn from the same ceiling.`);
     }
+}
+
+// The finish reasons put on the trace, whatever API answered. OpenAI's names, the
+// ones OpenTelemetry's `gen_ai.response.finish_reasons` examples use.
+const FINISH_STOP = "stop";
+const FINISH_LENGTH = "length";
+const FINISH_TOOL_CALLS = "tool_calls";
+const FINISH_CONTENT_FILTER = "content_filter";
+const FINISH_ERROR = "error";
+
+// Maps one API's stop reason to the shared set. An unknown value is kept as it is.
+// Converse:  https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+// Anthropic: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+// OpenAI Chat Completions `finish_reason`, Mistral `stop_reason`/`finish_reason` and the
+// Responses API's `incomplete_details.reason` (see `decodeResponses`).
+isolated function finishReason(string stopReason) returns string {
+    match stopReason {
+        "end_turn"|"stop_sequence"|"stop"|"completed" => {
+            return FINISH_STOP;
+        }
+        "max_tokens"|"length"|"model_length"|"max_output_tokens"|"model_context_window_exceeded" => {
+            return FINISH_LENGTH;
+        }
+        "tool_use"|"tool_calls"|"function_call" => {
+            return FINISH_TOOL_CALLS;
+        }
+        "guardrail_intervened"|"content_filtered"|"content_filter"|"refusal" => {
+            return FINISH_CONTENT_FILTER;
+        }
+        "malformed_model_output"|"malformed_tool_use"|"failed"|"error" => {
+            return FINISH_ERROR;
+        }
+    }
+    return stopReason;
 }

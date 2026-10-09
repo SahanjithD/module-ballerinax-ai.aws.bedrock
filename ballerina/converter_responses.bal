@@ -184,8 +184,18 @@ isolated function decodeResponses(json response) returns DecodedResponse|ai:Erro
     return {
         message,
         usage: {inputTokens, outputTokens},
-        stopReason: strField(r, "status") ?: "completed",
+        stopReason: responsesStopReason(r),
         responseId: strField(r, "id"),
         guardrailAction: ()
     };
+}
+
+// `status` is `completed`, `incomplete` or `failed`; an incomplete response names its
+// reason (`max_output_tokens`, `content_filter`) in `incomplete_details.reason`.
+// https://platform.openai.com/docs/api-reference/responses/object
+isolated function responsesStopReason(map<json> r) returns string {
+    string status = strField(r, "status") ?: "completed";
+    map<json>? details = mapField(r, "incomplete_details");
+    string? reason = details is map<json> ? strField(details, "reason") : ();
+    return status == "incomplete" && reason is string ? reason : status;
 }

@@ -170,6 +170,7 @@ isolated function plainTextResponse(ApiFamily api, readonly & ModelConverter con
     json encoded = check encode((), [userMsg], [], (), params);
     DecodedResponse decoded = check sendGenerateRequest(span, api, wireModelId, converter, transport,
             extraHeaders, userMsg, encoded);
+    check refuseCutOff(decoded, wireModelId);
     return decoded.message.content ?: "";
 }
 
@@ -204,9 +205,18 @@ isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter
     ResolvedUserMessage userMsg = {parts: check contentToParts(prompt)};
     RequestEncoder encode = converter.encode;
     json encoded = check encode(forceTool ? () : RESULT_TOOL_INSTRUCTION, [userMsg], [tool], (), params);
-    json body = forceTool ? applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL) : encoded;
-    DecodedResponse decoded = check sendGenerateRequest(span, api, wireModelId, converter, transport,
+    json body = forceTool
+        ? applyToolChoice(encoded, converter.toolChoice, RESULT_TOOL, acceptsNamedToolChoice(wireModelId))
+        : encoded;
+    DecodedResponse|ai:Error sent = sendGenerateRequest(span, api, wireModelId, converter, transport,
             extraHeaders, userMsg, body);
+    if sent is ai:Error && forceTool && rejectsToolChoice(sent) {
+        // The model does not take the tool choice sent: offer the tool unforced instead.
+        return generateByToolForcing(api, converter, transport, wireModelId, extraHeaders, params, prompt, td,
+                span, false);
+    }
+    DecodedResponse decoded = check sent;
+    check refuseCutOff(decoded, wireModelId);
     ai:FunctionCall[]? toolCalls = decoded.message.toolCalls;
     if toolCalls is ai:FunctionCall[] && toolCalls.length() > 0 {
         return bindResult(toolCalls[0].arguments ?: {}, wrapped, td,
@@ -227,12 +237,41 @@ isolated function generateByToolForcing(ApiFamily api, readonly & ModelConverter
         string `(stop reason '${decoded.stopReason}').`);
 }
 
+// A generate() answer that stopped at the token limit is incomplete: a typed result
+// would fail to bind with a confusing message, and a string would be silently cut.
+isolated function refuseCutOff(DecodedResponse decoded, string wireModelId) returns ai:Error? {
+    if finishReason(decoded.stopReason) == FINISH_LENGTH {
+        return generationError(
+            string `The response from model '${wireModelId}' was cut off at the token limit. Raise 'maxTokens'.`,
+            string `The model stopped with '${decoded.stopReason}' before finishing. On a thinking model the ` +
+            "thinking counts towards the same limit.");
+    }
+}
+
+// Whether a request failed because the model does not take the tool choice sent,
+// e.g. Converse's "This model doesn't support the toolConfig.toolChoice.any field".
+isolated function rejectsToolChoice(ai:Error err) returns boolean {
+    string message = err.message();
+    return message.startsWith("Bedrock ValidationException") &&
+        (message.includes("toolChoice") || message.includes("tool_choice"));
+}
+
+// Converse can force a tool BY NAME only on Anthropic and Amazon Nova models; every
+// other model is sent `any`, which forces the single tool offered just the same.
+// "tool: ... This field is only supported by Anthropic Claude 3 and Amazon Nova models."
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+isolated function acceptsNamedToolChoice(string wireModelId) returns boolean {
+    [string, string?] [bareId, _] = normalizeModelId(wireModelId);
+    return bareId.startsWith("anthropic.") || bareId.startsWith("amazon.nova");
+}
+
 // Forces the single result tool on the encoded body. Keyed on the
 // CONVERTER's dialect, not the route shape: Nova on InvokeModel is Converse-shaped,
 // and Mistral chat forces with a bare string. Deriving this from `ApiFamily` sends
 // Anthropic's `tool_choice` to every non-Converse dialect, which they ignore —
 // the model then answers in prose and `generate()` fails with "no tool call".
-isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolName) returns json {
+isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolName, boolean byName = true)
+        returns json {
     if body !is map<json> {
         return body;
     }
@@ -241,7 +280,7 @@ isolated function applyToolChoice(json body, ToolChoiceStyle style, string toolN
         CONVERSE_TOOL_CHOICE => {
             json existing = forced["toolConfig"];
             map<json> toolConfig = existing is map<json> ? existing.clone() : {};
-            toolConfig["toolChoice"] = {"tool": {"name": toolName}};
+            toolConfig["toolChoice"] = byName ? {"tool": {"name": toolName}} : {"any": {}};
             forced["toolConfig"] = toolConfig;
         }
         ANTHROPIC_TOOL_CHOICE => {
@@ -373,6 +412,7 @@ isolated function generateByOutputConfig(ApiFamily api, readonly & ModelConverte
     };
     DecodedResponse decoded = check sendGenerateRequest(span, api, wireModelId, converter, transport,
             extraHeaders, userMsg, body);
+    check refuseCutOff(decoded, wireModelId);
     string? content = decoded.message.content;
     if content is () {
         return generationError(string `Model '${wireModelId}' did not return a structured result.`,

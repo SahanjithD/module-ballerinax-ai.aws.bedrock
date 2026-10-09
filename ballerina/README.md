@@ -516,6 +516,10 @@ it for long reasoning tasks.
 > **Pass `maxTokens = ()` to drop the field entirely**, the same way an unset `temperature` is left
 > out. The Anthropic classes are the exception: Anthropic requires the field, so their `maxTokens` is
 > an `int`.
+>
+> **A `generate()` answer cut off at the token limit is an error**, not a partial value. The
+> `ai:LlmInvalidGenerationError` says to raise `maxTokens`; on a thinking model, the thinking counts
+> towards the same limit.
 
 ## Vendor dialects
 
@@ -967,7 +971,9 @@ credential chain is walked), which is charged to `init`, not to the call.
 | Invoke | `X-Amzn-Bedrock-Guardrail*` request headers; the fired signal returns in the response body |
 | Mantle | not supported → construction error pointing at `ApplyGuardrail` |
 
-A fired guardrail is never silently dropped on either supported route.
+A fired guardrail is never silently dropped on either supported route: the trace's finish reason is
+`content_filter`. Every API's stop reason is mapped to the same set on the trace — `stop`, `length`,
+`tool_calls`, `content_filter` or `error` — so traces read the same whichever API answered.
 
 ## Fails fast, before any network call
 

@@ -638,3 +638,26 @@ function testOpenAIModelsSendMaxCompletionTokensAndOthersMaxTokens() returns err
         test:assertFalse(body.hasKey(absent), caseName);
     }
 }
+
+@test:Config {}
+function testStopReasonsMapToOneFinishReasonSet() {
+    map<string> expected = {
+        "end_turn": "stop", "stop_sequence": "stop", "stop": "stop", "completed": "stop",
+        "max_tokens": "length", "length": "length", "model_length": "length", "max_output_tokens": "length",
+        "model_context_window_exceeded": "length",
+        "tool_use": "tool_calls", "tool_calls": "tool_calls",
+        "guardrail_intervened": "content_filter", "content_filtered": "content_filter",
+        "content_filter": "content_filter", "refusal": "content_filter",
+        "malformed_tool_use": "error", "pause_turn": "pause_turn"
+    };
+    foreach [string, string] [raw, mapped] in expected.entries() {
+        test:assertEquals(finishReason(raw), mapped, raw);
+    }
+}
+
+@test:Config {}
+function testAnIncompleteResponsesReplyReportsWhy() {
+    test:assertEquals(responsesStopReason({status: "incomplete", incomplete_details: {reason: "max_output_tokens"}}),
+            "max_output_tokens");
+    test:assertEquals(responsesStopReason({status: "completed"}), "completed");
+}
