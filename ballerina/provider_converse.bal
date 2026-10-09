@@ -17,8 +17,8 @@ import ballerina/jballerina.java;
 
 import ballerinax/aws;
 
-# Configuration for `CommonModelProvider`.
-public type BedrockCommonConfig record {|
+# Configuration for `ConverseModelProvider`.
+public type ConverseConfig record {|
     *CommonRuntimeConfig;
 |};
 
@@ -39,8 +39,8 @@ public type BedrockCommonConfig record {|
 
 # Any Bedrock model, through the Converse API on the Bedrock Runtime endpoint.
 # Needs the `bedrock:InvokeModel` IAM permission.
-@display {label: "Bedrock Common Model Provider"}
-public isolated distinct client class CommonModelProvider {
+@display {label: "Bedrock Converse Model Provider"}
+public isolated distinct client class ConverseModelProvider {
     *ai:ModelProvider;
 
     private final ApiFamily api;
@@ -66,10 +66,10 @@ public isolated distinct client class CommonModelProvider {
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
             @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
-            @display {label: "Configuration"} *BedrockCommonConfig config)
+            @display {label: "Configuration"} *ConverseConfig config)
             returns ai:Error? {
         [Route, readonly & ModelConverter, BedrockTransport] [route, converter, transport] =
-            check resolveSpine("CommonModelProvider", auth,
+            check resolveSpine("ConverseModelProvider", auth,
                 resolveRuntimeRoute(model, region, CONVERSE), endpoint,
                 config?.httpConfig, config?.retryConfig, config?.guardrail);
 
@@ -80,7 +80,7 @@ public isolated distinct client class CommonModelProvider {
         readonly & InferenceParams resolvedParams = buildInferenceParams(maxTokens, temperature,
                 config?.stopSequences, config?.additionalModelRequestFields, config?.serviceTier,
                 config?.latencyOptimized, config?.guardrail);
-        check validateParamsForRoute("CommonModelProvider", route.api, converter, resolvedParams);
+        check validateParamsForRoute("ConverseModelProvider", route.api, converter, resolvedParams);
         self.params = resolvedParams;
         self.extraHeaders = buildRouteHeaders(route, config?.guardrail,
                 auth, resolvedParams).cloneReadOnly();

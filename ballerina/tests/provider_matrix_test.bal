@@ -117,7 +117,7 @@ function providerCases() returns ProviderCase[] => [
     ["RuntimeGoogle CONVERSE", false], ["RuntimeGoogle INVOKE", false], ["RuntimeGoogle CHAT_COMPLETIONS", false],
     ["RuntimeDeepSeek CONVERSE", false], ["RuntimeDeepSeek INVOKE", false],
     ["RuntimeDeepSeek CHAT_COMPLETIONS", false],
-    ["CommonModelProvider", false],
+    ["ConverseModelProvider", false],
     // Mantle Anthropic Messages has no structured-output path; typed generate() is refused.
     ["MantleAnthropic", true], ["MantleOpenAI GPT-5.4", false], ["MantleOpenAI gpt-oss", false],
     ["MantleMistral", false], ["MantleQwen", false], ["MantleGoogle", false], ["MantleDeepSeek", false]
@@ -189,8 +189,8 @@ function matrixProvider(string name) returns ai:ModelProvider|error {
         "RuntimeDeepSeek CHAT_COMPLETIONS" => {
             return new RuntimeDeepSeekModelProvider(DEEPSEEK_V3_2, TEST_CREDS, "us-east-1", CHAT_COMPLETIONS, ep);
         }
-        "CommonModelProvider" => {
-            return new CommonModelProvider("us.meta.llama3-3-70b-instruct-v1:0", TEST_CREDS, "us-east-1", ep);
+        "ConverseModelProvider" => {
+            return new ConverseModelProvider("us.meta.llama3-3-70b-instruct-v1:0", TEST_CREDS, "us-east-1", ep);
         }
         "MantleAnthropic" => {
             return new MantleAnthropicModelProvider(MANTLE_CLAUDE_SONNET_5, TEST_CREDS, "us-east-1", ep);

@@ -21,7 +21,7 @@ Anthropic Messages route.
 ### Key features
 
 - Chat completion through one `ai:ModelProvider` contract, on either endpoint
-- `CommonModelProvider` reaches **every** model Bedrock serves on Converse — 15 of AWS's 17
+- `ConverseModelProvider` reaches **every** model Bedrock serves on Converse — 15 of AWS's 17
   providers, including the ten with no dedicated class here
 - Structured output (`generate()`) by tool-forcing, on every API that supports tool calling
 - Text embeddings through the `ai:EmbeddingProvider` contract, with order-preserving batching
@@ -37,7 +37,7 @@ Anthropic Messages route.
 The public surface is split **by endpoint, then by vendor**. Every class is a thin typed facade over one
 shared internal spine (resolver → endpoint builder → converter → SigV4 transport).
 
-**Any vendor, Converse** — `CommonModelProvider`. Takes a model id as a plain `string` and reaches
+**Any vendor, Converse** — `ConverseModelProvider`. Takes a model id as a plain `string` and reaches
 every Converse-capable model, including Meta, Cohere, AI21, MiniMax, Moonshot, NVIDIA, Writer, xAI, Z.AI
 and Stability. Start here unless you need a vendor-specific knob or a non-Converse dialect.
 
@@ -78,7 +78,7 @@ property of its type, so an unreachable combination does not compile:
 | `RuntimeGoogleModelProvider` | `GoogleRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
 | `RuntimeDeepSeekModelProvider` | `DeepSeekRuntimeApi` | `CONVERSE`, `INVOKE`, `CHAT_COMPLETIONS` |
 | `RuntimeAmazonModelProvider` | `AmazonRuntimeApi` | `CONVERSE`, `INVOKE` |
-| `CommonModelProvider` | — | Converse only |
+| `ConverseModelProvider` | — | Converse only |
 | `Mantle*ModelProvider` | — | the model's own family |
 
 `CHAT_COMPLETIONS` is deliberately not OpenAI-only: AWS serves that family for DeepSeek, Gemma 3, Mistral,
@@ -140,7 +140,7 @@ final ai:ModelProvider nova = check new bedrock:RuntimeAmazonModelProvider(
 final ai:ModelProvider gpt = check new bedrock:MantleOpenAIModelProvider(
         bedrock:MANTLE_GPT_5_4, auth:DEFAULT_CREDENTIALS, aws:US_EAST_2);
 // Any vendor at all, over Converse.
-final ai:ModelProvider llama = check new bedrock:CommonModelProvider(
+final ai:ModelProvider llama = check new bedrock:ConverseModelProvider(
         "us.meta.llama3-3-70b-instruct-v1:0", auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
 final ai:ModelProvider gemma = check new bedrock:RuntimeGoogleModelProvider(
         bedrock:GEMMA_3_27B_IT, auth:DEFAULT_CREDENTIALS, aws:US_EAST_1);
@@ -291,7 +291,7 @@ endpoint with no guardrails, no cross-region inference and no structured output,
 authorizes under a *separate* IAM namespace — produced `AccessDenied` for credentials that were
 perfectly valid for Bedrock. The endpoint is now yours to state, and the type system holds you to it.
 
-### On a `Runtime*` class (or `CommonModelProvider`)
+### On a `Runtime*` class (or `ConverseModelProvider`)
 
 | You pass | Resolves to |
 | --- | --- |
@@ -351,7 +351,7 @@ check new bedrock:RuntimeAnthropicModelProvider("us.anthropic.claude-haiku-4-5",
 check new bedrock:RuntimeAmazonModelProvider("amazon.nova-something-new-v1:0", creds, "us-east-1");
 
 // 4. A vendor with no class of its own — Converse reaches all of them.
-check new bedrock:CommonModelProvider("us.writer.palmyra-x5-v1:0", creds, "us-east-1");
+check new bedrock:ConverseModelProvider("us.writer.palmyra-x5-v1:0", creds, "us-east-1");
 ```
 
 The `mantle/`, `converse/` and `invoke/` model-id string prefixes are **gone**. They were a way to
@@ -1108,7 +1108,7 @@ because Ballerina enum members share one module namespace.
 for it. `anthropic.claude-mythos-5` (bedrock-mantle only) and `anthropic.claude-mythos-5.1`
 (bedrock-runtime only) are real and documented; see the endpoint-availability table.
 
-**6. `CommonModelProvider` is new.** If you were passing raw id strings to a vendor class just to
+**6. `ConverseModelProvider` is new.** If you were passing raw id strings to a vendor class just to
 reach a model that class did not enumerate, this is the better home for it — it takes any Converse-
 capable id from any vendor.
 

@@ -164,11 +164,11 @@ function testBearerTokenCredentialsConstruct() returns error? {
 
 @test:Config {}
 function testTheVendorAgnosticClassConstructsOnAnyId() returns error? {
-    // `CommonModelProvider` is Converse-only and takes a plain string, so it
+    // `ConverseModelProvider` is Converse-only and takes a plain string, so it
     // reaches the ten vendors with no dedicated class in this module.
-    CommonModelProvider _ = check new ("meta.llama3-70b-instruct-v1:0", TEST_CREDS, "us-east-1");
-    CommonModelProvider _ = check new ("ai21.jamba-1-5-large-v1:0", TEST_CREDS, "us-east-1");
-    CommonModelProvider _ = check new ("acme.brand-new-model-v9", TEST_CREDS, "us-east-1");
+    ConverseModelProvider _ = check new ("meta.llama3-70b-instruct-v1:0", TEST_CREDS, "us-east-1");
+    ConverseModelProvider _ = check new ("ai21.jamba-1-5-large-v1:0", TEST_CREDS, "us-east-1");
+    ConverseModelProvider _ = check new ("acme.brand-new-model-v9", TEST_CREDS, "us-east-1");
 }
 
 // ---------------------------------------------------------------------------

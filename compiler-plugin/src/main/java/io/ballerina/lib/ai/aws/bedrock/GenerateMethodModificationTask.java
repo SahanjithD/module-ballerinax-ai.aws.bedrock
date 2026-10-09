@@ -103,7 +103,7 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     // loses generate() type binding at every call site, with no compile error — so
     // this must be updated in lockstep whenever a provider class is added or renamed.
     private static final String[] MODEL_PROVIDER_CLASS_NAMES = {
-            "CommonModelProvider",
+            "ConverseModelProvider",
             "RuntimeAnthropicModelProvider",
             "RuntimeOpenAIModelProvider",
             "RuntimeAmazonModelProvider",

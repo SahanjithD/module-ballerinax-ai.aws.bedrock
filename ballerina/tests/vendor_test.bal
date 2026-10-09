@@ -24,7 +24,7 @@ import ballerina/test;
 
 @test:Config {}
 function testEveryRuntimeProviderConstructs() returns error? {
-    CommonModelProvider _ = check new ("amazon.nova-pro-v1:0", TEST_CREDS, REGION);
+    ConverseModelProvider _ = check new ("amazon.nova-pro-v1:0", TEST_CREDS, REGION);
     RuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_4_6, TEST_CREDS, REGION);
     RuntimeOpenAIModelProvider _ = check new (GPT_OSS_120B, TEST_CREDS, REGION);
     RuntimeAmazonModelProvider _ = check new (NOVA_PRO, TEST_CREDS, REGION);
