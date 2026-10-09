@@ -425,7 +425,8 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthCon
         BedrockTransport dataTransport =
             check new (resolved, region, dataEp, httpConfig, retryConfig, true);
 
-        KbAttachResult attach = check resolveVectorKnowledgeBase(controlTransport, knowledgeBase);
+        KbAttachResult attach = check resolveVectorKnowledgeBase(controlTransport, knowledgeBase,
+            dataSourceIdOverride);
         string dataSourceId;
         if dataSourceIdOverride is string {
             dataSourceId = dataSourceIdOverride;
@@ -452,7 +453,8 @@ isolated function resolveVectorKbSpine(string providerName, KnowledgeBaseAuthCon
 }
 
 isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
-        string|SelfManagedKnowledgeBaseDefinition knowledgeBase) returns KbAttachResult|ai:Error {
+        string|SelfManagedKnowledgeBaseDefinition knowledgeBase, string? dataSourceId)
+        returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
         map<json> _ = check verifyVectorKnowledgeBaseUsable(controlTransport, knowledgeBase);
         return {knowledgeBaseId: knowledgeBase, createdDataSourceId: ()};
@@ -468,6 +470,7 @@ isolated function resolveVectorKnowledgeBase(BedrockTransport controlTransport,
     if candidates.length() > 1 {
         return error ai:Error(nameAmbiguityMessage(knowledgeBase.name, candidates));
     }
+    check guardDataSourceIdOnCreate(knowledgeBase.name, dataSourceId);
     // Same duplicate-name handling as the managed path.
     KbCreateOutcome created = check createVectorKnowledgeBaseRecoveringFromConflict(controlTransport, knowledgeBase);
     if created.recovered {

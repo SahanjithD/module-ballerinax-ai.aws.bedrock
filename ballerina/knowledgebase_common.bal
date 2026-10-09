@@ -106,7 +106,7 @@ isolated function resolveKbSpine(string providerName, KnowledgeBaseAuthConfig cr
         BedrockTransport dataTransport =
             check new (resolved, region, dataEp, httpConfig, retryConfig, true);
 
-        KbAttachResult attach = check resolveKnowledgeBase(controlTransport, knowledgeBase);
+        KbAttachResult attach = check resolveKnowledgeBase(controlTransport, knowledgeBase, dataSourceIdOverride);
         string dataSourceId;
         if dataSourceIdOverride is string {
             dataSourceId = dataSourceIdOverride;
@@ -136,11 +136,24 @@ isolated function resolveKbSpine(string providerName, KnowledgeBaseAuthConfig cr
 // Find-or-create.
 // ============================================================================
 
+// A new knowledge base has only the data source created with it, so a `dataSourceId`
+// can never match. Refused before anything is created.
+isolated function guardDataSourceIdOnCreate(string name, string? dataSourceId) returns ai:Error? {
+    if dataSourceId is string {
+        return errorWithDetail(
+            string `No knowledge base named '${name}' exists, so 'dataSourceId' cannot be used. ` +
+            "Leave it unset to create the knowledge base with its own data source.",
+            "'dataSourceId' picks a data source on an existing knowledge base; a new one gets its data " +
+            "source from the definition's 'dataSource'.");
+    }
+    return;
+}
+
 // An id attaches without writing. A definition is found by name: one match attaches,
 // none creates the knowledge base and its `CUSTOM` data source, more than one is an
 // error rather than a guess.
-isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string|ManagedKnowledgeBaseDefinition knowledgeBase)
-        returns KbAttachResult|ai:Error {
+isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string|ManagedKnowledgeBaseDefinition knowledgeBase,
+        string? dataSourceId) returns KbAttachResult|ai:Error {
     if knowledgeBase is string {
         map<json> _ = check verifyKnowledgeBaseUsable(controlTransport, knowledgeBase);
         return {knowledgeBaseId: knowledgeBase, createdDataSourceId: ()};
@@ -154,6 +167,7 @@ isolated function resolveKnowledgeBase(BedrockTransport controlTransport, string
     if candidates.length() > 1 {
         return error ai:Error(nameAmbiguityMessage(knowledgeBase.name, candidates));
     }
+    check guardDataSourceIdOnCreate(knowledgeBase.name, dataSourceId);
     // No match: create the knowledge base and its data source. A concurrent `init()`
     // can still create a duplicate under the same name, so that is checked once this
     // knowledge base is ACTIVE.
@@ -516,8 +530,7 @@ isolated function resolveCustomDataSource(BedrockTransport controlTransport, str
     }
     if candidates.length() == 0 {
         return errorWithDetail(
-            string `Knowledge base '${kbId}' has no 'CUSTOM' data source. Add one in the AWS console, or ` +
-            "pass a 'ManagedKnowledgeBaseDefinition' so this class creates one.",
+            string `Knowledge base '${kbId}' has no 'CUSTOM' data source. Add one in the AWS console.`,
             "ingest() and deleteByFilter() write through a CUSTOM (direct-ingestion) data source.");
     }
     return error ai:Error(
