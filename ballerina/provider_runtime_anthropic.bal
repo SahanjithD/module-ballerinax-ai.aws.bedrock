@@ -94,7 +94,7 @@ public isolated distinct client class RuntimeAnthropicModelProvider {
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + apiType - The Bedrock API to call. Defaults to `CONVERSE`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
-    # + maxTokens - Maximum tokens to generate. Pass `()` to omit the field entirely
+    # + maxTokens - Maximum tokens to generate, including any thinking. Anthropic requires it
     # + temperature - Sampling temperature. Unset uses the model's own default
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
@@ -104,7 +104,7 @@ public isolated distinct client class RuntimeAnthropicModelProvider {
             @display {label: "Region"} aws:Region|string region,
             @display {label: "API Type"} AnthropicRuntimeApi apiType = CONVERSE,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
-            @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
+            @display {label: "Maximum Tokens"} int maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AnthropicRuntimeConfig config)
             returns ai:Error? {

@@ -76,7 +76,7 @@ public isolated distinct client class MantleAnthropicModelProvider {
     # + auth - AWS credentials or a Bedrock API key; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
-    # + maxTokens - Maximum tokens to generate. Pass `()` to omit the field entirely
+    # + maxTokens - Maximum tokens to generate, including any thinking. Anthropic requires it
     # + temperature - Sampling temperature. Unset uses the model's own default
     # + config - Inference, passthrough and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
@@ -85,7 +85,7 @@ public isolated distinct client class MantleAnthropicModelProvider {
             @display {label: "Authentication"} BedrockAuthConfig auth,
             @display {label: "Region"} aws:Region|string region,
             @display {label: "Endpoint Configuration"} aws:EndpointConfig? endpoint = (),
-            @display {label: "Maximum Tokens"} int? maxTokens = DEFAULT_MAX_TOKEN_COUNT,
+            @display {label: "Maximum Tokens"} int maxTokens = DEFAULT_MAX_TOKEN_COUNT,
             @display {label: "Temperature"} decimal? temperature = (),
             @display {label: "Configuration"} *AnthropicMantleConfig config)
             returns ai:Error? {

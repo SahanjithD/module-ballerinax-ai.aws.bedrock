@@ -513,8 +513,9 @@ it for long reasoning tasks.
 > deprecated `max_tokens` and the GPT-6 models refuse it, so `openai.*` models are sent
 > `max_completion_tokens` instead. Every other vendor on those APIs still gets `max_tokens`.
 >
-> **Pass `maxTokens = ()` to drop the field entirely**, on every API, the same way an unset
-> `temperature` is left out.
+> **Pass `maxTokens = ()` to drop the field entirely**, the same way an unset `temperature` is left
+> out. The Anthropic classes are the exception: Anthropic requires the field, so their `maxTokens` is
+> an `int`.
 
 ## Vendor dialects
 
