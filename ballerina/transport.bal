@@ -340,24 +340,7 @@ isolated function hasApiKeyHeader(map<string> headers) returns boolean {
     return false;
 }
 
-# A successful round trip: the JSON body and the response headers the caller needs.
-type TransportResponse record {|
-    # The response body
-    json body;
-    # Selected response headers, keyed as in `REQUEST_ID_HEADER`
-    map<string> headers;
-|};
-
 const REQUEST_ID_HEADER = "requestId";
-
-# A retryable failure: HTTP 408, 429, 500, 502, 503 or 504, or a connection failure.
-type RetryableError distinct error;
-
-// A plain `distinct error`, like `RetryableError`; `executeRequest` turns it back into
-// an `ai:Error` with the same message for every other caller.
-
-# A Bedrock `ConflictException` (HTTP 409), which the caller may recover from.
-type ConflictError distinct error<record {| string detail; |}>;
 
 isolated function optionalHeader(http:Response resp, string name) returns string? {
     string|error value = resp.getHeader(name);

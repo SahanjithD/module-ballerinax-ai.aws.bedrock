@@ -22,40 +22,6 @@ import ballerina/lang.array;
 // from: Converse has no URL source, and Anthropic on Bedrock takes base64 only.
 // https://platform.claude.com/docs/en/build-with-claude/vision
 
-# One part of a user turn after its `ai:Prompt` has been flattened.
-type ContentPart TextPart|ImagePart;
-
-# Literal text.
-type TextPart record {|
-    # Discriminator.
-    readonly "text" kind = "text";
-    # The text.
-    string text;
-|};
-
-# An image, always as raw bytes plus a concrete IANA type.
-type ImagePart record {|
-    # Discriminator.
-    readonly "image" kind = "image";
-    # Concrete type — never a wildcard. Both Converse's `format` and Anthropic's
-    # `media_type` are derived from this, and neither accepts `image/*`.
-    string mimeType;
-    # UNencoded bytes. Each emitter base64-encodes at its own wire boundary.
-    byte[] data;
-|};
-
-# A user message whose content has been resolved to parts. Assistant and function
-# messages are unchanged — neither can carry an image.
-type ResolvedUserMessage record {|
-    # Always `ai:USER`.
-    ai:USER role = ai:USER;
-    # The message content, in order.
-    ContentPart[] parts;
-|};
-
-# A chat message ready for a converter: user content resolved to parts, others unchanged.
-type ResolvedMessage ResolvedUserMessage|ai:ChatAssistantMessage|ai:ChatFunctionMessage;
-
 // The only image formats any Bedrock API accepts.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageBlock.html
 final readonly & map<string> MIME_TO_CONVERSE_FORMAT = {

@@ -327,14 +327,6 @@ isolated function validateVectorDataSource(VectorDataSourceDefinition def) retur
     return;
 }
 
-# The retrieval settings checked at construction.
-type VectorRetrievalSettings record {|
-    # Default number of results per retrieval
-    int? numberOfResults = ();
-    # Reranking for retrieval
-    VectorRerankingConfig? rerankingConfiguration = ();
-|};
-
 isolated function validateVectorRetrievalConfig(VectorRetrievalSettings config) returns ai:Error? {
     // min 1, max 100.
     int? numberOfResults = config?.numberOfResults;

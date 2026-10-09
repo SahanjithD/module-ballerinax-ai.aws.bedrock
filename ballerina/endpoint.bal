@@ -35,19 +35,6 @@ const MANTLE_ENDPOINT_PREFIX = "bedrock-mantle";
 const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
 const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
 
-# The resolved wire endpoint. `signingService` is the SigV4 scope, not the IAM
-# namespace; they differ inside this service family.
-type Endpoint record {|
-    # Origin, e.g. `https://bedrock-runtime.us-east-1.amazonaws.com`.
-    string baseUrl;
-    # Host header / SigV4 canonical host, e.g. `bedrock-runtime.us-east-1.amazonaws.com`.
-    string host;
-    # Wire request path with the model-id segment single-encoded.
-    string path;
-    # SigV4 signing name for this route.
-    string signingService;
-|};
-
 // The origin for a route: a `customEndpoint`, else the AWS SDK endpoint metadata. Uses
 // the route's region, so an ARN's region wins. The signing scope never depends on it.
 isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error {
@@ -191,14 +178,6 @@ isolated function runtimePath(Route route) returns string|error {
 // Whether the API names the model in the URL rather than the body.
 isolated function isPathAddressed(ApiFamily api) returns boolean
     => api == CONVERSE || api == INVOKE;
-
-# Which bedrock-agent plane an endpoint is for. Only the knowledge base spine needs it.
-enum AgentPlane {
-    # Control plane (`bedrock-agent`): create, list and get knowledge bases, data sources and documents
-    AGENT_CONTROL,
-    # Data plane (`bedrock-agent-runtime`): Retrieve
-    AGENT_DATA
-}
 
 // The endpoint for a knowledge-base plane. The path is left empty because one
 // transport serves many paths. A `customEndpoint` applies to both planes.

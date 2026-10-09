@@ -363,3 +363,96 @@ type ModelConverter record {|
     # What this dialect can carry.
     DialectSupport supports;
 |};
+
+// ============================================================================
+// Module-private: endpoints, transport and prompt content.
+// ============================================================================
+
+# A parsed Bedrock ARN: `arn:partition:service:region:account-id:resource-type/resource-id`.
+# Its region and partition override `config.region`.
+type ParsedArn record {|
+    # `aws` | `aws-cn` | `aws-us-gov`.
+    string partition;
+    # e.g. `bedrock`.
+    string 'service;
+    # The region; empty on global ARNs such as foundation-model ones, where the caller's
+    # region is used.
+    string region;
+    # The 12-digit AWS account id; may be empty.
+    string accountId;
+    # e.g. `imported-model`, `provisioned-model`, `inference-profile`.
+    string resourceType;
+    # The opaque id after the `/` (or `:`) delimiter; may be empty.
+    string resourceId;
+|};
+
+# The resolved wire endpoint. `signingService` is the SigV4 scope, not the IAM
+# namespace; they differ inside this service family.
+type Endpoint record {|
+    # Origin, e.g. `https://bedrock-runtime.us-east-1.amazonaws.com`.
+    string baseUrl;
+    # Host header / SigV4 canonical host, e.g. `bedrock-runtime.us-east-1.amazonaws.com`.
+    string host;
+    # Wire request path with the model-id segment single-encoded.
+    string path;
+    # SigV4 signing name for this route.
+    string signingService;
+|};
+
+# Which bedrock-agent plane an endpoint is for. Only the knowledge base spine needs it.
+enum AgentPlane {
+    # Control plane (`bedrock-agent`): create, list and get knowledge bases, data sources and documents
+    AGENT_CONTROL,
+    # Data plane (`bedrock-agent-runtime`): Retrieve
+    AGENT_DATA
+}
+
+# A successful round trip: the JSON body and the response headers the caller needs.
+type TransportResponse record {|
+    # The response body
+    json body;
+    # Selected response headers, keyed as in `REQUEST_ID_HEADER`
+    map<string> headers;
+|};
+
+# A retryable failure: HTTP 408, 429, 500, 502, 503 or 504, or a connection failure.
+type RetryableError distinct error;
+
+// A plain `distinct error`, like `RetryableError`; `executeRequest` turns it back into
+// an `ai:Error` with the same message for every other caller.
+# A Bedrock `ConflictException` (HTTP 409), which the caller may recover from.
+type ConflictError distinct error<record {| string detail; |}>;
+
+# One part of a user turn after its `ai:Prompt` has been flattened.
+type ContentPart TextPart|ImagePart;
+
+# Literal text.
+type TextPart record {|
+    # Discriminator.
+    readonly "text" kind = "text";
+    # The text.
+    string text;
+|};
+
+# An image, always as raw bytes plus a concrete IANA type.
+type ImagePart record {|
+    # Discriminator.
+    readonly "image" kind = "image";
+    # Concrete type — never a wildcard. Both Converse's `format` and Anthropic's
+    # `media_type` are derived from this, and neither accepts `image/*`.
+    string mimeType;
+    # UNencoded bytes. Each emitter base64-encodes at its own wire boundary.
+    byte[] data;
+|};
+
+# A user message whose content has been resolved to parts. Assistant and function
+# messages are unchanged — neither can carry an image.
+type ResolvedUserMessage record {|
+    # Always `ai:USER`.
+    ai:USER role = ai:USER;
+    # The message content, in order.
+    ContentPart[] parts;
+|};
+
+# A chat message ready for a converter: user content resolved to parts, others unchanged.
+type ResolvedMessage ResolvedUserMessage|ai:ChatAssistantMessage|ai:ChatFunctionMessage;

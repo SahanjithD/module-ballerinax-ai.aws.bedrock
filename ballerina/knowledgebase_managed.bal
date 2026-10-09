@@ -264,15 +264,6 @@ isolated function guessChunkerForKb(ai:Document|ai:Chunk doc) returns ai:Chunker
     return new ai:GenericRecursiveChunker();
 }
 
-# One document ready to submit, with the position of the chunk within its parent when
-# this module produced it client-side.
-type KbIngestItem record {|
-    # The chunk or document to encode
-    ai:Chunk|ai:Document item;
-    # 0-based position within the parent's chunks, or `()` when the item was passed through as the caller gave it
-    int? chunkOrdinal;
-|};
-
 // Client-side chunking for both classes. Chunks of a split document get `<id>#<n>` ids,
 // because chunkers copy the parent's `id` and Bedrock would keep only one of them.
 isolated function applyKbChunker(ai:Chunker|ai:AUTO|ai:DISABLE chunker, (ai:Chunk|ai:Document)[] items)

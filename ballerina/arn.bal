@@ -12,24 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-# A parsed Bedrock ARN: `arn:partition:service:region:account-id:resource-type/resource-id`.
-# Its region and partition override `config.region`.
-type ParsedArn record {|
-    # `aws` | `aws-cn` | `aws-us-gov`.
-    string partition;
-    # e.g. `bedrock`.
-    string 'service;
-    # The region; empty on global ARNs such as foundation-model ones, where the caller's
-    # region is used.
-    string region;
-    # The 12-digit AWS account id; may be empty.
-    string accountId;
-    # e.g. `imported-model`, `provisioned-model`, `inference-profile`.
-    string resourceType;
-    # The opaque id after the `/` (or `:`) delimiter; may be empty.
-    string resourceId;
-|};
-
 // `true` if `model` is an ARN.
 isolated function isArn(string model) returns boolean => model.startsWith("arn:");
 

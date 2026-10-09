@@ -367,3 +367,15 @@ public type SelfManagedKnowledgeBaseConfig record {|
 // `implicitFilterConfiguration` is not exposed: it needs a model and a schema of every
 // filterable attribute, and the `ai` contract has nothing to map it to.
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_ImplicitFilterConfiguration.html
+
+// ============================================================================
+// Module-private.
+// ============================================================================
+
+# The retrieval settings checked at construction.
+type VectorRetrievalSettings record {|
+    # Default number of results per retrieval
+    int? numberOfResults = ();
+    # Reranking for retrieval
+    VectorRerankingConfig? rerankingConfiguration = ();
+|};

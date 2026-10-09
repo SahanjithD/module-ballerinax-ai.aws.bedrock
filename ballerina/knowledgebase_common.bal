@@ -56,8 +56,6 @@ const int KB_PIN_KEY_SAMPLE_SIZE = 10;
 // `ai:Metadata.id`, so the two always agree for documents this module ingested.
 const string KB_DOCUMENT_ID_METADATA_KEY = "id";
 
-
-
 // The live `ListKnowledgeBaseDocuments` rejects more than 100, although the service
 // model allows 1000; used for all three list calls, which share that shape.
 const int KB_LIST_PAGE_SIZE = 100;
@@ -90,23 +88,6 @@ const int KB_MAX_RESULTS_PER_CALL = 100;
 // ============================================================================
 // Spine resolution.
 // ============================================================================
-
-# Everything `ManagedKnowledgeBase`'s methods read: two agent-plane
-# transports (control on `bedrock-agent`, data on `bedrock-agent-runtime`), the
-# resolved knowledge base / data source ids, and the detected chunking strategy.
-# Module-private — the resolver's output, mirroring `Route`/`Endpoint`.
-type KbSpine record {|
-    # `bedrock-agent` (create/list/get KB & data source, ingest/list/get/delete documents)
-    BedrockTransport controlTransport;
-    # `bedrock-agent-runtime` (retrieve)
-    BedrockTransport dataTransport;
-    # The resolved knowledge base id
-    string knowledgeBaseId;
-    # The resolved `CUSTOM` data source id
-    string dataSourceId;
-    # The resolved data source's actual chunking strategy
-    ChunkingStrategy chunkingStrategy;
-|};
 
 // Builds the transports, then finds or creates the knowledge base and resolves its
 // data source and chunking, so every failure surfaces at construction.
@@ -155,17 +136,6 @@ isolated function resolveKbSpine(string providerName, KnowledgeBaseAuthConfig cr
 // ============================================================================
 // Find-or-create.
 // ============================================================================
-
-# Outcome of resolving `string|ManagedKnowledgeBaseDefinition` to a concrete knowledge
-# base. `createdDataSourceId` is set ONLY when a new knowledge base (and its
-# `CUSTOM` data source) was just created — in every other case (a bare id, or an
-# existing knowledge base found by name) data-source resolution still has to run.
-type KbAttachResult record {|
-    # The attached or newly created knowledge base id
-    string knowledgeBaseId;
-    # The `CUSTOM` data source id, when this call just created it
-    string? createdDataSourceId;
-|};
 
 // An id attaches without writing. A definition is found by name: one match attaches,
 // none creates the knowledge base and its `CUSTOM` data source, more than one is an
@@ -323,15 +293,6 @@ isolated function createKnowledgeBaseRequestBody(ManagedKnowledgeBaseDefinition 
     }
     return body;
 }
-
-# Outcome of `createKnowledgeBaseRecoveringFromConflict`. After a 409 recovery the
-# knowledge base already has its data source, so none is created.
-type KbCreateOutcome record {|
-    # The created id, or, on recovery, the id of the existing match
-    string knowledgeBaseId;
-    # `true` when a 409 led to attaching rather than creating
-    boolean recovered;
-|};
 
 // Creates the knowledge base. A 409 means another call already created one under this
 // name; it is attached to after the same checks as an ordinary find-by-name. No match
@@ -746,15 +707,6 @@ isolated function sourceValueOfIdentifier(json identifier) returns string? {
     return id is string ? id : stringField(asMap(m["s3"] ?: {}), "uri");
 }
 
-# The final (terminal) outcome of one submitted document: its last-seen status and,
-# on failure, the reason Bedrock reported.
-type DocumentOutcome record {|
-    # The terminal `DocumentStatus` (see `KB_DOC_USABLE_STATUSES`/`KB_DOC_FAILED_STATUSES`)
-    string status;
-    # Bedrock's explanation, present mainly alongside `IGNORED`
-    string? statusReason;
-|};
-
 // Polls until every submitted id is terminal or the timeout passes. Driven by the
 // submitted ids, so an id that reads `NOT_FOUND` or is missing from the response stays
 // pending instead of passing as success.
@@ -822,14 +774,6 @@ isolated function assertDistinctDocumentIds(string[] documentIds) returns ai:Err
         "Bedrock upserts by 'customDocumentIdentifier.id', so the later document would silently overwrite " +
         "the earlier one. Ingest them in separate calls if the overwrite is intended.");
 }
-
-# One enumerated, retrievable document that `deleteByFilter` can potentially delete.
-type DeletableDocument record {|
-    # `customDocumentIdentifier.id` (CUSTOM) or the S3 object URI (S3) — also what `_source_uri` holds
-    string sourceValue;
-    # The ready-to-send `DocumentIdentifier` for `DeleteKnowledgeBaseDocuments`
-    json identifier;
-|};
 
 // The data source's documents that are retrievable and deletable (`CUSTOM` or `S3`).
 isolated function listDeletableDocuments(BedrockTransport controlTransport, string kbId, string dsId,
@@ -916,26 +860,10 @@ isolated function retrievalResultIdentifies(json result, string documentId, stri
 // deleteByFilter, shared by both classes.
 // ============================================================================
 
-// Both classes' retrieve calls reduced to what enumeration needs: no reranking.
-
-# A paged, unranked `Retrieve` call, as `deleteByFilter`'s enumeration makes it.
-type DeleteRetrieveCaller isolated function (BedrockTransport dataTransport, string kbId, json? filter,
-        int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error;
-
 // The managed `DeleteRetrieveCaller`; `vectorDeleteRetrieve` is the self-managed one.
 isolated function managedDeleteRetrieve(BedrockTransport dataTransport, string kbId, json? filter,
         int numberOfResults, string? nextToken) returns [json[], string?]|ai:Error
     => callRetrieve(dataTransport, kbId, FILTER_PROBE_QUERY, filter, numberOfResults, (), nextToken);
-
-# One paged `Retrieve` enumeration's result: every document identity seen, and
-# whether `KB_DELETE_ENUMERATION_MAX_PAGES` was hit before pagination finished
-# naturally (`nextToken` came back `()`).
-type DeleteEnumeration record {|
-    # Every `retrievalResultSourceValue` seen across every page, as a set
-    map<()> identities;
-    # `true` when the page cap was hit — the set above may be INCOMPLETE
-    boolean truncated;
-|};
 
 // Pages a `Retrieve` (filtered or not) up to `KB_DELETE_ENUMERATION_MAX_PAGES`,
 // collecting each result's source value.
@@ -983,59 +911,6 @@ isolated function storeIgnoresMetadataFilters(BedrockTransport dataTransport, st
     [json[], string?] [results, _] = check retrieveCaller(dataTransport, kbId, controlFilter, 1, ());
     return results.length() > 0;
 }
-
-# Why a candidate could not be decided. A reason rather than a message, so the error
-# can group candidates by cause.
-enum UnresolvedReason {
-    # This data source exposes no metadata key that identifies a document, so nothing
-    # here can be pinned. Structural: it applies to every candidate equally.
-    UNRESOLVED_NO_PIN_KEY,
-    # The pin key is `ai:Metadata.id`, and this document was ingested WITHOUT one —
-    # `documentIdFor` gave it a UUID — so it carries no `id` attribute for the pin to
-    # match. Known from the document id alone, before any probe.
-    UNRESOLVED_NO_DOCUMENT_ID,
-    # Pinnable, but neither probe returned it.
-    UNRESOLVED_UNREACHABLE,
-    # Its pin group exceeded the `Retrieve` cap, so it was not checked.
-    UNRESOLVED_GROUP_TOO_LARGE
-}
-
-# One candidate `deleteByFilter` could not decide about.
-type UnresolvedCandidate record {|
-    # The document id, as `listDeletableDocuments` built it
-    string sourceValue;
-    # The data source it lives on
-    string dataSourceId;
-    # Why it could not be decided
-    UnresolvedReason reason;
-|};
-
-# The three-way outcome of resolving one delete candidate.
-# See `probeCandidate`, which produces it.
-enum DeleteCandidateOutcome {
-    # Confirmed to match: safe to delete.
-    DELETE_MATCH,
-    # The pin reached this exact document without the filter and not with it, so the
-    # FILTER excluded it — leave it alone, soundly and silently.
-    DELETE_SKIP,
-    # The pin did not reach it at all, so nothing can be concluded about the filter —
-    # reported to the caller rather than assumed either way.
-    DELETE_INDETERMINATE
-}
-
-# What `resolveDataSourceDeletes` found for one data source.
-type DataSourceDeleteResult record {|
-    # `DocumentIdentifier`s ready for `DeleteKnowledgeBaseDocuments`
-    json[] toDelete;
-    # Candidates that could not be confirmed to match or not match the filter
-    UnresolvedCandidate[] indeterminate;
-    # Why nothing was deleted from this data source: enumeration hit the page cap, or the
-    # store does not honour metadata filters. When set, the other two lists are empty.
-    string? refusalReason;
-    # Notes for the caller, e.g. that a large pin group was cut off and calling again
-    # continues it.
-    string[] notes = [];
-|};
 
 // Resolves one data source's candidates to a delete set. A filtered enumeration
 // confirms matches; every candidate it misses is probed on its own, because
@@ -1224,15 +1099,6 @@ isolated function resolvePinGroup(BedrockTransport dataTransport, string kbId, D
     }
     return [toDelete, indeterminate, truncated];
 }
-
-# The one data source a `deleteByFilter` works on, and the metadata key that names it
-# on a retrieval result (it differs between managed and self-managed knowledge bases).
-type DataSourceScope record {|
-    # The reserved data-source-id metadata attribute
-    string key;
-    # The data source id
-    string id;
-|};
 
 // The `equals` leaf that restricts a `Retrieve` to the scoped data source.
 isolated function dataSourceLeaf(DataSourceScope scope) returns json
