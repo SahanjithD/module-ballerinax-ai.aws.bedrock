@@ -60,10 +60,16 @@ allprojects {
 
 def moduleVersion = project.version.replace("-SNAPSHOT", "")
 
-task build {
-    dependsOn(':ai.aws.bedrock-compiler-plugin:build')
-    dependsOn(':ai.aws.bedrock-native:build')
-    dependsOn(':ai.aws.bedrock-ballerina:build')
+// Release plugin 3.x already registers `build`; add the module builds to it.
+def addModuleBuilds = { Task task ->
+    task.dependsOn(':ai.aws.bedrock-compiler-plugin:build')
+    task.dependsOn(':ai.aws.bedrock-native:build')
+    task.dependsOn(':ai.aws.bedrock-ballerina:build')
+}
+if (tasks.names.contains('build')) {
+    tasks.named('build') { addModuleBuilds(it) }
+} else {
+    tasks.register('build') { addModuleBuilds(it) }
 }
 
 // `bal build` loads BOTH jars by path: Ballerina.toml points at the native jar and
@@ -76,6 +82,7 @@ tasks.getByPath(':ai.aws.bedrock-ballerina:build').mustRunAfter(
         ':ai.aws.bedrock-compiler-plugin:build')
 
 release {
+    failOnPublishNeeded = false
     buildTasks = ['build']
     failOnSnapshotDependencies = true
     versionPropertyFile = 'gradle.properties'
