@@ -113,5 +113,10 @@ clean {
 build.dependsOn ':ai.aws.bedrock-native:build'
 build.dependsOn ':ai.aws.bedrock-compiler-plugin:build'
 build.dependsOn 'generatePomFileForMavenPublication'
+// Plugin 4.0.0 builds connectors in Docker and its clean step deletes every `build`
+// directory under the repo root, including the jars Ballerina.toml and
+// CompilerPlugin.toml load, so a standalone `gradlew test` must rebuild them.
+test.dependsOn ':ai.aws.bedrock-native:build'
+test.dependsOn ':ai.aws.bedrock-compiler-plugin:build'
 publishToMavenLocal.dependsOn build
 publish.dependsOn build
