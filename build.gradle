@@ -18,7 +18,7 @@
 
 plugins {
     id "com.github.spotbugs-base"
-    id 'com.github.johnrengelman.shadow'
+    id 'com.gradleup.shadow'
     id 'de.undercouch.download'
     id 'net.researchgate.release'
 }
@@ -60,10 +60,18 @@ allprojects {
 
 def moduleVersion = project.version.replace("-SNAPSHOT", "")
 
-task build {
-    dependsOn(':ai.aws.bedrock-compiler-plugin:build')
-    dependsOn(':ai.aws.bedrock-native:build')
-    dependsOn(':ai.aws.bedrock-ballerina:build')
+if (tasks.names.contains('build')) {
+    tasks.named('build') {
+        dependsOn(':ai.aws.bedrock-compiler-plugin:build')
+        dependsOn(':ai.aws.bedrock-native:build')
+        dependsOn(':ai.aws.bedrock-ballerina:build')
+    }
+} else {
+    tasks.register('build') {
+        dependsOn(':ai.aws.bedrock-compiler-plugin:build')
+        dependsOn(':ai.aws.bedrock-native:build')
+        dependsOn(':ai.aws.bedrock-ballerina:build')
+    }
 }
 
 // `bal build` loads BOTH jars by path: Ballerina.toml points at the native jar and

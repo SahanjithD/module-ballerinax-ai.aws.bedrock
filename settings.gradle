@@ -19,7 +19,7 @@
 pluginManagement {
     plugins {
         id "com.github.spotbugs-base" version "${spotbugsPluginVersion}"
-        id "com.github.johnrengelman.shadow" version "${shadowJarPluginVersion}"
+        id "com.gradleup.shadow" version "${shadowJarPluginVersion}"
         id "de.undercouch.download" version "${downloadPluginVersion}"
         id "net.researchgate.release" version "${releasePluginVersion}"
         id "io.ballerina.plugin" version "${ballerinaGradlePluginVersion}"
@@ -38,7 +38,7 @@ pluginManagement {
 }
 
 plugins {
-    id "com.gradle.enterprise" version "3.2"
+    id "com.gradle.develocity" version "3.19.2"
 }
 
 rootProject.name = 'module-ballerinax-ai.aws.bedrock'
@@ -53,9 +53,9 @@ project(':ai.aws.bedrock-native').projectDir = file("native")
 project(':ai.aws.bedrock-ballerina').projectDir = file("ballerina")
 project(':ai.aws.bedrock-compiler-plugin').projectDir = file('compiler-plugin')
 
-gradleEnterprise {
+develocity {
     buildScan {
-        termsOfServiceUrl = 'https://gradle.com/terms-of-service'
-        termsOfServiceAgree = 'yes'
+        termsOfUseUrl = 'https://gradle.com/help/legal-terms-of-use'
+        termsOfUseAgree = 'yes'
     }
 }
