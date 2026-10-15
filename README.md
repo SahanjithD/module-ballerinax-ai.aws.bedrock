@@ -16,7 +16,7 @@ The model providers call the `bedrock-runtime` endpoint, which AWS recommends fo
 | --- | --- | --- | --- |
 | `bedrock-runtime.{region}.amazonaws.com` | Converse, InvokeModel, Chat Completions, Responses, Messages | `bedrock` | `bedrock:InvokeModel` |
 
-For usage details, the routing table, and the full provider list, see the
+For usage details, see the
 [module documentation](ballerina/README.md).
 
 ## Issues and projects
