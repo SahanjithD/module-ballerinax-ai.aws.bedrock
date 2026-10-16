@@ -55,6 +55,7 @@ import io.ballerina.projects.Module;
 import io.ballerina.projects.ModuleId;
 import io.ballerina.projects.Package;
 import io.ballerina.projects.PackageCompilation;
+import io.ballerina.projects.ResolvedPackageDependency;
 import io.ballerina.projects.plugins.ModifierTask;
 import io.ballerina.projects.plugins.SourceModifierContext;
 import io.ballerina.tools.text.TextDocument;
@@ -127,30 +128,30 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             return;
         }
 
-        String moduleVersion = majorVersionOf(currentPackage);
+        String moduleVersion = bedrockMajorVersion(currentPackage, compilation);
+        // Shared across modules, as in the other ai.* plugins. Every module is analyzed before
+        // any is modified, so a record declared in one module and returned by generate() in
+        // another gets its schema whatever order the modules come in.
+        ModifierData modifierData = new ModifierData();
 
         for (ModuleId moduleId : currentPackage.moduleIds()) {
             Module module = currentPackage.module(moduleId);
             SemanticModel semanticModel = compilation.getSemanticModel(moduleId);
-            Collection<DocumentId> documentIds = module.documentIds();
-            Collection<DocumentId> testDocumentIds = module.testDocumentIds();
-
-            // Per MODULE, not per task. `typeSchemas` is keyed by the UNQUALIFIED
-            // type name, so a shared map lets a `Result` record in one module
-            // annotate an unrelated `Result` in the next with the wrong schema.
-            // Module-scoped state makes the key collision unreachable: within one
-            // module the names are already unique.
-            ModifierData modifierData = new ModifierData();
-
             List<ClassSymbol> providerSymbols = resolveProviderSymbols(semanticModel, moduleVersion);
 
-            for (DocumentId documentId : documentIds) {
+            for (DocumentId documentId : module.documentIds()) {
                 analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
             }
 
-            for (DocumentId documentId : testDocumentIds) {
+            for (DocumentId documentId : module.testDocumentIds()) {
                 analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
             }
+        }
+
+        for (ModuleId moduleId : currentPackage.moduleIds()) {
+            Module module = currentPackage.module(moduleId);
+            Collection<DocumentId> documentIds = module.documentIds();
+            Collection<DocumentId> testDocumentIds = module.testDocumentIds();
 
             for (DocumentId documentId : documentIds) {
                 modifierContext.modifySourceFile(modifyDocument(module.document(documentId),
@@ -165,15 +166,19 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     }
 
     /**
-     * The MAJOR component of the package version, which is what `getTypeByName` keys on.
+     * The MAJOR version of the resolved ai.aws.bedrock package, which is what `getTypeByName` keys on.
      *
-     * <p>Read from the package being compiled rather than hardcoded. A literal here has to be
-     * edited in lockstep with every version bump, and forgetting costs no compile error: the
-     * lookup simply resolves nothing, no call site is annotated, and typed {@code generate()}
-     * fails at runtime with "Value creator object is not available". Bumping the package to
-     * 2.0.0 against a hardcoded "1" reproduced exactly that.</p>
+     * <p>In a user's application `currentPackage` is the application, so the version comes from
+     * its resolved dependency. The fallback covers compiling this package itself.</p>
      */
-    private static String majorVersionOf(Package currentPackage) {
+    private static String bedrockMajorVersion(Package currentPackage, PackageCompilation compilation) {
+        for (ResolvedPackageDependency dependency : compilation.getResolution().allDependencies()) {
+            Package dependencyPackage = dependency.packageInstance();
+            if (BEDROCK_MODULE_ORG.equals(dependencyPackage.packageOrg().value())
+                    && BEDROCK_MODULE_NAME.equals(dependencyPackage.packageName().value())) {
+                return String.valueOf(dependencyPackage.packageVersion().value().major());
+            }
+        }
         return String.valueOf(currentPackage.packageVersion().value().major());
     }
 
