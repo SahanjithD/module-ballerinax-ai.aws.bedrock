@@ -20,4 +20,4 @@ graalvmCompatible = true
 groupId = "io.ballerina.lib"
 artifactId = "ai.aws.bedrock-native"
 version = "1.0.0"
-path = "../native/build/libs/ai.aws.bedrock-native-1.0.0-SNAPSHOT.jar"
+path = "../native/build/libs/ai.aws.bedrock-native-1.0.0.jar"
