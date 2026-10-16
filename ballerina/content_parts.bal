@@ -1,0 +1,289 @@
+// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.com).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import ballerina/ai;
+import ballerina/lang.array;
+
+// Images are sent as bytes: Converse has no web URL source, and Anthropic on Bedrock takes
+// base64 only. A URL is refused rather than fetched, as in ai.ollama.
+// https://platform.claude.com/docs/en/build-with-claude/vision
+
+// The only image formats any Bedrock API accepts.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageBlock.html
+final readonly & map<string> MIME_TO_CONVERSE_FORMAT = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/gif": "gif",
+    "image/webp": "webp"
+};
+
+// ---------------------------------------------------------------------------
+// Resolution (does I/O)
+// ---------------------------------------------------------------------------
+
+// Hoists system content as text and resolves each user turn to parts.
+isolated function resolveMessages(ai:ChatMessage[] messages)
+        returns [string?, ResolvedMessage[]]|ai:Error {
+    string[] systemParts = [];
+    ResolvedMessage[] rest = [];
+    foreach ai:ChatMessage m in messages {
+        if m is ai:ChatSystemMessage {
+            // No API takes an image in the system prompt, so it is refused.
+            systemParts.push(check contentToText(m.content, "a system message"));
+        } else if m is ai:ChatUserMessage {
+            rest.push({parts: check contentToParts(m.content)});
+        } else if m is ai:ChatAssistantMessage|ai:ChatFunctionMessage {
+            rest.push(m);
+        }
+    }
+    string? system = systemParts.length() == 0 ? () : string:'join("\n\n", ...systemParts);
+    return [system, rest];
+}
+
+// Adjacent text is merged, so a text-only prompt is one part.
+isolated function contentToParts(string|ai:Prompt content) returns ContentPart[]|ai:Error {
+    if content is string {
+        return content == "" ? [] : [{text: content}];
+    }
+    string[] & readonly strings = content.strings;
+    anydata[] insertions = content.insertions;
+    ContentPart[] parts = [];
+    string text = strings.length() > 0 ? strings[0] : "";
+
+    foreach int i in 0 ..< insertions.length() {
+        anydata insertion = insertions[i];
+        if insertion is ai:Document|ai:Chunk {
+            text = flushText(text, parts);
+            check appendDocument(insertion, parts);
+        } else if insertion is (ai:Document|ai:Chunk)[] {
+            text = flushText(text, parts);
+            foreach ai:Document|ai:Chunk doc in insertion {
+                check appendDocument(doc, parts);
+            }
+        } else {
+            text += insertion.toString();
+        }
+        if i + 1 < strings.length() {
+            text += strings[i + 1];
+        }
+    }
+    _ = flushText(text, parts);
+    return parts;
+}
+
+// Content as plain text; an image is refused, naming `sink`.
+isolated function contentToText(string|ai:Prompt content, string sink) returns string|ai:Error {
+    ContentPart[] parts = check contentToParts(content);
+    string text = "";
+    foreach ContentPart part in parts {
+        if part is ImagePart {
+            return error ai:Error(string `Images are not supported in ${sink}. ` +
+                "Move the image into a user message on a Converse or Anthropic route.");
+        }
+        text += part.text;
+    }
+    return text;
+}
+
+// Text and images only; other document types are out of scope.
+isolated function appendDocument(ai:Document|ai:Chunk doc, ContentPart[] parts) returns ai:Error? {
+    if doc is ai:TextDocument|ai:TextChunk {
+        string text = doc.content;
+        if text != "" {
+            parts.push({text});
+        }
+        return;
+    }
+    if doc is ai:ImageDocument {
+        parts.push(check toImagePart(doc));
+        return;
+    }
+    return error ai:Error("Only text and image documents are supported.");
+}
+
+isolated function toImagePart(ai:ImageDocument doc) returns ImagePart|ai:Error {
+    ai:Url|byte[] data = doc.content;
+    if data is ai:Url {
+        return error ai:Error("URL-based images are not supported. Provide the image as a byte array.");
+    }
+    string? mimeType = normalizeMimeType(doc.metadata?.mimeType);
+    // An explicit `metadata.mimeType` wins; sniffing is the fallback.
+    string? resolved = mimeType ?: sniffImageMime(data);
+    if resolved is () {
+        return error ai:Error("Could not determine the image type. Set " +
+            "'metadata.mimeType' to one of image/png, image/jpeg, image/gif, image/webp.");
+    }
+    if !MIME_TO_CONVERSE_FORMAT.hasKey(resolved) {
+        return error ai:Error(string `Unsupported image type '${resolved}'. Bedrock ` +
+            "accepts image/png, image/jpeg, image/gif and image/webp.");
+    }
+    return {mimeType: resolved, data};
+}
+
+isolated function flushText(string text, ContentPart[] parts) returns string {
+    if text != "" {
+        parts.push({text});
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// MIME handling
+// ---------------------------------------------------------------------------
+
+// Lowercases, drops parameters, and maps `image/jpg` to `image/jpeg`.
+isolated function normalizeMimeType(string? raw) returns string? {
+    if raw is () {
+        return ();
+    }
+    string value = raw.trim().toLowerAscii();
+    int? semi = value.indexOf(";");
+    if semi is int {
+        value = value.substring(0, semi).trim();
+    }
+    if value == "" || value == "image/*" || value == "application/octet-stream" {
+        // Too vague (e.g. `image/*`); sniff instead.
+        return ();
+    }
+    return value == "image/jpg" ? "image/jpeg" : value;
+}
+
+isolated function sniffImageMime(byte[] data) returns string? {
+    if startsWithBytes(data, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return "image/png";
+    }
+    if startsWithBytes(data, [0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    if startsWithBytes(data, [0x47, 0x49, 0x46, 0x38]) { // "GIF8"
+        return "image/gif";
+    }
+    // WebP: "RIFF", a size, then "WEBP".
+    if startsWithBytes(data, [0x52, 0x49, 0x46, 0x46]) && data.length() >= 12
+        && data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50 {
+        return "image/webp";
+    }
+    return ();
+}
+
+isolated function startsWithBytes(byte[] data, int[] prefix) returns boolean {
+    if data.length() < prefix.length() {
+        return false;
+    }
+    foreach int i in 0 ..< prefix.length() {
+        if <int>data[i] != prefix[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Per-API emitters (pure).
+// ---------------------------------------------------------------------------
+
+// Converse and Nova InvokeModel image blocks.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageBlock.html
+isolated function converseContentBlocks(ContentPart[] parts) returns json[] {
+    json[] blocks = [];
+    foreach ContentPart part in parts {
+        if part is TextPart {
+            blocks.push({"text": part.text});
+        } else {
+            blocks.push({
+                "image": {
+                    // A bare token, not the MIME type.
+                    "format": MIME_TO_CONVERSE_FORMAT.get(part.mimeType),
+                    "source": {"bytes": array:toBase64(part.data)}
+                }
+            });
+        }
+    }
+    return blocks;
+}
+
+// https://platform.claude.com/docs/en/api/messages
+isolated function anthropicContentBlocks(ContentPart[] parts) returns json[] {
+    json[] blocks = [];
+    foreach ContentPart part in parts {
+        if part is TextPart {
+            blocks.push({"type": "text", "text": part.text});
+        } else {
+            blocks.push({
+                "type": "image",
+                "source": {
+                    "type": "base64", // Bedrock does not accept the `url` source type.
+                    "media_type": part.mimeType,
+                    "data": array:toBase64(part.data)
+                }
+            });
+        }
+    }
+    return blocks;
+}
+
+// OpenAI Responses content, from parts already checked by `rejectImagesIn`.
+isolated function responsesContentParts(ContentPart[] parts) returns json[] {
+    json[] out = [];
+    foreach ContentPart part in parts {
+        if part is TextPart {
+            out.push({"type": "input_text", "text": part.text});
+        }
+    }
+    return out;
+}
+
+isolated function hasImage(ContentPart[] parts) returns boolean {
+    foreach ContentPart part in parts {
+        if part is ImagePart {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Refuses an image on an API where AWS does not document image input: the OpenAI-shaped
+// APIs, Mistral and DeepSeek.
+isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect) returns ai:Error? {
+    foreach ResolvedMessage m in messages {
+        if m is ResolvedUserMessage && hasImage(m.parts) {
+            return error ai:Error(string `Image input is not supported on ${dialect}. ` +
+                "Use 'apiType = CONVERSE', or an Anthropic model — both accept images.");
+        }
+    }
+}
+
+// The text of parts already checked by `rejectImagesIn`.
+isolated function partsText(ContentPart[] parts) returns string {
+    string text = "";
+    foreach ContentPart part in parts {
+        if part is TextPart {
+            text += part.text;
+        }
+    }
+    return text;
+}
+
+// Parts for a span, with images reduced to a placeholder.
+isolated function partsForSpan(ContentPart[] parts) returns string {
+    string text = "";
+    foreach ContentPart part in parts {
+        if part is TextPart {
+            text += part.text;
+        } else {
+            text += string `[image ${part.mimeType}, ${part.data.length()} bytes]`;
+        }
+    }
+    return text;
+}

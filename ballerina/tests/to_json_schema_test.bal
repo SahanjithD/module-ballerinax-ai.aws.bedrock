@@ -38,7 +38,7 @@ type StringArray string[];
 // typed with the CONCRETE provider class (how users write it), which is the case
 // that would break if the annotation only fired for the `ai:ModelProvider`
 // interface. Never executed — the plugin rewrites source, so existing is enough.
-function schemaProbeCallSite(AnthropicModelProvider provider) returns error? {
+function schemaProbeCallSite(RuntimeAnthropicModelProvider provider) returns error? {
     SchemaProbe _ = check provider->generate(`rate this`);
     SchemaProbe[] _ = check provider->generate(`rate these`);
 }
@@ -147,4 +147,39 @@ function testNilableArrayDoesNotMakeItsMembersNilable() returns error? {
                 "anyOf": [{"type": "array", "items": {"type": "integer"}}, {"type": "null"}]
             },
             "int[]? must not push 'null' down into its items schema");
+}
+
+enum SchemaProbeColour {
+    RED,
+    GREEN
+}
+
+type SchemaProbeSize "small"|"large";
+
+@test:Config {}
+function testAnEnumTargetKeepsItsAllowedValues() returns error? {
+    // Without `enum` the model sees a bare string, answers off the value set, and
+    // the result cannot bind.
+    map<json> schema = check generateJsonSchemaForTypedescAsJson(SchemaProbeColour);
+    test:assertEquals(schema["type"], "string");
+    string[] values = check schema["enum"].cloneWithType();
+    test:assertEquals(values.sort(), ["GREEN", "RED"]);
+}
+
+@test:Config {}
+function testALiteralUnionTargetKeepsItsAllowedValues() returns error? {
+    map<json> schema = check generateJsonSchemaForTypedescAsJson(SchemaProbeSize);
+    string[] values = check schema["enum"].cloneWithType();
+    test:assertEquals(values.sort(), ["large", "small"]);
+}
+
+@test:Config {}
+function testOnlyPlainStringTakesThePlainTextPath() {
+    // Every one of these is a `typedesc<string>`, but only plain `string` can hold
+    // arbitrary model text.
+    test:assertTrue(isPlainStringType(string));
+    test:assertFalse(isPlainStringType(SchemaProbeColour));
+    test:assertFalse(isPlainStringType(SchemaProbeSize));
+    test:assertFalse(isPlainStringType(string:Char));
+    test:assertFalse(isPlainStringType(SchemaProbe));
 }

@@ -15,7 +15,7 @@
 import ballerina/ai;
 import ballerina/test;
 
-// batchEmbed's reassembly loop (embedding design §7).
+// batchEmbed's reassembly loop.
 //
 // COVERAGE GAP this closes: the embedding tests asserted `partitionTexts` (how many
 // windows) but never the loop that stitches the windows back together — so "results
@@ -124,8 +124,8 @@ isolated function assertInInputOrder(ai:Embedding[] embeddings, int expectedCoun
 @test:Config {}
 function testTitanBatchEmbedReturnsResultsInInputOrder() returns error? {
     MockEmbedTransport mock = new ("titan");
-    ai:Embedding[] embeddings = check runBatchEmbed("Titan", "amazon.titan-embed-text-v2:0",
-            TITAN_EMBED_CODEC, mock, {}, probeTexts(100));
+    ai:Embedding[] embeddings = check runBatchEmbed("amazon.titan-embed-text-v2:0",
+            TITAN_EMBED_CONVERTER, mock, {}, probeTexts(100));
     assertInInputOrder(embeddings, 100);
     test:assertEquals(mock.requestCount(), 100, "Titan embeds one text per request (maxBatchSize 1)");
 }
@@ -135,8 +135,8 @@ function testCohereBatchEmbedReturnsResultsInInputOrderAcrossWindows() returns e
     // The interesting case: 100 texts span TWO windows, so the second window's
     // results must land at absolute indices 96..99, not back at 0.
     MockEmbedTransport mock = new ("cohere");
-    ai:Embedding[] embeddings = check runBatchEmbed("Cohere", "cohere.embed-english-v3",
-            COHERE_EMBED_V3_CODEC, mock, {inputType: SEARCH_DOCUMENT},
+    ai:Embedding[] embeddings = check runBatchEmbed("cohere.embed-english-v3",
+            COHERE_EMBED_V3_CONVERTER, mock, {inputType: SEARCH_DOCUMENT},
             probeTexts(100));
     assertInInputOrder(embeddings, 100);
     test:assertEquals(mock.requestCount(), 2, "Cohere batches 96 per request → ceil(100/96) = 2");
@@ -147,8 +147,8 @@ function testCohereBatchEmbedReturnsResultsInInputOrderAcrossWindows() returns e
 function testCohereBatchEmbedHandlesAnExactWindowBoundary() returns error? {
     // 96 must be ONE window, not 96 + an empty trailing one.
     MockEmbedTransport mock = new ("cohere");
-    ai:Embedding[] embeddings = check runBatchEmbed("Cohere", "cohere.embed-english-v3",
-            COHERE_EMBED_V3_CODEC, mock, {inputType: SEARCH_DOCUMENT},
+    ai:Embedding[] embeddings = check runBatchEmbed("cohere.embed-english-v3",
+            COHERE_EMBED_V3_CONVERTER, mock, {inputType: SEARCH_DOCUMENT},
             probeTexts(96));
     assertInInputOrder(embeddings, 96);
     test:assertEquals(mock.sizes(), [96]);

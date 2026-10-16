@@ -12,56 +12,139 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Endpoint construction — host · path · partition · signing name (design §9.1,
-// §9.2, §9.4). L2: runs once, at construction. The model-id path segment is
-// URL-encoded HERE (single-encode): structural `/` stay literal, but the model
-// id's `:`/`/` (ARNs, `-v1:0` ids) become `%3A`/`%2F`. This is the WIRE path; the
-// transport double-encodes it for the SigV4 canonical URI (SigV4 non-S3 rule).
+import ballerinax/aws;
 
-const SIGNING_BEDROCK = "bedrock";               // Converse / Invoke — §9.4
-const SIGNING_BEDROCK_MANTLE = "bedrock-mantle"; // Mantle — §9.4
+// Endpoint construction: host, path, partition and signing name, once at construction.
+// The model id is single-encoded in the wire path; the transport encodes it again for
+// the SigV4 canonical URI.
 
-// The resolved wire endpoint (design §9). `signingService` is the SigV4 scope,
-// not the IAM namespace — they differ inside this service family (§9.4).
-type Endpoint record {|
-    # Host, e.g. `bedrock-runtime.us-east-1.amazonaws.com`.
-    string host;
-    # Wire request path with the model-id segment single-encoded (§9.1).
-    string path;
-    # SigV4 signing name for this route.
-    string signingService;
-|};
+// Every `bedrock-runtime` path signs as `bedrock`, the OpenAI and Anthropic paths too.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+const SIGNING_BEDROCK = "bedrock";
 
-// Builds the endpoint for a resolved route (design §9.1-9.4). Pure. Fails before
-// any I/O for the one host-shape AWS cannot template: Mantle on a non-`aws`
-// partition (design §9.2, open item #2).
-isolated function buildEndpoint(Route route) returns Endpoint|error {
-    if route.family == MANTLE {
-        // Mantle uses the `api.aws` suffix and is NOT partition-templated (§9.2).
-        if route.partition != "aws" {
-            return error(string `Mantle is not available on partition '${route.partition}': the ` +
-                string `bedrock-mantle 'api.aws' host is not partition-templated (design §9.2). ` +
-                string `Use a commercial ('aws') region.`);
-        }
-        MantleEntry entry = check route.mantleEntry.ensureType();
-        return {
-            host: string `bedrock-mantle.${route.region}.api.aws`,
-            path: entry.path,
-            signingService: SIGNING_BEDROCK_MANTLE
-        };
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+const RUNTIME_ENDPOINT_PREFIX = "bedrock-runtime";
+
+// Knowledge-base hosts. Both still sign as `bedrock` (botocore `signingName`).
+const AGENT_ENDPOINT_PREFIX = "bedrock-agent";
+const AGENT_RUNTIME_ENDPOINT_PREFIX = "bedrock-agent-runtime";
+
+// Uses the route's region, so an ARN's region wins.
+isolated function resolveServiceUrl(Route route, aws:EndpointConfig? endpointConfig) returns string|error
+    => resolveServiceUrlCore(RUNTIME_ENDPOINT_PREFIX, route.region, endpointConfig);
+
+// Every host this module dials is built here, so the dualstack check lives here.
+isolated function resolveServiceUrlCore(string serviceName, string region,
+        aws:EndpointConfig? endpointConfig) returns string|error {
+    aws:EndpointConfig config = endpointConfig ?: {};
+    string? custom = config?.customEndpoint;
+    if custom is string {
+        // Used as given, for every service this client calls, like `AWS_ENDPOINT_URL`.
+        // https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html
+        return trimTrailingSlash(custom);
     }
-
-    // Converse / Invoke on `bedrock-runtime`, partition-aware domain (§9.2).
-    string host = string `bedrock-runtime.${route.region}.${awsDomain(route.partition)}`;
-    // Single-encode the model-id segment (ARNs/`-v1:0` ids carry `:` and `/`).
-    string encodedId = encodePathSegment(route.effectiveModelId);
-    string path = route.family == CONVERSE
-        ? string `/model/${encodedId}/converse` // §9.1
-        : string `/model/${encodedId}/invoke`;   // §9.1
-    return {host, path, signingService: SIGNING_BEDROCK};
+    check guardDualstack(serviceName, region, config.dualstack);
+    return trimTrailingSlash(aws:resolveEndpoint(serviceName, region,
+            {fips: config.fips, dualstack: config.dualstack}));
 }
 
-// RFC 3986 unreserved set — the ONLY characters SigV4 leaves literal.
+// AWS publishes no dualstack host for these services. `aws:resolveEndpoint` would still
+// build one, which then fails as a confusing connection error.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+isolated function guardDualstack(string serviceName, string region, boolean dualstack) returns error? {
+    if !dualstack {
+        return;
+    }
+    return error(string `'dualstack' is not available on '${serviceName}': AWS publishes no dualstack ` +
+        string `('.api.aws') host for it, so '${serviceName}.${region}.api.aws' does not resolve and ` +
+        string `every request would fail as a connection error. Drop 'dualstack', or set ` +
+        string `'customEndpoint' to dial a specific origin.`);
+}
+
+isolated function trimTrailingSlash(string url) returns string
+    => url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+
+// Bedrock is not offered in the China partition. The resolver would still build a
+// host there, which fails only on the first call.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html
+isolated function guardBedrockPartition(string partition, string region) returns error? {
+    if partition == "aws-cn" {
+        return error(string `Amazon Bedrock is not available in the AWS China partition ` +
+            string `(region '${region}'): no Bedrock endpoint of any API family exists there. ` +
+            string `Use a commercial ('aws') or GovCloud ('aws-us-gov') region.`);
+    }
+}
+
+isolated function hostOf(string baseUrl) returns string {
+    string rest = baseUrl;
+    foreach string scheme in ["https://", "http://"] {
+        if rest.startsWith(scheme) {
+            rest = rest.substring(scheme.length());
+            break;
+        }
+    }
+    int? slash = rest.indexOf("/");
+    return slash is int ? rest.substring(0, slash) : rest;
+}
+
+// A `customEndpoint` replaces only the origin and skips the host checks.
+isolated function buildEndpoint(Route route, aws:EndpointConfig? endpointConfig = ())
+        returns Endpoint|error {
+    boolean derived = (endpointConfig?.customEndpoint) !is string;
+    if derived {
+        check guardBedrockPartition(route.partition, route.region);
+    }
+
+    string base = check resolveServiceUrl(route, endpointConfig);
+    return {
+        baseUrl: base,
+        host: hostOf(base),
+        path: check runtimePath(route),
+        signingService: SIGNING_BEDROCK
+    };
+}
+
+// Converse and InvokeModel carry the model id in the path; the others in the body.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html
+isolated function runtimePath(Route route) returns string|error {
+    match route.api {
+        CONVERSE => {
+            return string `/model/${encodePathSegment(route.effectiveModelId)}/converse`;
+        }
+        INVOKE => {
+            return string `/model/${encodePathSegment(route.effectiveModelId)}/invoke`;
+        }
+        MESSAGES => {
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+            return "/anthropic/v1/messages";
+        }
+        CHAT_COMPLETIONS => {
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+            return "/openai/v1/chat/completions";
+        }
+        RESPONSES => {
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+            return "/openai/v1/responses";
+        }
+    }
+    return error(string `no bedrock-runtime path for api '${route.api}'`);
+}
+
+isolated function isPathAddressed(ApiFamily api) returns boolean
+    => api == CONVERSE || api == INVOKE;
+
+// No path: one transport serves many paths.
+isolated function buildAgentEndpoint(AgentPlane plane, string region,
+        aws:EndpointConfig? endpointConfig = ()) returns Endpoint|error {
+    if (endpointConfig?.customEndpoint) !is string {
+        check guardBedrockPartition(partitionForRegion(region), region);
+    }
+    string serviceName = plane == AGENT_DATA ? AGENT_RUNTIME_ENDPOINT_PREFIX : AGENT_ENDPOINT_PREFIX;
+    string base = check resolveServiceUrlCore(serviceName, region, endpointConfig);
+    return {baseUrl: base, host: hostOf(base), path: "", signingService: SIGNING_BEDROCK};
+}
+
+// RFC 3986 unreserved characters, the only ones SigV4 leaves as is.
 // https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
 const string RFC3986_UNRESERVED =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
@@ -69,18 +152,8 @@ const string RFC3986_UNRESERVED =
 final readonly & string[] HEX_DIGITS =
     ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
 
-// Percent-encodes one path segment per RFC 3986, which is what SigV4 requires.
-//
-// `url:encode` is NOT a path-segment encoder — it applies
-// `application/x-www-form-urlencoded` rules, which differ from SigV4's on exactly
-// the characters a model id can contain: a space becomes `+` instead of `%20`, and
-// `~` is escaped even though it is unreserved. Since `getCanonicalUri` re-applies
-// this same function to build the signing input, any such character produced a
-// canonical URI AWS could not reconstruct — a `SignatureDoesNotMatch` on every
-// request, with nothing in the message pointing at the encoder.
-//
-// Total by construction: every byte either passes through or becomes `%XX`, so
-// there is no failure mode for a caller to handle.
+// Percent-encodes one path segment per RFC 3986, as SigV4 requires. Not `url:encode`,
+// which encodes a space as `+` and escapes `~`, breaking the signature.
 // https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
 isolated function encodePathSegment(string segment) returns string {
     string encoded = "";
@@ -89,7 +162,7 @@ isolated function encodePathSegment(string segment) returns string {
             encoded += ch;
             continue;
         }
-        // Percent-encode each UTF-8 byte, uppercase hex (SigV4 requires uppercase).
+        // Uppercase hex, as SigV4 requires.
         foreach byte b in ch.toBytes() {
             int value = <int>b;
             encoded += "%" + HEX_DIGITS[value / 16] + HEX_DIGITS[value % 16];
@@ -97,8 +170,3 @@ isolated function encodePathSegment(string segment) returns string {
     }
     return encoded;
 }
-
-// Partition-aware DNS suffix (design §9.2). Route every host through here — n8n's
-// hardcoded `.amazonaws.com` is a real China bug (§9.2).
-isolated function awsDomain(string partition) returns string
-    => partition == "aws-cn" ? "amazonaws.com.cn" : "amazonaws.com";

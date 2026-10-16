@@ -16,17 +16,18 @@ import ballerina/ai;
 import ballerina/ai.observe;
 import ballerina/http;
 
-// Shared facade machinery (CLAUDE.md §3): every vendor provider is a thin class
-// over these. `runChat` is the whole `chat()` body; `buildInferenceParams`
-// assembles the resolved `InferenceParams`; `commonExtraHeaders` builds the
-// route-specific headers common to all vendors. Only the model enum, config
-// extras (folded into `additionalModelRequestFields`), and Invoke-codec choice
-// differ per vendor.
+import ballerinax/aws;
+import ballerinax/aws.auth;
 
-// The full `chat()` implementation, shared by every vendor facade (design §3, §7).
-// Opens an observe span and closes it on every path (§3.2).
-isolated function runChat(string providerName, ApiFamily family, string wireModelId,
-        readonly & ModelCodec codec, BedrockTransport transport, map<string> & readonly extraHeaders,
+// Code every provider class shares: `chat()`, parameter and header assembly, and the
+// construction checks.
+
+// OpenTelemetry's `gen_ai.provider.name` value for AWS Bedrock.
+// https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
+const BEDROCK_PROVIDER_NAME = "aws.bedrock";
+
+isolated function runChat(ApiFamily api, string wireModelId,
+        readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
         readonly & InferenceParams params, ai:ChatMessage[]|ai:ChatUserMessage messages,
         ai:ChatCompletionFunctions[] tools, string? stop) returns ai:ChatAssistantMessage|ai:Error {
     ai:ChatMessage[] msgs;
@@ -37,87 +38,90 @@ isolated function runChat(string providerName, ApiFamily family, string wireMode
     }
 
     observe:ChatSpan span = observe:createChatSpan(wireModelId);
-    span.addProvider(providerName);
+    span.addProvider(BEDROCK_PROVIDER_NAME);
     if stop is string {
         span.addStopSequence(stop);
     }
     decimal? spanTemperature = params?.temperature;
     if spanTemperature is decimal {
-        // Only report a temperature the caller actually set — recording an invented
-        // default would misreport what went on the wire.
+        // Only a temperature the caller set; no invented default.
         span.addTemperature(spanTemperature);
     }
-    span.addInputMessages(messagesForSpan(msgs));
     if tools.length() > 0 {
         span.addTools(tools);
     }
 
-    [ai:ChatSystemMessage?, ai:ChatMessage[]] [system, rest] = hoistSystem(msgs);
-    RequestCodec encode = codec.encode;
+    [string?, ResolvedMessage[]]|ai:Error resolved = resolveMessages(msgs);
+    if resolved is ai:Error {
+        span.close(resolved);
+        return resolved;
+    }
+    [string?, ResolvedMessage[]] [system, rest] = resolved;
+    // From the resolved form, so images are recorded as a placeholder, not their bytes.
+    span.addInputMessages(messagesForSpan(system, rest));
+    RequestEncoder encode = converter.encode;
     json|ai:Error encoded = encode(system, rest, tools, stop, params);
     if encoded is ai:Error {
         span.close(encoded);
         return encoded;
     }
-    json body = family == MANTLE ? injectModel(encoded, wireModelId) : encoded;
-
-    TransportResponse|ai:Error response = transport.execute(body, extraHeaders);
-    if response is ai:Error {
-        span.close(response);
-        return response;
-    }
-
-    ResponseCodec decode = codec.decode;
-    DecodedResponse|ai:Error decoded = decode(response.body);
+    DecodedResponse|ai:Error decoded = sendAndDecode(span, api, wireModelId, converter, transport,
+            extraHeaders, encoded);
     if decoded is ai:Error {
         span.close(decoded);
         return decoded;
     }
-    // Surface the request id from the response headers (§9.5).
-    augmentFromHeaders(decoded, response.headers);
-
-    span.addInputTokenCount(decoded.usage.inputTokens);
-    span.addOutputTokenCount(decoded.usage.outputTokens);
-    // A fired guardrail must never be silently dropped (§9.5) — that is the whole
-    // reason `decode` returns a record rather than a bare message (§3.2, §7).
-    //
-    // The `ai:ModelProvider` contract has nowhere to put this: `chat()` returns an
-    // `ai:ChatAssistantMessage`, which carries no guardrail field, and turning an
-    // intervention into an error would break callers who guardrail every request by
-    // policy and expect the blocked-content message back. So the signal goes to the
-    // span's finish reason — the one channel that both survives to the caller's
-    // observability backend and is already keyed on "why did generation stop".
-    //
-    // Converse already reports `guardrail_intervened` as its stopReason, so this
-    // only changes behaviour on the Invoke route, where the body field is the
-    // only source.
-    if decoded.guardrailAction == INTERVENED && decoded.stopReason != "guardrail_intervened" {
-        span.addFinishReason("guardrail_intervened");
-    } else {
-        span.addFinishReason(decoded.stopReason);
-    }
-    string? responseId = decoded.responseId;
-    if responseId is string {
-        span.addResponseId(responseId);
-    }
     span.addOutputMessages(decoded.message);
+    span.addOutputType(observe:TEXT);
     span.close();
     return decoded.message;
 }
 
-// Assembles the resolved `InferenceParams` once at construction (design §6, §7).
-// `additionalModelRequestFields` already carries any vendor extras the facade
-// folded in (Claude `thinking`, Nova `reasoningConfig`, Qwen thinking…).
+isolated function sendAndDecode(observe:LlmSpan? span, ApiFamily api, string wireModelId,
+        readonly & ModelConverter converter, ModelTransport transport, map<string> & readonly extraHeaders,
+        json encoded) returns DecodedResponse|ai:Error {
+    // Converse and InvokeModel name the model in the URL; the others in the body.
+    json body = isPathAddressed(api) ? encoded : injectModel(encoded, wireModelId);
+    TransportResponse response = check transport.execute(body, extraHeaders);
+    ResponseDecoder decode = converter.decode;
+    DecodedResponse decoded = check decode(response.body);
+    augmentFromHeaders(decoded, response.headers);
+    if span is observe:LlmSpan {
+        recordResponse(span, decoded);
+    }
+    return decoded;
+}
+
+isolated function recordResponse(observe:LlmSpan span, DecodedResponse decoded) {
+    span.addInputTokenCount(decoded.usage.inputTokens);
+    span.addOutputTokenCount(decoded.usage.outputTokens);
+    // A fired guardrail goes to the finish reason: `ai:ChatAssistantMessage` has no
+    // field for it, and an error would break callers who expect the blocked reply.
+    // On InvokeModel the body field is the only signal, so it wins.
+    span.addFinishReason(decoded.guardrailAction == INTERVENED ? FINISH_CONTENT_FILTER
+            : finishReason(decoded.stopReason));
+    string? responseId = decoded.responseId;
+    if responseId is string {
+        span.addResponseId(responseId);
+    }
+}
+
+isolated function errorWithDetail(string message, string detail) returns ai:Error
+    => error ai:Error(message, error(detail));
+
+// Vendor extras are already folded into `additionalModelRequestFields`.
 isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
-        string[]? stopSequences, json additionalModelRequestFields,
-        string[]? additionalModelResponseFieldPaths, ServiceTier? serviceTier,
-        boolean? latencyOptimized, map<string>? requestMetadata, GuardrailConfig? guardrail)
+        string[]? stopSequences, AdditionalRequestFields? additionalModelRequestFields,
+        ServiceTier? serviceTier,
+        boolean? latencyOptimized, GuardrailConfig? guardrail,
+        ThinkingConfig? thinking = (), Effort? effort = (), ReasoningEffort? reasoningEffort = ())
         returns readonly & InferenceParams {
-    InferenceParams params = {maxTokens: maxTokens ?: DEFAULT_MAX_TOKEN_COUNT};
-    // No default: an unset temperature stays unset all the way to the wire, so the
-    // model applies its own. `?:` here would make it impossible for a caller to
-    // OMIT the field, which is a hard 400 on every sampling-deprecated model — see
-    // `setTemperature` in codec_common.bal.
+    InferenceParams params = {};
+    // `maxTokens = ()` leaves the field out; some models reject it.
+    if maxTokens is int {
+        params.maxTokens = maxTokens;
+    }
+    // No default: an unset temperature is left out and the model's own applies.
     if temperature is decimal {
         params.temperature = temperature;
     }
@@ -127,93 +131,194 @@ isolated function buildInferenceParams(int? maxTokens, decimal? temperature,
     if additionalModelRequestFields != () {
         params.additionalModelRequestFields = additionalModelRequestFields;
     }
-    if additionalModelResponseFieldPaths is string[] {
-        params.additionalModelResponseFieldPaths = additionalModelResponseFieldPaths;
-    }
     if serviceTier is ServiceTier {
         params.serviceTier = serviceTier;
     }
     if latencyOptimized is boolean {
         params.latencyOptimized = latencyOptimized;
     }
-    if requestMetadata is map<string> {
-        params.requestMetadata = requestMetadata;
-    }
     if guardrail is GuardrailConfig {
         params.guardrail = guardrail;
+    }
+    // Anthropic only.
+    if thinking is ThinkingConfig {
+        params.thinking = thinking;
+    }
+    if effort is Effort {
+        params.effort = effort;
+    }
+    // OpenAI only; its wire shape depends on the API.
+    if reasoningEffort is ReasoningEffort {
+        params.reasoningEffort = reasoningEffort;
     }
     return params.cloneReadOnly();
 }
 
-// Route-specific headers common to all vendors (design §9.5): Invoke guardrail
-// headers. Vendor facades merge their own Mantle headers on top (§7.3).
-isolated function commonExtraHeaders(Route route, GuardrailConfig? guardrail, BedrockCredentials creds)
-        returns map<string> {
+// The rules follow the API, not the vendor.
+isolated function buildRouteHeaders(Route route, GuardrailConfig? guardrail, BedrockAuthConfig creds,
+        InferenceParams? params = ()) returns map<string> {
     map<string> headers = {};
-    if route.family == INVOKE && guardrail is GuardrailConfig {
-        headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
-        headers["X-Amzn-Bedrock-GuardrailVersion"] = guardrail.guardrailVersion;
-        string? trace = guardrail.trace;
-        if trace is string {
-            headers["X-Amzn-Bedrock-Trace"] = trace.toUpperAscii();
+    // Chat Completions takes guardrails as the InvokeModel headers.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+    if route.api == INVOKE || route.api == CHAT_COMPLETIONS {
+        if guardrail is GuardrailConfig {
+            headers["X-Amzn-Bedrock-GuardrailIdentifier"] = guardrail.guardrailIdentifier;
+            headers["X-Amzn-Bedrock-GuardrailVersion"] = guardrail.guardrailVersion;
         }
     }
-    addMantleApiKeyHeader(headers, route, creds);
+    // Only InvokeModel documents the request-option headers.
+    if route.api == INVOKE {
+        addInvokeRequestOptionHeaders(headers, params);
+    }
+    if route.api == MESSAGES {
+        // A header here, unlike InvokeModel's `anthropic_version` body field.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+        headers["anthropic-version"] = "2023-06-01";
+    }
+    addNativeApiKeyHeader(headers, route, creds);
     return headers;
 }
 
-// `x-api-key` for a Mantle entry that declares X_API_KEY (design §14 open item #1).
-//
-// Shared, not per-vendor: `authHeader` is per-model TABLE data, so any vendor's
-// entry — or a user's `routeOverrides` — may declare X_API_KEY. This previously
-// lived in the Anthropic facade alone, which meant the same data was honoured there
-// and silently ignored everywhere else.
-//
-// RESOLVED (§14 open item #1, verified live 2026-08-03): Anthropic's Mantle surface
-// REJECTS a request that carries BOTH `Authorization` and `x-api-key` — it returns
-// 401 `authentication_error: "request must not include both 'authorization' and
-// 'x-api-key' headers"`. Either header ALONE returns 200, so the per-model
-// `authHeader` now SELECTS the header rather than hedging with both. AWS's documented
-// curl uses `x-api-key`, so an X_API_KEY entry sends exactly that, and the transport
-// SUPPRESSES its default `Authorization: Bearer` whenever x-api-key is present
-// (see the BearerToken branch in transport.bal). Do NOT re-add a second header here:
-// the old "both carry the same key, so whichever the service reads it succeeds"
-// assumption is known-false and was the exact cause of the 401.
-//
-// Only a BearerToken can populate it: with SigV4 credentials there is no api key,
-// and the signature alone must authenticate the request.
-isolated function addMantleApiKeyHeader(map<string> headers, Route route, BedrockCredentials creds) {
-    MantleEntry? entry = route.mantleEntry;
-    if route.family == MANTLE && entry is MantleEntry && entry.authHeader == X_API_KEY
-            && creds is BearerToken {
+// An unset or `false` latency flag sends nothing, since `standard` is the default.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+isolated function addInvokeRequestOptionHeaders(map<string> headers, InferenceParams? params) {
+    if params is () {
+        return;
+    }
+    ServiceTier? tier = params?.serviceTier;
+    if tier is ServiceTier {
+        headers["X-Amzn-Bedrock-Service-Tier"] = tier;
+    }
+    if params?.latencyOptimized == true {
+        headers["X-Amzn-Bedrock-PerformanceConfig-Latency"] = "optimized";
+    }
+}
+
+// Refuses at construction any parameter the route cannot send. Otherwise AWS answers
+// 200 and the caller cannot tell an ignored field from an honoured one.
+isolated function validateParamsForRoute(string providerName, ApiFamily api,
+        readonly & ModelConverter converter, InferenceParams params) returns ai:Error? {
+    DialectSupport supports = converter.supports;
+    string dialect = converter.dialect;
+
+    if params?.stopSequences is string[] && !supports.stopSequences {
+        return errorWithDetail(
+            string `${providerName}: 'stopSequences' is not supported on the ${dialect} API. Remove it, ` +
+            "or use the CONVERSE or INVOKE API.",
+            "That dialect has no stop-sequence parameter in its request schema, so the model would run " +
+            "past the text you asked it to stop at and bill you for the tokens.");
+    }
+    if params?.thinking is ThinkingConfig && !supports.thinking {
+        return error ai:Error(
+            string `${providerName}: 'thinking' is not supported on the ${dialect} API. Remove it, or ` +
+            "choose an API that carries it with 'apiType'.");
+    }
+    if params?.effort is Effort && !supports.effort {
+        return error ai:Error(
+            string `${providerName}: 'effort' is not supported on the ${dialect} API. Remove it, or ` +
+            "choose an API that carries it with 'apiType'.");
+    }
+    if params?.reasoningEffort is ReasoningEffort && !supports.reasoningEffort {
+        return error ai:Error(
+            string `${providerName}: 'reasoningEffort' is not supported on the ${dialect} API. Remove ` +
+            "it, or choose an API that carries it with 'apiType'.");
+    }
+
+    // Converse and InvokeModel carry these; the other APIs do not.
+    if apiCarriesRequestOptions(api) {
+        return;
+    }
+    string[] unsupported = [];
+    if params?.serviceTier is ServiceTier {
+        unsupported.push("serviceTier");
+    }
+    // `false` asks for the default and is allowed; any tier is an explicit change.
+    if params?.latencyOptimized == true {
+        unsupported.push("latencyOptimized");
+    }
+    if unsupported.length() == 0 {
+        return;
+    }
+    // Not mapped to a body field: the vendor APIs spell tiers with their own values.
+    return errorWithDetail(
+        string `${providerName}: ${string:'join(", ", ...unsupported)} ` +
+        string `${unsupported.length() == 1 ? "is" : "are"} not supported on the ${api} API. Use the ` +
+        "CONVERSE or INVOKE API, or send the vendor's own field through 'additionalModelRequestFields'.",
+        "The vendor-compatible APIs have no Bedrock request-option headers, and they spell service " +
+        "tiers with the vendor's value set rather than Bedrock's, so this module will not guess a mapping.");
+}
+
+isolated function apiCarriesRequestOptions(ApiFamily api) returns boolean
+    => api == CONVERSE || api == INVOKE;
+
+// The Messages API takes the API key as `x-api-key`, so the transport sends no Bearer
+// header with it.
+isolated function addNativeApiKeyHeader(map<string> headers, Route route, BedrockAuthConfig creds) {
+    if usesApiKeyHeader(route.api) && creds is BearerToken {
         headers["x-api-key"] = creds.apiKey;
     }
 }
 
-// Guardrail-on-Mantle construction guard, shared by every facade (design §9.5).
-isolated function guardMantleGuardrail(ApiFamily family, GuardrailConfig? guardrail) returns ai:Error? {
-    if family == MANTLE && guardrail is GuardrailConfig {
-        return error ai:Error("Guardrails are not supported on the Mantle route; " +
-            "apply the standalone ApplyGuardrail API instead (design §9.5)");
+// Refuses an empty region, which would otherwise surface as a DNS failure.
+isolated function guardRegion(string region) returns ai:Error? {
+    if region == "" {
+        return error ai:Error("No AWS region: pass a non-empty 'region' (an 'aws:Region' " +
+            "constant such as 'aws:US_EAST_1', or a region string), or use a model ARN " +
+            "that carries its own region.");
+    }
+    // A shape check, not an allowlist, so new regions work. A trailing space or upper
+    // case otherwise fails as a confusing connection error or a 403.
+    foreach string:Char c in region {
+        if c == " " || c == "\t" || c == "\n" || c == "\r" {
+            return error ai:Error(string `Invalid AWS region '${region}': it contains whitespace. ` +
+                string `Pass a bare region such as 'us-east-1'.`);
+        }
+        if c != "-" && !(c >= "a" && c <= "z") && !(c >= "0" && c <= "9") {
+            return error ai:Error(string `Invalid AWS region '${region}': regions are lowercase ` +
+                string `and contain only letters, digits and hyphens. Pass a bare region such as ` +
+                string `'us-east-1', or an 'aws:Region' constant.`);
+        }
     }
 }
 
-// The shared construction spine (design §5, §6): resolve → guard → endpoint →
-// codec → transport. Every failure AWS cannot diagnose surfaces here, before any
-// I/O (principle 7). Returns the resolved route (for header/param assembly), the
-// codec, and the transport.
-isolated function resolveSpine(string providerName, BedrockCredentials credentials, string model,
-        string region, RouteConfig routeConfig, string? signingServiceName,
+// Refuses a guardrail where it would not be applied:
+//  - Responses: "Guardrails don't apply to the Responses API."
+//    https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+//  - Anthropic Messages: AWS does not say whether the guardrail headers apply there,
+//    and a guardrail silently not applied is the dangerous outcome.
+isolated function guardGuardrailSupport(ApiFamily api, GuardrailConfig? guardrail) returns ai:Error? {
+    if guardrail !is GuardrailConfig {
+        return;
+    }
+    if api == RESPONSES {
+        return error ai:Error("Guardrails are not supported on the Responses API. Use the CONVERSE " +
+            "API, or call the ApplyGuardrail API.");
+    }
+    if api == MESSAGES {
+        return errorWithDetail("Guardrails are not supported on the Anthropic Messages API. Use the " +
+            "CONVERSE or INVOKE API, or call the ApplyGuardrail API.",
+            "AWS documents guardrail parameters for Converse, InvokeModel and Chat Completions, but not " +
+            "for '/anthropic/v1/messages', so this module will not send them where it cannot confirm " +
+            "they are honoured.");
+    }
+}
+
+isolated function resolveSpine(string providerName, BedrockAuthConfig credentials,
+        Route|error resolved, aws:EndpointConfig? endpointConfig,
         http:ClientConfiguration? httpConfig, RetryConfig? retryConfig, GuardrailConfig? guardrail)
-        returns [Route, readonly & ModelCodec, BedrockTransport]|ai:Error {
+        returns [Route, readonly & ModelConverter, BedrockTransport]|ai:Error {
     do {
-        Route route = check resolveRoute(model, region, routeConfig); // L1, pure — §5
-        check guardMantleGuardrail(route.family, guardrail);          // principle 7 — §9.5
-        Endpoint ep = check buildEndpoint(route);                     // L2 — §9.1-9.2
-        readonly & ModelCodec codec = check selectCodec(route, routeConfig.modelSchema);
+        Route route = check resolved;
+        // Checks the resolved region: an ARN supplies its own.
+        check guardRegion(route.region);
+        check guardGuardrailSupport(route.api, guardrail);
+        Endpoint ep = check buildEndpoint(route, endpointConfig);
+        readonly & ModelConverter converter = check selectConverter(route);
+        // Last, because resolving credentials can reach the network (IMDS, STS, SSO).
+        auth:CredentialProvider|BearerToken resolvedCredentials = check resolveCredentials(credentials);
         BedrockTransport transport =
-            check new (credentials, route.region, ep, signingServiceName, httpConfig, retryConfig);
-        return [route, codec, transport];
+            check new (resolvedCredentials, route.region, ep, httpConfig, retryConfig, false, INFERENCE_TIMEOUT);
+        return [route, converter, transport];
     } on fail error e {
         if e is ai:Error {
             return e;
@@ -222,11 +327,17 @@ isolated function resolveSpine(string providerName, BedrockCredentials credentia
     }
 }
 
-// Folds a vendor's extra request fields into `additionalModelRequestFields`
-// (design §9.3). Returns `()` when there is nothing to forward.
-isolated function foldRequestFields(json base, map<json> extras) returns json {
-    map<json> merged = {};
-    if base is map<json> {
+isolated function additionalFieldsToJson(AdditionalRequestFields? fields) returns map<json>? {
+    if fields is () || fields.length() == 0 {
+        return ();
+    }
+    return fields.clone();
+}
+
+isolated function foldRequestFields(AdditionalRequestFields? base, map<json> extras)
+        returns AdditionalRequestFields? {
+    AdditionalRequestFields merged = {};
+    if base is AdditionalRequestFields {
         foreach [string, json] [k, v] in base.entries() {
             merged[k] = v;
         }
@@ -237,8 +348,6 @@ isolated function foldRequestFields(json base, map<json> extras) returns json {
     return merged.length() > 0 ? merged : ();
 }
 
-// Injects the bare model id into a Mantle request body (design §7.3). Converse/
-// Invoke carry the model id in the URL path instead (§9.1).
 isolated function injectModel(json body, string modelId) returns json {
     if body is map<json> {
         map<json> withModel = body.clone();
@@ -248,18 +357,81 @@ isolated function injectModel(json body, string modelId) returns json {
     return body;
 }
 
-// Simplified message projection for the observe span (avoids `Prompt` objects,
-// which are not `anydata`).
-isolated function messagesForSpan(ai:ChatMessage[] messages) returns json {
+// Images become `[image <mime>, <n> bytes]`, so their bytes never reach telemetry.
+isolated function messagesForSpan(string? system, ResolvedMessage[] messages) returns json {
     json[] out = [];
-    foreach ai:ChatMessage m in messages {
-        if m is ai:ChatUserMessage|ai:ChatSystemMessage {
-            out.push({role: m.role, content: contentToString(m.content)});
+    if system is string {
+        out.push({role: ai:SYSTEM, content: system});
+    }
+    foreach ResolvedMessage m in messages {
+        if m is ResolvedUserMessage {
+            out.push({role: m.role, content: partsForSpan(m.parts)});
         } else if m is ai:ChatAssistantMessage {
-            out.push({role: m.role, content: m.content});
+            // The tool calls are the assistant's turn in an agent loop.
+            ai:FunctionCall[]? toolCalls = m.toolCalls;
+            out.push(toolCalls is ai:FunctionCall[]
+                ? {role: m.role, content: m.content, toolCalls: toolCalls.toJson()}
+                : {role: m.role, content: m.content});
         } else {
-            out.push({role: m.role, content: m.content, name: m.name});
+            out.push({role: m.role, content: m.content, name: m.name, id: m.id});
         }
     }
     return out;
+}
+
+// AWS enforces these with a 400. With `maxTokens = ()` there is no ceiling to check.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
+isolated function validateThinking(ThinkingConfig thinking, int? maxTokens) returns ai:Error? {
+    int? budget = thinking?.budgetTokens;
+    if thinking.mode != ENABLED {
+        if budget is int {
+            return error ai:Error(string `'budgetTokens' is only valid with 'mode = ENABLED'; mode is ` +
+                string `'${thinking.mode}'. Adaptive thinking is steered with 'effort' instead.`);
+        }
+        return;
+    }
+    if budget is () {
+        return error ai:Error("'mode = ENABLED' requires 'budgetTokens' — manual extended thinking " +
+            "has no default budget. Use 'mode = ADAPTIVE' to let the model decide.");
+    }
+    if budget < MIN_THINKING_BUDGET_TOKENS {
+        return error ai:Error(string `'budgetTokens' must be at least ` +
+            string `${MIN_THINKING_BUDGET_TOKENS}; got ${budget}.`);
+    }
+    if maxTokens is int && budget >= maxTokens {
+        return error ai:Error(string `'budgetTokens' (${budget}) must be less than 'maxTokens' ` +
+            string `(${maxTokens}) — the thinking budget is drawn from the same ceiling.`);
+    }
+}
+
+// The finish reasons on the trace, whatever API answered. OpenAI's names, as used by
+// OpenTelemetry's `gen_ai.response.finish_reasons`.
+const FINISH_STOP = "stop";
+const FINISH_LENGTH = "length";
+const FINISH_TOOL_CALLS = "tool_calls";
+const FINISH_CONTENT_FILTER = "content_filter";
+const FINISH_ERROR = "error";
+
+// Maps one API's stop reason to the shared set; an unknown value is kept.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+// https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+isolated function finishReason(string stopReason) returns string {
+    match stopReason {
+        "end_turn"|"stop_sequence"|"stop"|"completed" => {
+            return FINISH_STOP;
+        }
+        "max_tokens"|"length"|"model_length"|"max_output_tokens"|"model_context_window_exceeded" => {
+            return FINISH_LENGTH;
+        }
+        "tool_use"|"tool_calls"|"function_call" => {
+            return FINISH_TOOL_CALLS;
+        }
+        "guardrail_intervened"|"content_filtered"|"content_filter"|"refusal" => {
+            return FINISH_CONTENT_FILTER;
+        }
+        "malformed_model_output"|"malformed_tool_use"|"failed"|"error" => {
+            return FINISH_ERROR;
+        }
+    }
+    return stopReason;
 }

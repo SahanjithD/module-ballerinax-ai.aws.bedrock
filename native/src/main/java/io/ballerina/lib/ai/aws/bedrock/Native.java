@@ -23,6 +23,7 @@ import io.ballerina.runtime.api.creators.TypeCreator;
 import io.ballerina.runtime.api.creators.ValueCreator;
 import io.ballerina.runtime.api.types.AnnotatableType;
 import io.ballerina.runtime.api.types.ArrayType;
+import io.ballerina.runtime.api.types.FiniteType;
 import io.ballerina.runtime.api.types.JsonType;
 import io.ballerina.runtime.api.types.PredefinedTypes;
 import io.ballerina.runtime.api.types.ReferenceType;
@@ -37,6 +38,7 @@ import io.ballerina.runtime.api.values.BMap;
 import io.ballerina.runtime.api.values.BString;
 import io.ballerina.runtime.api.values.BTypedesc;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static io.ballerina.runtime.api.creators.ValueCreator.createMapValue;
@@ -57,6 +59,13 @@ import static io.ballerina.runtime.api.creators.ValueCreator.createMapValue;
  * {@code ai:ModelProvider} interface). This class reads that annotation and derives
  * schemas structurally for arrays, unions and simple types.
  *
+ * <p>This step is AUTHORITATIVE: it either returns a schema or raises an
+ * {@code ai:Error}, and never defers to a Ballerina-side fallback. It covers a strict
+ * superset of what a pure-Ballerina implementation can express (recursive arrays and
+ * unions, not just simple types and simple-member arrays), so a "generated at compile
+ * time" flag gating a fallback would never fire — the fallback and its flag were
+ * removed rather than left as unreachable code that reads like a safety net.
+ *
  * @since 0.1.0
  */
 public final class Native {
@@ -67,29 +76,46 @@ public final class Native {
     private Native() {
     }
 
+    /**
+     * Whether the expected type is exactly {@code string} (aliases and {@code readonly}
+     * included). An enum, a string-literal union or {@code string:Char} is also a
+     * {@code typedesc<string>} in Ballerina, but free model text is not a member of
+     * those types, so they must take the schema path instead of the plain-text one.
+     *
+     * @param td the expected type
+     * @return true only for plain {@code string}
+     */
+    public static boolean isPlainString(BTypedesc td) {
+        return TypeUtils.getImpliedType(td.getDescribingType()).getTag() == TypeTags.STRING_TAG;
+    }
+
     public static Object generateJsonSchemaForTypedescNative(BTypedesc td) {
-        SchemaGenerationContext schemaGenerationContext = new SchemaGenerationContext();
         try {
-            Object schema = generateJsonSchemaForType(td.getDescribingType(), schemaGenerationContext);
-            return schemaGenerationContext.isSchemaGeneratedAtCompileTime ? schema : null;
+            return generateJsonSchemaForType(td.getDescribingType());
         } catch (BError e) {
             return createAIError(e.getErrorMessage());
         }
     }
 
-    private static Object generateJsonSchemaForType(Type t, SchemaGenerationContext schemaGenerationContext)
-            throws BError {
+    private static Object generateJsonSchemaForType(Type t) throws BError {
         Type impliedType = TypeUtils.getImpliedType(t);
+        // Before the simple-type check: an enum is a union of string singletons, so its
+        // basic type is plain `string` and it would otherwise lose its value set.
+        if (impliedType instanceof UnionType unionType) {
+            List<FiniteType> finiteMembers = finiteMembersOf(unionType);
+            if (finiteMembers != null) {
+                return createFiniteUnionSchema(finiteMembers);
+            }
+        }
         if (isSimpleType(impliedType)) {
             return createSimpleTypeSchema(impliedType);
         }
 
         return switch (impliedType) {
             case JsonType ignored -> generateJsonSchemaForJson();
-            case ArrayType arrayType -> generateJsonSchemaForArrayType(arrayType, schemaGenerationContext);
-            case UnionType unionType -> generateUnionTypeSchema(unionType, schemaGenerationContext);
-            case ReferenceType referenceType -> getJsonSchemaFromAnnotatableType(referenceType,
-                    schemaGenerationContext);
+            case ArrayType arrayType -> generateJsonSchemaForArrayType(arrayType);
+            case UnionType unionType -> generateUnionTypeSchema(unionType);
+            case ReferenceType referenceType -> getJsonSchemaFromAnnotatableType(referenceType);
             default -> throw ErrorCreator.createError(StringUtils.fromString(
                     "Runtime schema generation is not yet supported for type " + impliedType.getName()));
         };
@@ -103,17 +129,68 @@ public final class Native {
     private static BMap<BString, Object> createSimpleTypeSchema(Type type) {
         BMap<BString, Object> schemaMap = createMapValue(TypeCreator.createMapType(PredefinedTypes.TYPE_JSON));
         schemaMap.put(StringUtils.fromString("type"), StringUtils.fromString(getStringRepresentation(type)));
+        // A singleton or finite type (one enum member, a literal) keeps its allowed
+        // values. Without them the model sees a bare `{"type": "string"}`, answers off
+        // the value set, and the result fails to bind.
+        if (type instanceof FiniteType finiteType) {
+            schemaMap.put(StringUtils.fromString("enum"), enumValues(List.of(finiteType)));
+        }
         return schemaMap;
     }
 
-    private static Object generateUnionTypeSchema(UnionType unionType,
-                                                  SchemaGenerationContext schemaGenerationContext) {
+    // The members of a union that consists ONLY of finite types, or null otherwise.
+    private static List<FiniteType> finiteMembersOf(UnionType unionType) {
+        List<FiniteType> finiteMembers = new ArrayList<>();
+        for (Type memberType : unionType.getMemberTypes()) {
+            if (!(TypeUtils.getImpliedType(memberType) instanceof FiniteType finiteType)) {
+                return null;
+            }
+            finiteMembers.add(finiteType);
+        }
+        return finiteMembers.isEmpty() ? null : finiteMembers;
+    }
+
+    private static BArray enumValues(List<FiniteType> finiteTypes) {
+        List<Object> values = new ArrayList<>();
+        for (FiniteType finiteType : finiteTypes) {
+            values.addAll(finiteType.getValueSpace());
+        }
+        BArray array = ValueCreator.createArrayValue(TypeCreator.createArrayType(PredefinedTypes.TYPE_JSON));
+        for (Object value : values) {
+            array.append(value);
+        }
+        return array;
+    }
+
+    // An enum or a literal union (`"a"|"b"`) arrives as a union of finite types. It is
+    // emitted as ONE `enum` schema rather than an `anyOf` of single-value schemas,
+    // which is the form JSON-schema consumers (and the models) handle best. The `type`
+    // is kept only when every value shares one JSON type.
+    private static BMap<BString, Object> createFiniteUnionSchema(List<FiniteType> finiteTypes) {
+        BMap<BString, Object> schemaMap = createMapValue(TypeCreator.createMapType(PredefinedTypes.TYPE_JSON));
+        String sharedType = null;
+        boolean mixed = false;
+        for (FiniteType finiteType : finiteTypes) {
+            String memberType = isSimpleType(finiteType) ? getStringRepresentation(finiteType) : null;
+            if (memberType == null || (sharedType != null && !sharedType.equals(memberType))) {
+                mixed = true;
+            }
+            sharedType = memberType;
+        }
+        if (!mixed && sharedType != null) {
+            schemaMap.put(StringUtils.fromString("type"), StringUtils.fromString(sharedType));
+        }
+        schemaMap.put(StringUtils.fromString("enum"), enumValues(finiteTypes));
+        return schemaMap;
+    }
+
+    private static Object generateUnionTypeSchema(UnionType unionType) {
         BMap<BString, Object> schemaMap = createMapValue(TypeCreator.createMapType(PredefinedTypes.TYPE_JSON));
         List<Type> memberTypes = unionType.getMemberTypes();
         BArray schemas = ValueCreator.createArrayValue(
                 TypeCreator.createArrayType(PredefinedTypes.TYPE_JSON));
         for (Type memberType : memberTypes) {
-            Object schema = generateJsonSchemaForType(memberType, schemaGenerationContext);
+            Object schema = generateJsonSchemaForType(memberType);
             schemas.append(schema);
         }
         if (schemas.size() == 1) {
@@ -123,8 +200,7 @@ public final class Native {
         return schemaMap;
     }
 
-    private static Object getJsonSchemaFromAnnotatableType(ReferenceType referenceType,
-                                                           SchemaGenerationContext schemaGenerationContext) {
+    private static Object getJsonSchemaFromAnnotatableType(ReferenceType referenceType) {
         Type referredType = referenceType.getReferredType();
         if (referredType instanceof AnnotatableType annotatableType) {
             BMap<BString, Object> annotations = annotatableType.getAnnotations();
@@ -179,26 +255,11 @@ public final class Native {
         };
     }
 
-    private static Object generateJsonSchemaForArrayType(ArrayType arrayType,
-                                                         SchemaGenerationContext schemaGenerationContext) {
+    private static Object generateJsonSchemaForArrayType(ArrayType arrayType) {
         BMap<BString, Object> schemaMap = createMapValue(TypeCreator.createMapType(PredefinedTypes.TYPE_JSON));
         Type elementType = TypeUtils.getImpliedType(arrayType.getElementType());
         schemaMap.put(StringUtils.fromString("type"), StringUtils.fromString("array"));
-        schemaMap.put(StringUtils.fromString("items"), generateJsonSchemaForType(elementType,
-                schemaGenerationContext));
+        schemaMap.put(StringUtils.fromString("items"), generateJsonSchemaForType(elementType));
         return schemaMap;
-    }
-
-    public static BTypedesc getArrayMemberType(BTypedesc expectedResponseTypedesc) {
-        return ValueCreator.createTypedescValue(
-                ((ArrayType) TypeUtils.getImpliedType(expectedResponseTypedesc.getDescribingType())).getElementType());
-    }
-
-    public static boolean containsNil(BTypedesc expectedResponseTypedesc) {
-        return expectedResponseTypedesc.getDescribingType().isNilable();
-    }
-
-    private static class SchemaGenerationContext {
-        boolean isSchemaGeneratedAtCompileTime = true;
     }
 }

@@ -12,152 +12,121 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import ballerina/ai;
 import ballerina/test;
 
-// Routing for the flagship/workhorse ids added to the enums. Each pins a fact from
-// that model's card that a wrong id or wrong routing assumption would violate.
+// Routing for the flagship/workhorse ids carried by the enums. Each pins a fact from
+// that model's card that a wrong id would violate.
 
 @test:Config {}
-function testDeepSeekV32BareIdDefaultsToMantle() returns error? {
+function testDeepSeekV32UsesTheBareIdOnTheRuntimeEndpoint() returns error? {
     // The card marks In-Region YES, so the BARE id is callable (the opposite of R1,
-    // which needs the `us.` CRIS prefix). It is dual-homed, so under Amendment 2 AUTO
-    // prefers Mantle. Mantle takes the bare id verbatim (no CRIS prefix on this id).
-    Route route = check resolveRoute(DEEPSEEK_V3_2, "us-east-1");
-    test:assertEquals(route.family, MANTLE);
-    test:assertEquals(route.effectiveModelId, "deepseek.v3.2");
-    // Forcing CONVERSE gives the runtime surface (needed for typed generate()).
-    Route converse = check resolveRoute(DEEPSEEK_V3_2, "us-east-1", {apiFamily: CONVERSE});
-    test:assertEquals(converse.family, CONVERSE);
-    test:assertEquals(converse.effectiveModelId, "deepseek.v3.2");
+    // which needs the `us.` CRIS prefix).
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html
+    Route runtime = check resolveRuntimeRoute(DEEPSEEK_V3_2, "us-east-1", CONVERSE);
+    test:assertEquals(runtime.effectiveModelId, "deepseek.v3.2");
 }
 
 @test:Config {}
-function testMistralLarge3DefaultsToMantle() returns error? {
-    Route route = check resolveRoute(MISTRAL_LARGE_3, "us-east-1");
-    test:assertEquals(route.family, MANTLE, "dual-homed model prefers Mantle under AUTO (Amendment 2)");
-    test:assertEquals(route.effectiveModelId, "mistral.mistral-large-3-675b-instruct");
+function testMistralLarge3ResolvesOnTheRuntimeEndpoint() returns error? {
+    Route runtime = check resolveRuntimeRoute(MISTRAL_LARGE_3, "us-east-1", CONVERSE);
+    test:assertEquals(runtime.effectiveModelId, "mistral.mistral-large-3-675b-instruct");
 }
 
 @test:Config {}
-function testQwen3Coder480BUsesItsMantleIdUnderAuto() returns error? {
-    // The enum carries the bedrock-RUNTIME id; the mantle id differs. Under AUTO it
-    // now routes to Mantle, so the MANTLE-side id must go on the wire.
-    Route route = check resolveRoute(QWEN3_CODER_480B, "us-east-1");
-    test:assertEquals(route.family, MANTLE);
-    test:assertEquals(route.effectiveModelId, "qwen.qwen3-coder-480b-a35b-instruct",
-            "Mantle has its own id for this model");
-    test:assertEquals(route.bareModelId, "qwen.qwen3-coder-480b-a35b-v1:0", "lookup key stays the runtime id");
-    // Forcing CONVERSE keeps the runtime id on the wire.
-    Route converse = check resolveRoute(QWEN3_CODER_480B, "us-east-1", {apiFamily: CONVERSE});
-    test:assertEquals(converse.effectiveModelId, "qwen.qwen3-coder-480b-a35b-v1:0");
+function testQwen3IdsKeepTheirRuntimeIds() returns error? {
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
+    Route coder = check resolveRuntimeRoute(QWEN3_CODER_480B, "us-east-1", CONVERSE);
+    test:assertEquals(coder.effectiveModelId, "qwen.qwen3-coder-480b-a35b-v1:0");
+    Route small = check resolveRuntimeRoute(QWEN3_32B, REGION, CONVERSE);
+    test:assertEquals(small.effectiveModelId, "qwen.qwen3-32b-v1:0");
 }
 
 @test:Config {}
-function testClaudeSonnet5DefaultsToMantleAndUsesTheMessagesPath() returns error? {
-    // Dual-homed: Amendment 2 makes AUTO prefer Mantle. The Messages entry is what
-    // makes that resolve to `/anthropic/v1/messages`.
-    Route auto = check resolveRoute(CLAUDE_SONNET_5, "us-east-1");
-    test:assertEquals(auto.family, MANTLE);
-    MantleEntry? entry = auto.mantleEntry;
-    if entry is () {
-        test:assertFail("Sonnet 5 under AUTO must yield a Mantle entry");
-    }
-    test:assertEquals(entry.path, "/anthropic/v1/messages");
-    test:assertEquals(entry.codec, MESSAGES_CODEC);
-    // And CONVERSE is still reachable explicitly (for typed generate()).
-    Route converse = check resolveRoute(CLAUDE_SONNET_5, "us-east-1", {apiFamily: CONVERSE});
-    test:assertEquals(converse.family, CONVERSE);
-}
-
-@test:Config {}
-function testClaudeOpus5DefaultsToMantleAndUsesTheMessagesPath() returns error? {
-    // Dual-homed (bedrock-runtime YES + bedrock-mantle YES), Messages API, same id on
-    // both endpoints — so AUTO prefers Mantle on `/anthropic/v1/messages`.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
-    Route auto = check resolveRoute(CLAUDE_OPUS_5, "us-east-1");
-    test:assertEquals(auto.family, MANTLE);
-    MantleEntry? entry = auto.mantleEntry;
-    if entry is () {
-        test:assertFail("Opus 5 under AUTO must yield a Mantle entry");
-    }
-    test:assertEquals(entry.path, "/anthropic/v1/messages");
-    test:assertEquals(entry.codec, MESSAGES_CODEC);
-    test:assertEquals(entry.authHeader, X_API_KEY);
-    // The card lists no separate Mantle id, so the wire id must not be rewritten.
-    test:assertEquals(auto.effectiveModelId, "anthropic.claude-opus-5");
-    // CONVERSE stays reachable explicitly (for typed generate()).
-    Route converse = check resolveRoute(CLAUDE_OPUS_5, "us-east-1", {apiFamily: CONVERSE});
-    test:assertEquals(converse.family, CONVERSE);
-}
-
-@test:Config {}
-function testClaudeOpus5AcceptsItsGeoAndGlobalProfiles() returns error? {
-    // The card lists `us.`/`eu.`/`au.` geo ids and `global.` — all must strip for
-    // lookup and re-apply on the Converse wire.
-    foreach string id in ["us.anthropic.claude-opus-5", "eu.anthropic.claude-opus-5",
-        "au.anthropic.claude-opus-5", "global.anthropic.claude-opus-5"] {
-        Route route = check resolveRoute(id, "us-east-1");
-        test:assertEquals(route.family, CONVERSE, id + " must leave Mantle once prefixed");
+function testTheRuntimeAnthropicEnumCarriesCrisPrefixedIds() returns error? {
+    // Current Claude models are served on bedrock-runtime through cross-region
+    // inference profiles only — a BARE id there fails with "on-demand throughput
+    // isn't supported" — so the enum members carry `us.`.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+    AnthropicRuntimeModelNames[] ids = [CLAUDE_OPUS_5, CLAUDE_OPUS_4_8, CLAUDE_SONNET_5,
+            CLAUDE_SONNET_4_6, CLAUDE_HAIKU_4_5];
+    foreach AnthropicRuntimeModelNames id in ids {
+        Route route = check resolveRuntimeRoute(id, "us-east-1", CONVERSE);
+        test:assertEquals(route.geoPrefix, "us", id + " must carry a CRIS prefix on bedrock-runtime");
         test:assertEquals(route.effectiveModelId, id, "the prefix must survive onto the wire");
     }
 }
 
 @test:Config {}
-function testClaudeSonnet5AcceptsItsUsCrisProfile() returns error? {
-    // The card lists `us.anthropic.claude-sonnet-5` as the US geo id: it must strip
-    // for lookup and re-apply on the Converse wire.
-    Route route = check resolveRoute("us.anthropic.claude-sonnet-5", "us-east-1");
-    test:assertEquals(route.family, CONVERSE);
-    test:assertEquals(route.effectiveModelId, "us.anthropic.claude-sonnet-5",
-            "the geo prefix must survive onto the Converse wire");
+function testClaudeOpus5AcceptsItsGeoAndGlobalProfilesOnTheRuntimeEndpoint() returns error? {
+    // The card lists `us.`/`eu.`/`au.` geo ids and `global.` — all must strip for
+    // lookup and re-apply on the wire.
+    foreach string id in ["us.anthropic.claude-opus-5", "eu.anthropic.claude-opus-5",
+            "au.anthropic.claude-opus-5", "global.anthropic.claude-opus-5"] {
+        Route route = check resolveRuntimeRoute(id, "us-east-1", CONVERSE);
+        test:assertEquals(route.bareModelId, "anthropic.claude-opus-5");
+        test:assertEquals(route.effectiveModelId, id, "the prefix must survive onto the wire");
+    }
 }
 
 @test:Config {}
 function testNewModelProvidersConstruct() returns error? {
-    _ = check new AnthropicModelProvider(TEST_CREDS, CLAUDE_SONNET_5, REGION);
-    _ = check new MistralModelProvider(TEST_CREDS, MISTRAL_LARGE_3, REGION);
-    _ = check new QwenModelProvider(TEST_CREDS, QWEN3_CODER_480B, REGION);
-    _ = check new DeepSeekModelProvider(TEST_CREDS, DEEPSEEK_V3_2, REGION);
+    RuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION);
+    RuntimeMistralModelProvider _ = check new (MISTRAL_LARGE_3, TEST_CREDS, REGION);
+    RuntimeQwenModelProvider _ = check new (QWEN3_CODER_480B, TEST_CREDS, REGION);
+    RuntimeDeepSeekModelProvider _ = check new (DEEPSEEK_V3_2, TEST_CREDS, REGION);
 }
 
-// ---- Amendment 2's sharp edge: generate() on an AUTO-routed Mantle model ----
-
-type FruitShape record {|
-    string name;
-|};
+@test:Config {}
+function testClaudeSonnet5OnConverseSelectsToolForcing() returns error? {
+    Route route = check resolveRuntimeRoute(CLAUDE_SONNET_5, REGION, CONVERSE);
+    readonly & ModelConverter converter = check selectConverter(route);
+    test:assertEquals(structuredOutputStyleFor(converter.toolChoice), TOOL_FORCING);
+    RuntimeAnthropicModelProvider _ = check new (CLAUDE_SONNET_5, TEST_CREDS, REGION, CONVERSE);
+}
 
 @test:Config {}
-function testTypedGenerateErrorsOnAutoRoutedMantleModel() returns error? {
-    // The deliberate consequence of Amendment 2 (its point 2/3): a dual-homed model
-    // now defaults to Mantle, and Mantle has no structured output — so generate() with
-    // a NON-string target returns an ai:Error naming the model, WITHOUT any I/O (the
-    // guard returns before the transport). The documented escape is apiFamily=CONVERSE
-    // (its route resolution is covered in the routing tests above).
-    AnthropicModelProvider auto = check new (TEST_CREDS, CLAUDE_SONNET_5, REGION);
-    FruitShape|ai:Error typed = auto->generate(`Name a fruit.`);
-    test:assertTrue(typed is ai:Error, "typed generate() on an AUTO (Mantle) route must error");
-    if typed is ai:Error {
-        test:assertTrue(typed.message().includes("bedrock-mantle"), typed.message());
-        test:assertTrue(typed.message().includes("anthropic.claude-sonnet-5"), typed.message());
+function testOpus55AndOpus47NeedACrisProfile() returns error? {
+    // Both cards mark In-Region unsupported on bedrock-runtime, hence `us.`.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+    foreach string id in [CLAUDE_OPUS_5_5, CLAUDE_OPUS_4_7] {
+        Route runtime = check resolveRuntimeRoute(id, "us-east-1", CONVERSE);
+        test:assertEquals(runtime.geoPrefix, "us", id + " needs a CRIS profile on bedrock-runtime");
+        test:assertEquals(runtime.effectiveModelId, id, "the prefix must survive onto the wire");
     }
 }
 
-// Qwen3 32B is served under a DIFFERENT id on Mantle (`qwen.qwen3-32b`) than on
-// bedrock-runtime (`qwen.qwen3-32b-v1:0`). The caller always passes the RUNTIME id
-// — MANTLE_CAPABLE is keyed by it — and the resolver performs the swap. Getting
-// this backwards sends an id Mantle does not know, so both halves are asserted.
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
 @test:Config {}
-function testQwen332bUsesItsOwnIdOnMantle() returns error? {
-    Route mantle = check resolveRoute("qwen.qwen3-32b-v1:0", REGION, {apiFamily: MANTLE});
-    test:assertEquals(mantle.family, MANTLE);
-    test:assertEquals(mantle.effectiveModelId, "qwen.qwen3-32b",
-            "Mantle serves this model under its own id");
-    test:assertEquals(mantle.bareModelId, "qwen.qwen3-32b-v1:0",
-            "the lookup key stays the runtime id");
+function testBothFableIdsNeedACrisProfile() returns error? {
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html
+    foreach string id in [CLAUDE_FABLE_5, CLAUDE_FABLE_5_1] {
+        Route runtime = check resolveRuntimeRoute(id, "us-east-1", CONVERSE);
+        test:assertEquals(runtime.geoPrefix, "us", id);
+    }
+}
 
-    Route converse = check resolveRoute("qwen.qwen3-32b-v1:0", REGION, {apiFamily: CONVERSE});
-    test:assertEquals(converse.effectiveModelId, "qwen.qwen3-32b-v1:0",
-            "the runtime surface keeps the runtime id");
+@test:Config {}
+function testOnlyFable51InheritsOpus55sForcedToolRefusal() {
+    // Anthropic scopes the restriction to Opus 5.5 and Fable 5.1 ("The first three
+    // also apply on Claude Fable 5.1"). Fable 5 is NOT in that set, so it must not be
+    // swept up with its own successor.
+    // https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5
+    test:assertTrue(refusesForcedToolChoice(CLAUDE_OPUS_5_5));
+    test:assertTrue(refusesForcedToolChoice(CLAUDE_FABLE_5_1));
+    test:assertFalse(refusesForcedToolChoice(CLAUDE_FABLE_5));
+    test:assertFalse(refusesForcedToolChoice(CLAUDE_OPUS_4_7));
+}
+
+@test:Config {}
+function testTheGpt6FamilyIsCrisPrefixedOnRuntime() returns error? {
+    // "You cannot use the base model ID for in-Region calls on this endpoint" —
+    // the runtime ids MUST carry a profile prefix.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+    foreach string id in [GPT_6_ASTRA, GPT_6_SOL, GPT_6_LUNA] {
+        Route runtime = check resolveRuntimeRoute(id, "us-east-1", RESPONSES);
+        test:assertEquals(runtime.geoPrefix, "us", id);
+        test:assertEquals(runtime.effectiveModelId, id);
+    }
 }

@@ -55,6 +55,7 @@ import io.ballerina.projects.Module;
 import io.ballerina.projects.ModuleId;
 import io.ballerina.projects.Package;
 import io.ballerina.projects.PackageCompilation;
+import io.ballerina.projects.ResolvedPackageDependency;
 import io.ballerina.projects.plugins.ModifierTask;
 import io.ballerina.projects.plugins.SourceModifierContext;
 import io.ballerina.tools.text.TextDocument;
@@ -62,6 +63,7 @@ import io.swagger.v3.core.util.Json;
 import io.swagger.v3.core.util.OpenAPISchema2JsonSchema;
 import io.swagger.v3.oas.models.media.Schema;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -86,7 +88,11 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
     private static final String AI_MODULE_NAME = "ai";
     private static final String BALLERINA_ORG_NAME = "ballerina";
     private static final String BEDROCK_MODULE_NAME = "ai.aws.bedrock";
-    private static final String BEDROCK_MODULE_VERSION = "0";
+    // These must match Ballerina.toml exactly, and the module coordinates in
+    // native/.../Generator.java, or `getTypeByName` below resolves nothing, no call
+    // site receives an `@ai:JsonSchema` annotation, and `generate()` loses type
+    // binding at runtime with no compile error anywhere. The org was `ballerinax`
+    // while the package published as `dasunorg`, which is exactly that silent failure.
     private static final String BEDROCK_MODULE_ORG = "ballerinax";
 
     /**
@@ -94,14 +100,18 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
      * `provider_*.bal` files: a class missing here silently loses type binding on
      * `generate()`, with no compile error at the call site.
      */
+    // Every provider class in the package. A class MISSING from this list silently
+    // loses generate() type binding at every call site, with no compile error — so
+    // this must be updated in lockstep whenever a provider class is added or renamed.
     private static final String[] MODEL_PROVIDER_CLASS_NAMES = {
-            "AnthropicModelProvider",
-            "OpenAIModelProvider",
-            "AmazonModelProvider",
-            "MistralModelProvider",
-            "QwenModelProvider",
-            "GoogleModelProvider",
-            "DeepSeekModelProvider"
+            "ConverseModelProvider",
+            "RuntimeAnthropicModelProvider",
+            "RuntimeOpenAIModelProvider",
+            "RuntimeAmazonModelProvider",
+            "RuntimeMistralModelProvider",
+            "RuntimeQwenModelProvider",
+            "RuntimeGoogleModelProvider",
+            "RuntimeDeepSeekModelProvider"
     };
 
     private final AiAwsBedrockCodeModifier.AnalysisData analysisData;
@@ -118,28 +128,30 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             return;
         }
 
+        String moduleVersion = bedrockMajorVersion(currentPackage, compilation);
+        // Shared across modules, as in the other ai.* plugins. Every module is analyzed before
+        // any is modified, so a record declared in one module and returned by generate() in
+        // another gets its schema whatever order the modules come in.
+        ModifierData modifierData = new ModifierData();
+
         for (ModuleId moduleId : currentPackage.moduleIds()) {
             Module module = currentPackage.module(moduleId);
             SemanticModel semanticModel = compilation.getSemanticModel(moduleId);
+            List<ClassSymbol> providerSymbols = resolveProviderSymbols(semanticModel, moduleVersion);
+
+            for (DocumentId documentId : module.documentIds()) {
+                analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
+            }
+
+            for (DocumentId documentId : module.testDocumentIds()) {
+                analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
+            }
+        }
+
+        for (ModuleId moduleId : currentPackage.moduleIds()) {
+            Module module = currentPackage.module(moduleId);
             Collection<DocumentId> documentIds = module.documentIds();
             Collection<DocumentId> testDocumentIds = module.testDocumentIds();
-
-            // Per MODULE, not per task. `typeSchemas` is keyed by the UNQUALIFIED
-            // type name, so a shared map lets a `Result` record in one module
-            // annotate an unrelated `Result` in the next with the wrong schema.
-            // Module-scoped state makes the key collision unreachable: within one
-            // module the names are already unique.
-            ModifierData modifierData = new ModifierData();
-
-            List<ClassSymbol> providerSymbols = resolveProviderSymbols(semanticModel);
-
-            for (DocumentId documentId : documentIds) {
-                analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
-            }
-
-            for (DocumentId documentId : testDocumentIds) {
-                analyzeDocument(module, documentId, semanticModel, providerSymbols, modifierData);
-            }
 
             for (DocumentId documentId : documentIds) {
                 modifierContext.modifySourceFile(modifyDocument(module.document(documentId),
@@ -153,12 +165,29 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
         }
     }
 
-    private static List<ClassSymbol> resolveProviderSymbols(SemanticModel semanticModel) {
+    /**
+     * The MAJOR version of the resolved ai.aws.bedrock package, which is what `getTypeByName` keys on.
+     *
+     * <p>In a user's application `currentPackage` is the application, so the version comes from
+     * its resolved dependency. The fallback covers compiling this package itself.</p>
+     */
+    private static String bedrockMajorVersion(Package currentPackage, PackageCompilation compilation) {
+        for (ResolvedPackageDependency dependency : compilation.getResolution().allDependencies()) {
+            Package dependencyPackage = dependency.packageInstance();
+            if (BEDROCK_MODULE_ORG.equals(dependencyPackage.packageOrg().value())
+                    && BEDROCK_MODULE_NAME.equals(dependencyPackage.packageName().value())) {
+                return String.valueOf(dependencyPackage.packageVersion().value().major());
+            }
+        }
+        return String.valueOf(currentPackage.packageVersion().value().major());
+    }
+
+    private static List<ClassSymbol> resolveProviderSymbols(SemanticModel semanticModel, String moduleVersion) {
         Types types = semanticModel.types();
         List<ClassSymbol> symbols = new ArrayList<>(MODEL_PROVIDER_CLASS_NAMES.length);
         for (String className : MODEL_PROVIDER_CLASS_NAMES) {
             Optional<Symbol> symbol = types.getTypeByName(BEDROCK_MODULE_ORG, BEDROCK_MODULE_NAME,
-                    BEDROCK_MODULE_VERSION, className);
+                    moduleVersion, className);
             if (symbol.isPresent() && symbol.get() instanceof ClassSymbol classSymbol) {
                 symbols.add(classSymbol);
             }
@@ -239,7 +268,9 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
         private static final String GENERATE_METHOD_NAME = "generate";
         private static final String STRING = "string";
         private static final String BYTE = "byte";
-        private static final String NUMBER = "number";
+        private static final String INTEGER = "integer";
+        private static final BigDecimal BYTE_MIN = BigDecimal.ZERO;
+        private static final BigDecimal BYTE_MAX = BigDecimal.valueOf(255);
         private final SemanticModel semanticModel;
         private final TypeMapper typeMapper;
         private final List<ClassSymbol> providerSymbols;
@@ -291,7 +322,15 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
                     if (!typeReference.subtypeOf(anydataType)) {
                         return;
                     }
-                    typeSchemas.put(typeReference.definition().getName().get(),
+                    // The definition symbol of an anonymous type has no name. `typeSchemas`
+                    // is keyed by name, so a nameless definition has nothing to key on:
+                    // skip it rather than let `Optional.get()` throw NoSuchElementException,
+                    // which surfaces as a build crash instead of a diagnostic.
+                    Optional<String> definitionName = typeReference.definition().getName();
+                    if (definitionName.isEmpty()) {
+                        return;
+                    }
+                    typeSchemas.put(definitionName.get(),
                             getJsonSchema(typeMapper.getSchema(typeReference)));
                 }
                 case ArrayTypeSymbol arrayType ->
@@ -349,12 +388,28 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
                 oneOf.forEach(GenerateMethodJsonSchemaGenerator::modifySchema);
             }
 
-            // Override default ballerina byte to json schema mapping
-            if (BYTE.equals(schema.getFormat()) && STRING.equals(schema.getType())) {
-                schema.setFormat(null);
-                schema.setType(NUMBER);
+            // `additionalProperties` carries the open/closed record distinction: a closed
+            // record maps to `false`, a map-typed rest field to a Schema. It survives
+            // `removeUnwantedFields`, so recurse into the Schema form to strip the
+            // unwanted keywords nested inside it too.
+            if (schema.getAdditionalProperties() instanceof Schema<?> additionalPropertiesSchema) {
+                modifySchema(additionalPropertiesSchema);
             }
+
+            // Override default ballerina byte to json schema mapping. Ballerina `byte` is
+            // an integer in 0..255, which Swagger models as {type: string, format: byte}.
+            // Emit a BOUNDED integer, and apply it AFTER removeUnwantedFields() — that
+            // method clears `minimum`/`maximum`, so setting the bounds before it would
+            // silently drop them and leave a schema that accepts fractions and values
+            // outside 0..255.
+            boolean isByte = BYTE.equals(schema.getFormat()) && STRING.equals(schema.getType());
             removeUnwantedFields(schema);
+            if (isByte) {
+                schema.setFormat(null);
+                schema.setType(INTEGER);
+                schema.setMinimum(BYTE_MIN);
+                schema.setMaximum(BYTE_MAX);
+            }
         }
 
         private static void removeUnwantedFields(Schema schema) {
@@ -377,7 +432,9 @@ class GenerateMethodModificationTask implements ModifierTask<SourceModifierConte
             schema.setMinItems(null);
             schema.setMaxProperties(null);
             schema.setMinProperties(null);
-            schema.setAdditionalProperties(null);
+            // NOT cleared: `additionalProperties` is meaningful output, not noise. Omitting
+            // it lets a model return unknown object fields; a closed Ballerina record must
+            // keep emitting `additionalProperties: false`.
             schema.set$ref(null);
             schema.setReadOnly(null);
             schema.setWriteOnly(null);
