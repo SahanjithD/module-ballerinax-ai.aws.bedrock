@@ -267,7 +267,7 @@ isolated function guardEmbeddingModelAgainstReranker(string|ManagedKnowledgeBase
 }
 
 // MANAGED takes no `storageConfiguration`; `embeddingModelArn` goes only with a
-// `CUSTOM` embedding model.
+// `CUSTOM` embedding model, which AWS requires to be 1024 dimensions and float32.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html
 // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ManagedKnowledgeBaseConfiguration.html
 isolated function createKnowledgeBaseRequestBody(ManagedKnowledgeBaseDefinition def) returns map<json> {
@@ -279,8 +279,8 @@ isolated function createKnowledgeBaseRequestBody(ManagedKnowledgeBaseDefinition 
             embeddingModelArn: embeddingModel.embeddingModelArn,
             embeddingModelConfiguration: {
                 bedrockEmbeddingModelConfiguration: {
-                    dimensions: embeddingModel.dimensions,
-                    embeddingDataType: embeddingModel.embeddingDataType
+                    dimensions: 1024,
+                    embeddingDataType: "FLOAT32"
                 }
             }
         };

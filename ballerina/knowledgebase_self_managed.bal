@@ -38,7 +38,7 @@ public distinct isolated client class SelfManagedKnowledgeBase {
     // `readonly &` so an isolated class can hold it in a `final` field.
     private final readonly & VectorRerankingConfig? rerankingConfiguration;
 
-    # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
+    # + knowledgeBase - An existing knowledge base ID, or a definition to find or create by name
     # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset

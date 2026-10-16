@@ -34,7 +34,7 @@ public distinct isolated client class ManagedKnowledgeBase {
     private final int? numberOfResults;
     private final RerankingModelType? rerankingModelType;
 
-    # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
+    # + knowledgeBase - An existing knowledge base ID, or a definition to find or create by name
     # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset

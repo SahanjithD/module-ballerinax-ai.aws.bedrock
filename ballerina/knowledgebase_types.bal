@@ -55,8 +55,7 @@ public type DataSourceDefinition record {|
     string description?;
 |};
 
-// Fixed at creation. Rules out the managed reranker and is billed separately. AWS
-// requires 1024 dimensions and FLOAT32.
+// Fixed at creation. Rules out the managed reranker and is billed separately.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-create.html#kb-managed-embedding-models
 
 # Your own embedding model for a new managed knowledge base.
@@ -64,10 +63,6 @@ public type ManagedEmbeddingModel record {|
     # ARN of the embedding model
     @display {label: "Embedding Model ARN"}
     string embeddingModelArn;
-    # Vector dimensions. Must be 1024
-    int dimensions = 1024;
-    # Vector data type. Must be `FLOAT32`
-    string embeddingDataType = "FLOAT32";
 |};
 
 // `name` must match `([0-9a-zA-Z][_-]?){1,100}`. Without `embeddingModel`, Bedrock's own
@@ -98,7 +93,7 @@ public type ManagedKnowledgeBaseDefinition record {|
 public type ManagedKnowledgeBaseConfig record {|
     # Seconds to wait for documents to be indexed
     decimal ingestTimeout = 300;
-    # Default number of results per retrieval (1-100)
+    # Results fetched per AWS call (1-100). `retrieve`'s `maxLimit` sets how many are returned
     int numberOfResults?;
     # HTTP client configuration
     http:ClientConfiguration httpConfig?;
