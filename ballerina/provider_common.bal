@@ -51,7 +51,6 @@ isolated function runChat(ApiFamily api, string wireModelId,
         span.addTools(tools);
     }
 
-    // Flattens prompts and fetches image URLs first, so the encoders stay pure.
     [string?, ResolvedMessage[]]|ai:Error resolved = resolveMessages(msgs);
     if resolved is ai:Error {
         span.close(resolved);

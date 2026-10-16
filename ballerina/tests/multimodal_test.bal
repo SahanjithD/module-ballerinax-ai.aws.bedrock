@@ -222,14 +222,14 @@ function testSpanProjectionRedactsImageBytes() returns error? {
 // ---- URL handling ----
 
 @test:Config {}
-function testNonHttpImageUrlIsRefusedBeforeAnyFetch() returns error? {
-    // `s3://`, `file://` and friends all satisfy the ai:Url constraint. None of them
-    // may reach an HTTP client — this connector holds AWS credentials.
-    ai:ImageDocument doc = {content: "file:///etc/passwd"};
-    ContentPart[]|ai:Error parts = contentToParts(`${doc}`);
-    test:assertTrue(parts is ai:Error);
-    if parts is ai:Error {
-        test:assertTrue(parts.message().includes("http"), parts.message());
+function testImageUrlIsRefused() returns error? {
+    foreach string url in ["https://example.com/cat.png", "http://169.254.169.254/latest", "file:///etc/passwd"] {
+        ai:ImageDocument doc = {content: url};
+        ContentPart[]|ai:Error parts = contentToParts(`${doc}`);
+        test:assertTrue(parts is ai:Error, url);
+        if parts is ai:Error {
+            test:assertTrue(parts.message().includes("byte array"), parts.message());
+        }
     }
 }
 

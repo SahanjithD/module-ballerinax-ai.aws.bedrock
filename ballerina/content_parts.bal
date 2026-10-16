@@ -13,11 +13,10 @@
 // limitations under the License.
 
 import ballerina/ai;
-import ballerina/http;
 import ballerina/lang.array;
 
-// All I/O (fetching image URLs) happens here, so the converters stay pure. Images are
-// kept as bytes: Converse has no URL source, and Anthropic on Bedrock takes base64 only.
+// Images are sent as bytes: Converse has no web URL source, and Anthropic on Bedrock takes
+// base64 only. A URL is refused rather than fetched, as in ai.ollama.
 // https://platform.claude.com/docs/en/build-with-claude/vision
 
 // The only image formats any Bedrock API accepts.
@@ -28,9 +27,6 @@ final readonly & map<string> MIME_TO_CONVERSE_FORMAT = {
     "image/gif": "gif",
     "image/webp": "webp"
 };
-
-const MAX_IMAGE_DOWNLOAD_BYTES = 20 * 1024 * 1024; // 20 MiB
-const MAX_IMAGE_REDIRECTS = 5;
 
 // ---------------------------------------------------------------------------
 // Resolution (does I/O)
@@ -117,17 +113,11 @@ isolated function appendDocument(ai:Document|ai:Chunk doc, ContentPart[] parts) 
 }
 
 isolated function toImagePart(ai:ImageDocument doc) returns ImagePart|ai:Error {
-    ai:Url|byte[] content = doc.content;
-    byte[] data;
-    string? mimeType = normalizeMimeType(doc.metadata?.mimeType);
-    if content is ai:Url {
-        // Bedrock never fetches a URL itself, so the module does.
-        [byte[], string?] [downloaded, contentType] = check downloadImage(content);
-        data = downloaded;
-        mimeType = mimeType ?: normalizeMimeType(contentType);
-    } else {
-        data = content;
+    ai:Url|byte[] data = doc.content;
+    if data is ai:Url {
+        return error ai:Error("URL-based images are not supported. Provide the image as a byte array.");
     }
+    string? mimeType = normalizeMimeType(doc.metadata?.mimeType);
     // An explicit `metadata.mimeType` wins; sniffing is the fallback.
     string? resolved = mimeType ?: sniffImageMime(data);
     if resolved is () {
@@ -197,92 +187,6 @@ isolated function startsWithBytes(byte[] data, int[] prefix) returns boolean {
         }
     }
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// Download (the only I/O here)
-// ---------------------------------------------------------------------------
-
-// Redirects are followed by hand so every hop is checked: this client holds AWS
-// credentials and must not be bounced to an internal address.
-isolated function downloadImage(string url) returns [byte[], string?]|ai:Error {
-    string target = url;
-    int redirects = 0;
-    while true {
-        check validateDownloadTarget(target);
-        [string, string] [origin, path] = check splitUrl(target);
-        http:Client|error cl = new (origin, {followRedirects: {enabled: false}});
-        if cl is error {
-            return error ai:Error(string `Could not open a connection to '${origin}'`, cl);
-        }
-        http:Response|error resp = cl->get(path);
-        if resp is error {
-            return error ai:Error(string `Failed to download the image from '${target}'`, resp);
-        }
-        int status = resp.statusCode;
-        if status >= 300 && status < 400 {
-            if redirects >= MAX_IMAGE_REDIRECTS {
-                return error ai:Error(string `Too many redirects (>${MAX_IMAGE_REDIRECTS}) ` +
-                    string `while downloading '${url}'`);
-            }
-            string|error location = resp.getHeader("Location");
-            if location is error {
-                return error ai:Error(string `Redirect from '${target}' had no Location header`);
-            }
-            target = resolveRedirect(target, location);
-            redirects += 1;
-            continue;
-        }
-        if status < 200 || status >= 300 {
-            return error ai:Error(string `Downloading '${target}' returned HTTP ${status}`);
-        }
-        byte[]|error payload = resp.getBinaryPayload();
-        if payload is error {
-            return error ai:Error(string `Could not read the image bytes from '${target}'`, payload);
-        }
-        if payload.length() > MAX_IMAGE_DOWNLOAD_BYTES {
-            return error ai:Error(string `Image at '${target}' exceeds the ` +
-                string `${MAX_IMAGE_DOWNLOAD_BYTES} byte download limit`);
-        }
-        string|error contentType = resp.getHeader("Content-Type");
-        return [payload, contentType is string ? contentType : ()];
-    }
-}
-
-isolated function validateDownloadTarget(string url) returns ai:Error? {
-    string lower = url.toLowerAscii();
-    if lower.startsWith("https://") || lower.startsWith("http://") {
-        return;
-    }
-    return error ai:Error(string `Only http(s) image URLs can be downloaded; got '${url}'. ` +
-        "Pass the image as a byte array instead.");
-}
-
-isolated function splitUrl(string url) returns [string, string]|ai:Error {
-    int? schemeEnd = url.indexOf("://");
-    if schemeEnd is () {
-        return error ai:Error(string `Malformed image URL '${url}'`);
-    }
-    int hostStart = schemeEnd + 3;
-    string rest = url.substring(hostStart);
-    int? slash = rest.indexOf("/");
-    if slash is () {
-        return [url, "/"];
-    }
-    return [url.substring(0, hostStart + slash), rest.substring(slash)];
-}
-
-isolated function resolveRedirect(string base, string location) returns string {
-    string target = location.trim();
-    if target.toLowerAscii().startsWith("http://") || target.toLowerAscii().startsWith("https://") {
-        return target;
-    }
-    [string, string]|ai:Error parts = splitUrl(base);
-    if parts is ai:Error {
-        return target;
-    }
-    string origin = parts[0];
-    return target.startsWith("/") ? origin + target : origin + "/" + target;
 }
 
 // ---------------------------------------------------------------------------
