@@ -233,34 +233,15 @@ function testImageUrlIsRefused() returns error? {
     }
 }
 
-// ---- Emitters for the not-yet-verified dialects ----
-// These are wired but gated behind `enableUnverifiedImageRoutes`. The shapes are
-// pinned here so that flipping the flag changes only WHETHER they run, never WHAT
-// they emit — the live test then validates the exact bytes this module produces.
+// ---- APIs without documented image input ----
 
 @test:Config {}
-function testOpenAIContentStaysABareStringUntilAnImageAppears() returns error? {
-    // Backward compatibility: a text-only turn must keep emitting `"content": "..."`.
-    // Some Bedrock-hosted OpenAI-shaped models accept only a string, and every
-    // existing golden body assumes it.
-    test:assertEquals(openAIContentParts([{text: "just text"}]), <json>"just text");
-
-    test:assertEquals(openAIContentParts([{text: "look "}, {mimeType: "image/png", data: PNG_BYTES}]),
-            <json>[
-                {"type": "text", "text": "look "},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": string `data:image/png;base64,${array:toBase64(PNG_BYTES)}`}
-                }
-            ]);
-}
-
-@test:Config {}
-function testResponsesEmitsImageUrlAsABareStringNotAnObject() returns error? {
-    // The Responses dialect differs from Chat-Completions here: `image_url` is a
-    // plain string. Emitting the object form is a 400.
-    test:assertEquals(responsesContentParts([{mimeType: "image/gif", data: GIF_BYTES}]),
-            <json>[
-                {"type": "input_image", "image_url": string `data:image/gif;base64,${array:toBase64(GIF_BYTES)}`}
-            ]);
+function testImagesAreRefusedWhereAwsDocumentsNoImageInput() {
+    ResolvedMessage[] messages = [{parts: [{text: "look "}, {mimeType: "image/png", data: PNG_BYTES}]}];
+    foreach string dialect in ["the OpenAI chat-completions dialect", "the OpenAI Responses dialect",
+            "the Mistral chat-completion dialect"] {
+        ai:Error? result = rejectImagesIn(messages, dialect);
+        test:assertTrue(result is ai:Error, dialect);
+    }
+    test:assertEquals(rejectImagesIn([{parts: [{text: "just text"}]}], "the OpenAI chat-completions dialect"), ());
 }

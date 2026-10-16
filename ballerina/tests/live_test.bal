@@ -257,14 +257,8 @@ function testLiveConverseEffortIsAccepted() returns error? {
 
 // ---- Images: does each route actually accept what this module emits? ----
 //
-// These exist because no first-party source states whether the OpenAI-shaped
-// and Invoke dialects accept image parts. Crucially they go THROUGH THE MODULE, so
-// what is validated is the exact body it builds — hand-written JSON would only prove
-// that the hand-written JSON works.
-//
-// Converse and Anthropic run by default. The Mistral one needs
-// `enableUnverifiedImageRoutes = true` in Config.toml, since the module refuses it
-// otherwise; a PASS there is the signal to flip that default permanently.
+// Converse and Anthropic Messages are the APIs where AWS documents image input. They go
+// through the module, so the exact body it builds is what gets validated.
 
 // A real 1x1 PNG. Must be a decodable image, not a signature stub: the model has to
 // look at it, so AWS will reject anything malformed before the model ever sees it.
@@ -308,28 +302,6 @@ function testLiveInvokeAnthropicAcceptsAnImage() returns error? {
         content: `Does this contain an image? Answer yes or no. ${img}`
     });
     test:assertTrue((response.content ?: "").trim().length() > 0, "Invoke-Anthropic rejected the image");
-}
-
-@test:Config {groups: ["live"], enable: liveTestsEnabled}
-function testLiveInvokeMistralChatImageSupportIsContested() returns error? {
-    BedrockAuthConfig? creds = liveCredentials();
-    if creds is () || !enableUnverifiedImageRoutes {
-        return;
-    }
-    // AWS documents this dialect's `content` as a string; Mistral's own API documents
-    // image chunks. This call settles which one describes Bedrock.
-    ai:ImageDocument img = check onePixelPng();
-    ai:ModelProvider provider = check new RuntimeMistralModelProvider(
-            MISTRAL_LARGE_3, creds, liveRegion, INVOKE);
-    ai:ChatAssistantMessage|ai:Error response = provider->chat({
-        role: ai:USER,
-        content: `Does this contain an image? Answer yes or no. ${img}`
-    });
-    if response is ai:Error {
-        test:assertFail(string `Invoke-Mistral REJECTED the image — AWS's docs are right and the ` +
-            string `default refusal stays. Error: ${response.message()}`);
-    }
-    test:assertTrue((response.content ?: "").trim().length() > 0);
 }
 
 // ---- Credential chain (ballerinax/aws.auth) ----

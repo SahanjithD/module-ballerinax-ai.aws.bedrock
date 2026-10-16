@@ -21,7 +21,7 @@ isolated function encodeResponses(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // UNVERIFIED: image support on the /openai/v1/responses path is not stated
     // by any first-party source. Refuse rather than guess — see README.
-    check rejectImagesIn(messages, "the OpenAI Responses dialect", true);
+    check rejectImagesIn(messages, "the OpenAI Responses dialect");
     json[] input = [];
     foreach ResolvedMessage m in messages {
         input.push(...responsesInputItems(m));

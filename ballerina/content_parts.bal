@@ -233,38 +233,16 @@ isolated function anthropicContentBlocks(ContentPart[] parts) returns json[] {
     return blocks;
 }
 
-// Also used by Mistral chat. A plain string when there is no image, as text-only
-// models expect.
-isolated function openAIContentParts(ContentPart[] parts) returns json {
-    if !hasImage(parts) {
-        return partsText(parts);
-    }
-    json[] out = [];
-    foreach ContentPart part in parts {
-        if part is TextPart {
-            out.push({"type": "text", "text": part.text});
-        } else {
-            out.push({"type": "image_url", "image_url": {"url": dataUri(part)}});
-        }
-    }
-    return out;
-}
-
-// OpenAI Responses content; `image_url` is a string here, unlike Chat Completions.
+// OpenAI Responses content, from parts already checked by `rejectImagesIn`.
 isolated function responsesContentParts(ContentPart[] parts) returns json[] {
     json[] out = [];
     foreach ContentPart part in parts {
         if part is TextPart {
             out.push({"type": "input_text", "text": part.text});
-        } else {
-            out.push({"type": "input_image", "image_url": dataUri(part)});
         }
     }
     return out;
 }
-
-isolated function dataUri(ImagePart part) returns string
-    => string `data:${part.mimeType};base64,${array:toBase64(part.data)}`;
 
 isolated function hasImage(ContentPart[] parts) returns boolean {
     foreach ContentPart part in parts {
@@ -275,21 +253,9 @@ isolated function hasImage(ContentPart[] parts) returns boolean {
     return false;
 }
 
-// The OpenAI-shaped APIs and Mistral chat: no AWS page confirms
-// image input there. Set in Config.toml:
-//     [ballerinax.ai.aws.bedrock]
-//     enableUnverifiedImageRoutes = true
-
-# Sends images on APIs where AWS does not document image support. Experimental.
-public configurable boolean enableUnverifiedImageRoutes = false;
-
-// Refuses an image on an API that cannot carry one, or whose image support is
-// unverified (`unverifiedOnly`).
-isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect,
-        boolean unverifiedOnly = false) returns ai:Error? {
-    if unverifiedOnly && enableUnverifiedImageRoutes {
-        return;
-    }
+// Refuses an image on an API where AWS does not document image input: the OpenAI-shaped
+// APIs, Mistral and DeepSeek.
+isolated function rejectImagesIn(ResolvedMessage[] messages, string dialect) returns ai:Error? {
     foreach ResolvedMessage m in messages {
         if m is ResolvedUserMessage && hasImage(m.parts) {
             return error ai:Error(string `Image input is not supported on ${dialect}. ` +

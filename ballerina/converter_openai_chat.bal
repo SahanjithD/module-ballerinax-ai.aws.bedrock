@@ -32,7 +32,7 @@ isolated function encodeOpenAIChatBody(string maxTokensKey, string? system, Reso
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // UNVERIFIED: no first-party source states whether Bedrock's OpenAI-compatible
     // dialects accept image content parts. Refuse rather than guess — see README.
-    check rejectImagesIn(messages, "the OpenAI chat-completions dialect", true);
+    check rejectImagesIn(messages, "the OpenAI chat-completions dialect");
     json[] wire = [];
     if system is string {
         // OpenAI's wire format DOES use a role:system message (not a top-level field).
@@ -79,7 +79,7 @@ isolated function encodeOpenAIChatBody(string maxTokensKey, string? system, Reso
 
 isolated function openAIMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
-        return {"role": "user", "content": openAIContentParts(m.parts)};
+        return {"role": "user", "content": partsText(m.parts)};
     }
     if m is ai:ChatAssistantMessage {
         map<json> msg = {"role": "assistant", "content": m.content};

@@ -31,7 +31,7 @@ isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
         ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
     // AWS says `content` is a string; Mistral's own API takes images. Refused until
     // the two agree.
-    check rejectImagesIn(messages, "the Mistral chat-completion dialect", true);
+    check rejectImagesIn(messages, "the Mistral chat-completion dialect");
     json[] wire = [];
     if system is string {
         wire.push({"role": "system", "content": system});
@@ -72,7 +72,7 @@ isolated function encodeMistralChat(string? system, ResolvedMessage[] messages,
 
 isolated function mistralChatMessage(ResolvedMessage m) returns json {
     if m is ResolvedUserMessage {
-        return {"role": "user", "content": openAIContentParts(m.parts)};
+        return {"role": "user", "content": partsText(m.parts)};
     }
     if m is ai:ChatAssistantMessage {
         map<json> msg = {"role": "assistant", "content": m.content ?: ""};
