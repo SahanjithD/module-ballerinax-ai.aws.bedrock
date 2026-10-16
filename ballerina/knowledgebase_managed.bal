@@ -39,7 +39,7 @@ public distinct isolated client class ManagedKnowledgeBase {
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset
     # + chunker - Client-side chunker. Chosen from the data source's chunking when unset
-    # + rerankingModelType - Reranking model for retrieval. No reranking when unset
+    # + rerankingModelType - Reranking model for retrieval. Bedrock's managed reranking when unset; `RERANKING_NONE` turns it off
     # + endpoint - FIPS, dual-stack or custom-endpoint options. Derived from the region when unset
     # + config - Ingestion, retrieval and transport options
     # + return - `nil` on success; otherwise an `ai:Error`
