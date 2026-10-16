@@ -57,9 +57,7 @@ public enum Truncate {
 
 # Titan-specific embedding configuration.
 public type TitanEmbeddingConfig record {|
-    // `int` rather than `256|512|1024`: V1 takes no `dimensions`, so the construction
-    // check is needed anyway, and a `configurable int` would not assign to a union.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+    // `int` rather than a union of the widths: a `configurable int` would not assign to it.
     # Output vector size: 256, 512 or 1024 (Titan V2 only). Defaults to 1024
     int dimensions?;
     # Whether to L2-normalize the returned vector
@@ -72,19 +70,13 @@ public type TitanEmbeddingConfig record {|
     http:ClientConfiguration httpConfig?;
 |};
 
-// `inputType` lives ONLY here, which is why the model provider's "inputType set
-// on Titan → error" check is gone: with the vendor split it is unrepresentable.
-
 # Cohere-specific embedding configuration.
 public type CohereEmbeddingConfig record {|
-    // Required by Cohere. Unset, it follows how `ai:VectorKnowledgeBase` calls the
-    // provider: `embed()` for queries, `batchEmbed()` for documents.
     # Input type for every call. Unset: queries for `embed`, documents for `batchEmbed`
     CohereInputType inputType?;
     # How over-long inputs are truncated
     Truncate truncate?;
-    // `int` for the same reason as Titan's. Embed v3 always returns 1024.
-    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+    // `int` for the same reason as `TitanEmbeddingConfig.dimensions`.
     # Output vector size: 256, 512, 1024 or 1536 (Embed v4 only). Defaults to 1536
     int dimensions?;
     # Extra fields sent verbatim in the request body

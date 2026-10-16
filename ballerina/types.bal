@@ -23,7 +23,6 @@ import ballerinax/aws.auth;
 
 # A Bedrock API key.
 public type BearerToken record {|
-    // `Authorization: Bearer`, or `x-api-key` on the Messages API.
     # The Bedrock API key
     string apiKey;
 |};

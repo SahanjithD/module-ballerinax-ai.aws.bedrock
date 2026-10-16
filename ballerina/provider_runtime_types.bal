@@ -44,28 +44,19 @@ public enum ServiceTier {
     TIER_RESERVED = "reserved"
 }
 
-# Options shared by the `bedrock-runtime` model providers.
 // `apiType` and `endpoint` are init parameters rather than fields here, so they show in
 // the form without opening the config.
+
+# Options shared by the `bedrock-runtime` model providers.
 public type CommonRuntimeConfig record {|
-    // --- Inference ---
     # Sequences that stop generation. A `stop` passed to `chat` overrides them
     string[] stopSequences?;
-    // --- Passthrough ---
-    // Sent verbatim: as Converse's `additionalModelRequestFields`, or at the top level
-    // of an InvokeModel body.
-    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
     # Extra fields sent as-is in the request body, for options this module does not cover
     AdditionalRequestFields additionalModelRequestFields?;
-    // Converse `serviceTier` body field; `X-Amzn-Bedrock-Service-Tier` header on Invoke.
     # Processing tier for each request
     ServiceTier serviceTier?;
-    // Converse `performanceConfig`, or the `X-Amzn-Bedrock-PerformanceConfig-Latency`
-    // header on InvokeModel. Support is per model and region.
-    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
     # Use latency-optimized inference, where the model and region support it
     boolean latencyOptimized?;
-    // --- Cross-cutting ---
     # Guardrail applied to every request
     GuardrailConfig guardrail?;
     # Retry settings
@@ -151,10 +142,8 @@ public enum AnthropicRuntimeModelNames {
 # Configuration for `RuntimeAnthropicModelProvider`.
 public type AnthropicRuntimeConfig record {|
     *CommonRuntimeConfig;
-    // A typed record, so the mode and budget rules are checked at construction.
     # Extended thinking settings
     ThinkingConfig thinking?;
-    // Sent as `output_config.effort`.
     # Reasoning effort. The only depth control on Fable 5 and Opus 4.7
     Effort effort?;
 |};
@@ -183,8 +172,6 @@ public enum OpenAIRuntimeModelNames {
 # Configuration for `RuntimeOpenAIModelProvider`.
 public type OpenAIRuntimeConfig record {|
     *CommonRuntimeConfig;
-    // Top-level `reasoning_effort` on Chat Completions, nested `reasoning.effort` on
-    // Responses.
     # How much the model reasons before answering
     ReasoningEffort reasoningEffort?;
 |};
@@ -239,7 +226,6 @@ public enum QwenRuntimeModelNames {
 # Configuration for `RuntimeQwenModelProvider`.
 public type QwenRuntimeConfig record {|
     *CommonRuntimeConfig;
-    // Sent as `enable_thinking` in the request body.
     # Turns Qwen3 thinking on or off. Unset uses the model's default
     boolean enableThinking?;
 |};

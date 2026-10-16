@@ -34,15 +34,8 @@ public distinct isolated client class ManagedKnowledgeBase {
     private final int? numberOfResults;
     private final RerankingModelType? rerankingModelType;
 
-    // `auth` is SigV4 only: Bedrock API keys are not accepted for knowledge bases. A
-    // `customEndpoint` applies to every service this client calls.
-
     # + knowledgeBase - An existing knowledge base id or ARN, or a definition to find or create by name
     # + auth - AWS credentials; `auth:DEFAULT_CREDENTIALS` uses the default chain
-    // An unset `dataSourceId` needs exactly one `CUSTOM` data source. An unset
-    // `chunker` follows the data source: `ai:AUTO` when its strategy is `NONE`, else
-    // `ai:DISABLE`. A chunker against a data source that chunks itself is refused.
-
     # + region - AWS region, e.g. `aws:US_EAST_1`
     # + dataSourceId - ID of the `CUSTOM` data source to use. Found automatically when unset
     # + chunker - Client-side chunker. Chosen from the data source's chunking when unset
