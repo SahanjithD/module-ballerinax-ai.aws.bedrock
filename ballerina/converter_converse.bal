@@ -1,0 +1,182 @@
+// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.com).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import ballerina/ai;
+
+// Converse converter — the model-agnostic normalized surface.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+
+isolated function encodeConverse(string? system, ResolvedMessage[] messages,
+        ai:ChatCompletionFunctions[] tools, string? stop, InferenceParams params) returns json|ai:Error {
+    json[] wire = [];
+    foreach ResolvedMessage m in messages {
+        wire.push(converseMessage(m));
+    }
+
+    map<json> inferenceConfig = {};
+    setMaxTokens(inferenceConfig, params, "maxTokens");
+    setTemperature(inferenceConfig, params);
+    // Per-call `stop` overrides configured stopSequences outright.
+    string[]? stops = params.stopSequences;
+    if stop is string {
+        stops = [stop];
+    }
+    if stops is string[] && stops.length() > 0 {
+        inferenceConfig["stopSequences"] = stops;
+    }
+
+    map<json> body = {"messages": wire, "inferenceConfig": inferenceConfig};
+
+    if system is string {
+        body["system"] = [{"text": system}];
+    }
+    if tools.length() > 0 {
+        json[] toolSpecs = [];
+        foreach ai:ChatCompletionFunctions t in tools {
+            toolSpecs.push({
+                "toolSpec": {"name": t.name, "description": t.description, "inputSchema": {"json": toolParameters(t)}}
+            });
+        }
+        body["toolConfig"] = {"tools": toolSpecs};
+    }
+
+    // ---- passthrough, sent verbatim ----
+    // Converse has no `thinking` field, so it goes in the passthrough, merged with the
+    // caller's.
+    AdditionalRequestFields? additionalRequest = params?.additionalModelRequestFields;
+    ThinkingConfig? thinking = params?.thinking;
+    if thinking is ThinkingConfig {
+        additionalRequest = foldRequestFields(additionalRequest, {"thinking": thinkingBody(thinking)});
+    }
+    // Converse rejects the native `outputConfig.effort`, so it goes in the passthrough.
+    Effort? effort = params?.effort;
+    if effort is Effort {
+        additionalRequest = foldRequestFields(additionalRequest, {"output_config": {"effort": effort}});
+    }
+    // No Converse field either; the model's own parser reads the Chat Completions
+    // spelling.
+    ReasoningEffort? reasoningEffort = params?.reasoningEffort;
+    if reasoningEffort is ReasoningEffort {
+        additionalRequest = foldRequestFields(additionalRequest, {"reasoning_effort": reasoningEffort});
+    }
+    map<json>? additionalJson = additionalFieldsToJson(additionalRequest);
+    if additionalJson != () {
+        body["additionalModelRequestFields"] = additionalJson;
+    }
+    ServiceTier? tier = params.serviceTier;
+    if tier is ServiceTier {
+        // An object, not a string.
+        // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        body["serviceTier"] = {"type": tier};
+    }
+    boolean? latencyOptimized = params.latencyOptimized;
+    if latencyOptimized == true {
+        // Only `optimized` is sent; `standard` is the default.
+        body["performanceConfig"] = {"latency": "optimized"};
+    }
+    // Guardrail is a Converse BODY field.
+    GuardrailConfig? guardrail = params.guardrail;
+    if guardrail is GuardrailConfig {
+        map<json> gc = {
+            "guardrailIdentifier": guardrail.guardrailIdentifier,
+            "guardrailVersion": guardrail.guardrailVersion
+        };
+        body["guardrailConfig"] = gc;
+    }
+    return body;
+}
+
+isolated function converseMessage(ResolvedMessage m) returns json {
+    if m is ResolvedUserMessage {
+        return {"role": "user", "content": converseContentBlocks(m.parts)};
+    }
+    if m is ai:ChatAssistantMessage {
+        json[] blocks = [];
+        string? c = m.content;
+        if c is string && c != "" {
+            blocks.push({"text": c});
+        }
+        ai:FunctionCall[]? toolCalls = m.toolCalls;
+        if toolCalls is ai:FunctionCall[] {
+            foreach ai:FunctionCall fc in toolCalls {
+                blocks.push({"toolUse": {"toolUseId": fc.id ?: fc.name, "name": fc.name, "input": fc.arguments ?: {}}});
+            }
+        }
+        return {"role": "assistant", "content": blocks};
+    }
+    // ai:FUNCTION result → Converse toolResult block.
+    return {
+        "role": "user",
+        "content": [{"toolResult": {"toolUseId": m.id ?: m.name, "content": [{"text": m.content ?: ""}]}}]
+    };
+}
+
+isolated function decodeConverse(json response) returns DecodedResponse|ai:Error {
+    map<json>|error rr = response.ensureType();
+    if rr is error {
+        return error ai:LlmInvalidResponseError("Converse response was not a JSON object", rr);
+    }
+    map<json> r = rr;
+    string text = "";
+    ai:FunctionCall[] toolCalls = [];
+
+    map<json>? output = mapField(r, "output");
+    if output is map<json> {
+        map<json>? message = mapField(output, "message");
+        if message is map<json> {
+            json[]? content = arrField(message, "content");
+            if content is json[] {
+                foreach json blk in content {
+                    if blk is map<json> {
+                        string? txt = strField(blk, "text");
+                        if txt is string {
+                            text += txt;
+                        }
+                        map<json>? toolUse = mapField(blk, "toolUse");
+                        if toolUse is map<json> {
+                            toolCalls.push({
+                                name: strField(toolUse, "name") ?: "",
+                                arguments: mapField(toolUse, "input") ?: {},
+                                id: strField(toolUse, "toolUseId")
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    int inputTokens = 0;
+    int outputTokens = 0;
+    map<json>? usage = mapField(r, "usage");
+    if usage is map<json> {
+        inputTokens = intField(usage, "inputTokens") ?: 0;
+        outputTokens = intField(usage, "outputTokens") ?: 0;
+    }
+
+    string stopReason = strField(r, "stopReason") ?: "end_turn";
+    ai:ChatAssistantMessage message = {role: ai:ASSISTANT, content: text == "" ? () : text};
+    if toolCalls.length() > 0 {
+        message.toolCalls = toolCalls;
+    }
+    return {
+        message,
+        usage: {inputTokens, outputTokens},
+        stopReason,
+        responseId: (), // Converse returns the request id in a header, not the body
+        // Converse reports it via stopReason; Nova-on-Invoke shares this decoder
+        // but reports it as a body field instead, so check both.
+        guardrailAction: stopReason == "guardrail_intervened" ? INTERVENED : invokeGuardrailAction(r)
+    };
+}

@@ -84,6 +84,7 @@ tasks.getByPath(':ai.aws.bedrock-ballerina:build').mustRunAfter(
         ':ai.aws.bedrock-compiler-plugin:build')
 
 release {
+    failOnPublishNeeded = false
     buildTasks = ['build']
     failOnSnapshotDependencies = true
     versionPropertyFile = 'gradle.properties'

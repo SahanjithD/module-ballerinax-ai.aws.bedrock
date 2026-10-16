@@ -15,14 +15,14 @@
 import ballerina/ai;
 import ballerina/test;
 
-// Endpoint + SigV4 canonical-URI encoding (design §9.1, §9.4). Regression tests
+// Endpoint + SigV4 canonical-URI encoding. Regression tests
 // for the double-encoding fix from the sub-agent review.
 
-const ARN = "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123";
+const ARN = "arn:aws:bedrock:us-west-2:123456789012:provisioned-model/abc123";
 
 @test:Config {}
 function testWirePathSingleEncodesArnModelIdSegment() returns error? {
-    Route route = check resolveRoute(ARN, REGION, {modelSchema: LLAMA});
+    Route route = check resolveRuntimeRoute(ARN, REGION, INVOKE);
     Endpoint ep = check buildEndpoint(route);
     test:assertTrue(ep.path.startsWith("/model/") && ep.path.endsWith("/invoke"));
     test:assertTrue(ep.path.includes("%3A"), "ARN colons must be %3A on the wire");
@@ -32,8 +32,8 @@ function testWirePathSingleEncodesArnModelIdSegment() returns error? {
 
 @test:Config {}
 function testCanonicalUriDoubleEncodesWirePath() returns error? {
-    // SigV4 non-S3 rule (§9.4): the canonical URI is the wire path encoded again.
-    Route route = check resolveRoute(ARN, REGION, {modelSchema: LLAMA});
+    // SigV4 non-S3 rule: the canonical URI is the wire path encoded again.
+    Route route = check resolveRuntimeRoute(ARN, REGION, INVOKE);
     Endpoint ep = check buildEndpoint(route);
     string canonical = getCanonicalUri(ep.path);
     test:assertTrue(canonical.includes("%253A"), "canonical URI must double-encode the colon");
@@ -44,34 +44,61 @@ function testCanonicalUriDoubleEncodesWirePath() returns error? {
 
 @test:Config {}
 function testBareIdWirePathHasNoEncodingArtifacts() returns error? {
-    Route route = check resolveRoute("us.anthropic.claude-opus-4-8", REGION);
+    Route route = check resolveRuntimeRoute("us.anthropic.claude-opus-4-8", REGION, CONVERSE);
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.path, "/model/us.anthropic.claude-opus-4-8/converse");
     // Unreserved chars: single == double, so the signature matches without ARNs.
     test:assertEquals(getCanonicalUri(ep.path), "/model/us.anthropic.claude-opus-4-8/converse");
 }
 
+// ---- One host, five paths: the bedrock-runtime shapes ----
+
 @test:Config {}
-function testMantleEndpointHostAndSigningService() returns error? {
-    Route route = check resolveRoute("anthropic.claude-mythos-preview", "us-east-1");
-    Endpoint ep = check buildEndpoint(route);
-    test:assertEquals(ep.host, "bedrock-mantle.us-east-1.api.aws");
-    test:assertEquals(ep.path, "/anthropic/v1/messages");
-    test:assertEquals(ep.signingService, "bedrock-mantle");
+function testEveryRuntimeShapeHasItsDocumentedPathAndSignsAsBedrock() returns error? {
+    // The three vendor-native shapes are FIXED paths on bedrock-runtime; the model
+    // is named in the body.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html
+    map<string> expected = {
+        [CONVERSE]: "/model/anthropic.claude-opus-5/converse",
+        [INVOKE]: "/model/anthropic.claude-opus-5/invoke",
+        [MESSAGES]: "/anthropic/v1/messages",
+        [CHAT_COMPLETIONS]: "/openai/v1/chat/completions",
+        [RESPONSES]: "/openai/v1/responses"
+    };
+    foreach [string, string] [api, path] in expected.entries() {
+        Route route = check resolveRuntimeRoute("anthropic.claude-opus-5", REGION, <ApiFamily>api);
+        Endpoint ep = check buildEndpoint(route);
+        test:assertEquals(ep.path, path, api);
+        // Every path on bedrock-runtime signs as `bedrock`, the vendor-native ones
+        // included — AWS's own curl is `--aws-sigv4 "aws:amz:us-east-1:bedrock"`.
+        test:assertEquals(ep.signingService, SIGNING_BEDROCK, "wrong signing scope for " + api);
+        test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com", api);
+    }
+}
+
+@test:Config {}
+function testOnlyConverseAndInvokeAddressTheModelInTheUrl() {
+    // The three vendor-native shapes carry `model` in the request BODY, so `runChat`
+    // must inject it for exactly those three.
+    test:assertTrue(isPathAddressed(CONVERSE));
+    test:assertTrue(isPathAddressed(INVOKE));
+    test:assertFalse(isPathAddressed(MESSAGES));
+    test:assertFalse(isPathAddressed(CHAT_COMPLETIONS));
+    test:assertFalse(isPathAddressed(RESPONSES));
 }
 
 @test:Config {}
 function testConverseSigningServiceIsBedrock() returns error? {
-    // nova-pro is Converse-default (not Mantle-capable); opus-4-8 now prefers Mantle
-    // under AUTO (Amendment 2), so it no longer exercises the runtime signing path.
-    Route route = check resolveRoute("amazon.nova-pro-v1:0", "us-east-1");
+    Route route = check resolveRuntimeRoute("amazon.nova-pro-v1:0", "us-east-1", CONVERSE);
     Endpoint ep = check buildEndpoint(route);
     test:assertEquals(ep.host, "bedrock-runtime.us-east-1.amazonaws.com");
     test:assertEquals(ep.signingService, "bedrock");
 }
 
 // The Invoke guardrail-fired signal is a response BODY field; only the request id
-// arrives in a header (§9.5).
+// arrives in a header.
 //
 // REGRESSION: these tests previously asserted that a `GUARDRAIL_ACTION_HEADER` map
 // entry produced INTERVENED, under the comment "the guardrail signal arrives in
@@ -87,8 +114,7 @@ function testAugmentFromHeadersSurfacesRequestId() {
         usage: {inputTokens: 1, outputTokens: 1},
         stopReason: "end_turn",
         responseId: (),
-        guardrailAction: (),
-        additionalModelResponseFields: ()
+        guardrailAction: ()
     };
     augmentFromHeaders(decoded, {[REQUEST_ID_HEADER]: "req-123"});
     test:assertEquals(decoded.responseId, "req-123");
@@ -101,8 +127,7 @@ function testAugmentFromHeadersDoesNotOverrideAResponseIdFromTheBody() {
         usage: {inputTokens: 1, outputTokens: 0},
         stopReason: "end_turn",
         responseId: "existing",
-        guardrailAction: (),
-        additionalModelResponseFields: ()
+        guardrailAction: ()
     };
     augmentFromHeaders(decoded, {[REQUEST_ID_HEADER]: "other"});
     test:assertEquals(decoded.responseId, "existing");
@@ -116,8 +141,8 @@ function testInvokeGuardrailActionReadsTheBodyField() {
 }
 
 @test:Config {}
-function testEveryInvokeCodecSurfacesAFiredGuardrail() returns error? {
-    // §9.5: the fired signal is never dropped on ANY Invoke dialect. Each of these
+function testEveryInvokeConverterSurfacesAFiredGuardrail() returns error? {
+    // the fired signal is never dropped on ANY Invoke dialect. Each of these
     // decoders previously hardcoded `guardrailAction: ()`.
     json mistralChat = {
         "choices": [{"message": {"role": "assistant", "content": "blocked"}, "stop_reason": "stop"}],
@@ -181,8 +206,105 @@ function testPathSegmentEncoderFollowsRfc3986NotFormEncoding() {
 function testCanonicalUriAgreesWithTheWirePathEncoder() returns error? {
     // The two must use the SAME rule or the server cannot reconstruct what we
     // signed. A model id with a space is the case that used to diverge.
-    Route r = check resolveRoute("converse/some vendor.model~x", "us-east-1");
+    Route r = check resolveRuntimeRoute("some vendor.model~x", "us-east-1", CONVERSE);
     Endpoint ep = check buildEndpoint(r);
     test:assertEquals(ep.path, "/model/some%20vendor.model~x/converse");
     test:assertEquals(getCanonicalUri(ep.path), "/model/some%2520vendor.model~x/converse");
+}
+
+// ---- serviceUrl: the default is a TEMPLATE, not a constant host ----
+//
+// A constant default is impossible here: the origin is decided by the resolved
+// route's region and its partition's DNS suffix. The
+// template resolves per route, and — crucially — substitution is a no-op on a
+// string with no placeholders, so a concrete URL needs no sentinel.
+
+@test:Config {}
+function testDefaultServiceUrlFollowsTheRegion() returns error? {
+    Route runtime = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "eu-west-1", CONVERSE);
+    test:assertEquals((check buildEndpoint(runtime)).baseUrl,
+            "https://bedrock-runtime.eu-west-1.amazonaws.com");
+}
+
+@test:Config {}
+function testDerivedOriginFollowsThePartitionSuffix() returns error? {
+    // The suffix is the partition's, and it is AWS SDK metadata's spelling, not ours.
+    Route gov = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-gov-west-1", CONVERSE);
+    test:assertEquals((check buildEndpoint(gov)).baseUrl,
+            "https://bedrock-runtime.us-gov-west-1.amazonaws.com");
+    Route iso = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-iso-east-1", CONVERSE);
+    test:assertEquals((check buildEndpoint(iso)).baseUrl,
+            "https://bedrock-runtime.us-iso-east-1.c2s.ic.gov");
+    Route eusc = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "eusc-de-east-1", CONVERSE);
+    test:assertEquals((check buildEndpoint(eusc)).baseUrl,
+            "https://bedrock-runtime.eusc-de-east-1.amazonaws.eu");
+}
+
+@test:Config {}
+function testChinaPartitionFailsAtConstructionOnEveryShape() returns error? {
+    // Bedrock is not offered in `aws-cn` on ANY endpoint: the partition carries no
+    // `bedrock` entry in the SDK endpoint metadata, the regional-availability table
+    // has no China section, and `bedrock-runtime.cn-north-1.amazonaws.com` is
+    // NXDOMAIN. `aws:resolveEndpoint` would still build a host, so the guard is the
+    // only thing standing between a China user and an opaque connection error.
+    ApiFamily[] apis = [CONVERSE, INVOKE, CHAT_COMPLETIONS, RESPONSES, MESSAGES];
+    foreach ApiFamily api in apis {
+        Route route = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "cn-north-1", api);
+        Endpoint|error ep = buildEndpoint(route);
+        test:assertTrue(ep is error, api + " must not build a China endpoint");
+        if ep is error {
+            test:assertTrue(ep.message().includes("China"), ep.message());
+        }
+    }
+}
+
+@test:Config {}
+function testCustomEndpointSkipsTheHostShapeGuards() returns error? {
+    // The guards validate a host we are about to DERIVE. A concrete origin replaces
+    // it wholesale, so there is nothing left to validate — a mock or gateway must
+    // still work in a region whose derived host we would refuse.
+    Route cn = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "cn-north-1", CONVERSE);
+    Endpoint ep = check buildEndpoint(cn, {customEndpoint: "http://localhost:4566"});
+    test:assertEquals(ep.baseUrl, "http://localhost:4566");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK);
+}
+
+@test:Config {}
+function testConcreteServiceUrlPassesThroughAndKeepsTheRouteDerivedPath() returns error? {
+    // The no-sentinel property: a URL with no placeholders is returned untouched, so
+    // nothing has to ask "did the caller accept the default?".
+    Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
+    Endpoint ep = check buildEndpoint(r, {customEndpoint: "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"});
+    test:assertEquals(ep.baseUrl, "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com");
+    test:assertEquals(ep.host, "vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+            "Host header / SigV4 canonical host must follow the override");
+    test:assertEquals(ep.path, "/model/anthropic.claude-sonnet-4-6/converse",
+            "serviceUrl replaces the ORIGIN only — the path stays route-derived");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK,
+            "a custom host must NOT change the SigV4 signing scope");
+}
+
+@test:Config {}
+function testServiceUrlTrailingSlashIsTrimmed() returns error? {
+    // Otherwise it doubles up against the leading slash of the route-derived path.
+    Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
+    test:assertEquals((check buildEndpoint(r, {customEndpoint: "https://gw.corp/"})).baseUrl, "https://gw.corp");
+}
+
+// ---------------------------------------------------------------------------
+// SDK endpoint metadata (ballerinax/aws). The default template now defers wholly
+// to `aws:resolveEndpoint`; the tests above already pin the three host shapes it
+// must keep producing. These pin the parts that are NEW.
+// ---------------------------------------------------------------------------
+
+@test:Config {}
+function testFipsResolvesToTheFipsHostFromSdkMetadata() returns error? {
+    // The host spelling is AWS's, not ours — that is the whole point of routing
+    // this through SDK metadata rather than string-building `-fips` ourselves.
+    Route r = check resolveRuntimeRoute("anthropic.claude-sonnet-4-6", "us-east-1", CONVERSE);
+    Endpoint ep = check buildEndpoint(r, {fips: true});
+    test:assertEquals(ep.baseUrl, "https://bedrock-runtime-fips.us-east-1.amazonaws.com");
+    test:assertEquals(ep.host, "bedrock-runtime-fips.us-east-1.amazonaws.com");
+    test:assertEquals(ep.signingService, SIGNING_BEDROCK,
+            "FIPS changes the HOST only — never the SigV4 signing scope");
 }

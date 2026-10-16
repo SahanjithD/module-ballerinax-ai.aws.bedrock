@@ -41,11 +41,22 @@ public final class Generator {
 
     public static Object generate(Environment env, BObject modelProvider,
                                   BObject prompt, BTypedesc expectedResponseTypedesc) {
+        // The provider class is always declared in this module, so its own type carries
+        // the module's real coordinates — org, name AND version. Hardcoding them here
+        // instead costs no compile error when the package version moves: the call simply
+        // fails at runtime with "Value creator object is not available", which is what
+        // bumping the package to 2.0.0 against a literal "1" produced.
+        Module module = modelProvider.getOriginalType().getPackage();
         return env.getRuntime().callFunction(
-                new Module("ballerinax", "ai.aws.bedrock", "0"), "generateLlmResponse", null,
-                modelProvider.get(StringUtils.fromString("supportsStructuredOutput")),
-                modelProvider.get(StringUtils.fromString("family")),
-                modelProvider.get(StringUtils.fromString("codec")),
+                module, "generateLlmResponse", null,
+                // NOTE: these are looked up by NAME at runtime, so renaming a provider
+                // field is a silent break the compiler cannot see. Any change to a
+                // `private final` field on the provider classes must be mirrored here.
+                //
+                // chat() and generate() share one route, converter and transport.
+                modelProvider.get(StringUtils.fromString("structuredOutput")),
+                modelProvider.get(StringUtils.fromString("api")),
+                modelProvider.get(StringUtils.fromString("converter")),
                 modelProvider.get(StringUtils.fromString("transport")),
                 modelProvider.get(StringUtils.fromString("wireModelId")),
                 modelProvider.get(StringUtils.fromString("extraHeaders")),

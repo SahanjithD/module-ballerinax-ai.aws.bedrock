@@ -1,0 +1,521 @@
+// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.com).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import ballerina/ai;
+import ballerina/http;
+import ballerina/test;
+
+// `deleteByFilter()` against a stubbed agent pair, exercising the A17 two-enumeration
+// algorithm (see `resolveDataSourceDeletes`, knowledgebase_common.bal) on the
+// self-managed (VECTOR) branch. THE LOAD-BEARING ASSERTION is that identity is
+// extracted from `x-amz-bedrock-kb-source-uri` and NOT the managed `_source_uri` —
+// the two knowledge base types use different reserved metadata prefixes, and reading
+// the managed spelling here would extract no identities at all, so nothing would
+// ever be deleted and no error would be raised (A17's root cause on the OLD
+// per-document-pin algorithm; this is the shape the bug takes if the key is ever
+// wrong again under the NEW one).
+// Prefix rule: https://docs.aws.amazon.com/bedrock/latest/userguide/kb-test-config.html
+// The exact key, under "Auto-created fields":
+// https://docs.aws.amazon.com/bedrock/latest/userguide/kb-multimodal-test-and-query.html
+
+const string VDEL_KB_ID = "KBVECDEL01";
+const string VDEL_DS_ID = "DSVECDEL01";
+
+// `probe-match` matches the caller's filter (present in BOTH enumerations);
+// `probe-miss` does not, but IS reachable under the unfiltered enumeration —
+// genuinely excluded; `probe-hidden` is reachable under neither — indeterminate.
+const string VDEL_MATCH_ID = "probe-match";
+const string VDEL_MISS_ID = "probe-miss";
+const string VDEL_HIDDEN_ID = "probe-hidden";
+
+isolated json[] vectorProbeFilters = [];
+isolated json[] vectorDeletePayloads = [];
+
+isolated function recordVectorProbe(json filter) {
+    lock {
+        vectorProbeFilters.push(filter.clone());
+    }
+}
+
+isolated function readVectorProbes() returns json[] {
+    lock {
+        return vectorProbeFilters.clone();
+    }
+}
+
+isolated function recordVectorDelete(json payload) {
+    lock {
+        vectorDeletePayloads.push(payload.clone());
+    }
+}
+
+isolated function readVectorDeletes() returns json[] {
+    lock {
+        return vectorDeletePayloads.clone();
+    }
+}
+
+isolated service class VectorDeleteMock {
+    *http:Service;
+
+    isolated resource function get [string... path](http:Request req) returns json|error {
+        string p = req.rawPath;
+        if p == string `/knowledgebases/${VDEL_KB_ID}` {
+            return {
+                knowledgeBase: {
+                    knowledgeBaseId: VDEL_KB_ID,
+                    name: "kb",
+                    status: "ACTIVE",
+                    knowledgeBaseConfiguration: {'type: "VECTOR"}
+                }
+            };
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}` {
+            return {
+                dataSource: {
+                    dataSourceId: VDEL_DS_ID,
+                    status: "AVAILABLE",
+                    dataSourceConfiguration: {'type: "CUSTOM"},
+                    vectorIngestionConfiguration: {chunkingConfiguration: {chunkingStrategy: "FIXED_SIZE"}}
+                }
+            };
+        }
+        return error(string `unexpected GET ${p}`);
+    }
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        string p = req.rawPath;
+
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/` {
+            return {dataSourceSummaries: [{dataSourceId: VDEL_DS_ID, name: "ds"}]};
+        }
+
+        // ListKnowledgeBaseDocuments — exhaustive, and carries no metadata at all,
+        // which is exactly why the two-enumeration `Retrieve` pass below has to
+        // exist.
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}/documents` {
+            return {
+                documentDetails: [VDEL_MATCH_ID, VDEL_MISS_ID, VDEL_HIDDEN_ID].map(id => <json>{
+                    identifier: {dataSourceType: "CUSTOM", custom: {id}},
+                    status: "INDEXED"
+                })
+            };
+        }
+
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}/documents/deleteDocuments` {
+            json body = check req.getJsonPayload();
+            recordVectorDelete((<map<json>>body)["documentIdentifiers"] ?: []);
+            return {documentDetails: []};
+        }
+
+        if p == string `/knowledgebases/${VDEL_KB_ID}/retrieve` {
+            json body = check req.getJsonPayload();
+            map<json> vectorSearch = <map<json>>(<map<json>>(<map<json>>body)["retrievalConfiguration"])
+                ["vectorSearchConfiguration"];
+            json? filter = vectorSearch["filter"] ?: ();
+            recordVectorProbe(filter);
+
+            // A store that genuinely evaluates the filter it is sent. `VDEL_HIDDEN_ID`
+            // is absent from this table entirely: it models a document `Retrieve` will
+            // not return under ANY filter, which is what makes it indeterminate rather
+            // than merely excluded.
+            map<map<json>> docs = {
+                [VDEL_MATCH_ID]: {"tenant": "acme", "x-amz-bedrock-kb-source-uri": VDEL_MATCH_ID,
+                    "x-amz-bedrock-kb-data-source-id": VDEL_DS_ID},
+                [VDEL_MISS_ID]: {"tenant": "globex", "x-amz-bedrock-kb-source-uri": VDEL_MISS_ID,
+                    "x-amz-bedrock-kb-data-source-id": VDEL_DS_ID}
+            };
+            json[] results = [];
+            foreach [string, map<json>] [id, metadata] in docs.entries() {
+                if filter is () || check vecDelFilterMatches(filter, metadata) {
+                    results.push(vecDelResult(id));
+                }
+            }
+            return {retrievalResults: results};
+        }
+        return error(string `unexpected POST ${p}`);
+    }
+}
+
+// Evaluates the `RetrievalFilter` subset this module emits — an `equals` leaf and an
+// `andAll` of them. An unknown shape is an error, not a silent pass, so a change in
+// the emitted filter fails loudly here instead of quietly matching everything.
+isolated function vecDelFilterMatches(json filter, map<json> metadata) returns boolean|error {
+    map<json> f = <map<json>>filter;
+    if f.hasKey("equals") {
+        map<json> leaf = <map<json>>f["equals"];
+        return metadata[<string>leaf["key"]] == leaf["value"];
+    }
+    if f.hasKey("andAll") {
+        foreach json child in <json[]>f["andAll"] {
+            if !check vecDelFilterMatches(child, metadata) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return error(string `mock cannot evaluate filter ${filter.toJsonString()}`);
+}
+
+isolated function vecDelResult(string id) returns json => {
+    content: {text: string `text for ${id}`, 'type: "TEXT"},
+    documentId: id,
+    location: {'type: "CUSTOM", customDocumentLocation: {id}},
+    metadata: {"x-amz-bedrock-kb-source-uri": id, "x-amz-bedrock-kb-data-source-id": VDEL_DS_ID},
+    score: 0.95
+};
+
+// `retrievalResultIdentifies` unit tests. The mock results above populate the
+// metadata key, `customDocumentLocation.id` AND `documentId` together, so on their
+// own they would keep passing with two of the three branches deleted. These isolate
+// each branch, and pin the deliberate REJECTION of `documentId`.
+@test:Config {}
+function testRetrievalResultIdentifiesByMetadataKeyAlone() {
+    json result = {content: {text: "t", 'type: "TEXT"}, metadata: {"x-amz-bedrock-kb-source-uri": "doc-1"}};
+    test:assertTrue(retrievalResultIdentifies(result, "doc-1", VECTOR_SOURCE_URI_METADATA_KEY));
+    test:assertFalse(retrievalResultIdentifies(result, "doc-2", VECTOR_SOURCE_URI_METADATA_KEY));
+}
+
+@test:Config {}
+function testRetrievalResultIdentifiesByCustomLocationAlone() {
+    json result = {content: {text: "t", 'type: "TEXT"},
+        location: {'type: "CUSTOM", customDocumentLocation: {id: "doc-1"}}};
+    test:assertTrue(retrievalResultIdentifies(result, "doc-1", VECTOR_SOURCE_URI_METADATA_KEY));
+    test:assertFalse(retrievalResultIdentifies(result, "doc-2", VECTOR_SOURCE_URI_METADATA_KEY));
+}
+
+// The S3 branch — `listDeletableDocuments` uses the S3 URI as `sourceValue`, so this
+// is the only thing that can identify a document on an S3 data source.
+@test:Config {}
+function testRetrievalResultIdentifiesByS3LocationAlone() {
+    json result = {content: {text: "t", 'type: "TEXT"},
+        location: {'type: "S3", s3Location: {uri: "s3://bucket/docs/a.txt"}}};
+    test:assertTrue(retrievalResultIdentifies(result, "s3://bucket/docs/a.txt", VECTOR_SOURCE_URI_METADATA_KEY));
+    test:assertFalse(retrievalResultIdentifies(result, "s3://bucket/docs/b.txt", VECTOR_SOURCE_URI_METADATA_KEY));
+}
+
+// `documentId` is a service-side id with no documented equality to the custom
+// identifier or the S3 URI, so it must NOT count as proof of identity — accepting it
+// would admit a relation AWS never promised, and a false positive here deletes.
+@test:Config {}
+function testRetrievalResultDoesNotIdentifyByDocumentIdAlone() {
+    json result = {content: {text: "t", 'type: "TEXT"}, documentId: "doc-1"};
+    test:assertFalse(retrievalResultIdentifies(result, "doc-1", VECTOR_SOURCE_URI_METADATA_KEY),
+        "documentId must not be accepted as proof of document identity");
+}
+
+// A result carrying no identity information at all cannot identify anything — the
+// caller must treat it as unreachable, never as a match.
+@test:Config {}
+function testRetrievalResultWithNoIdentityFieldsIdentifiesNothing() {
+    json result = {content: {text: "t", 'type: "TEXT"}, score: 0.99};
+    test:assertFalse(retrievalResultIdentifies(result, "doc-1", VECTOR_SOURCE_URI_METADATA_KEY));
+}
+
+// THE regression guard for the reserved-prefix split, and for the exactly-two-calls
+// cost claim. If this ever fell back to reading `_source_uri` (the MANAGED spelling),
+// `probe-match`'s identity would never be extracted from either enumeration's
+// results, and it would be reported indeterminate instead of deleted.
+@test:Config {}
+function testDeleteByFilterExtractsIdentityFromTheVectorSourceUriKeyAndReportsUnconfirmed() returns error? {
+    final int port = 18701;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new VectorDeleteMock(), "/");
+    check mockListener.'start();
+    lock {
+        vectorProbeFilters.removeAll();
+    }
+    lock {
+        vectorDeletePayloads.removeAll();
+    }
+
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
+    ai:MetadataFilters filters = {filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]};
+    ai:Error? result = kb.deleteByFilter(filters);
+    check mockListener.gracefulStop();
+
+    // The probe sequence, in order: the sentinel control (which must match nothing on
+    // a store that honours filters), the filtered enumeration carrying the user
+    // filter, then the pin-key observation. Every one is scoped to this class's data
+    // source, because document ids are only unique within a data source.
+    json dsLeaf = {'equals: {key: VECTOR_DATA_SOURCE_ID_METADATA_KEY, value: VDEL_DS_ID}};
+    json[] probes = readVectorProbes();
+    test:assertEquals(probes[0],
+        {andAll: [{'equals: {key: VECTOR_SOURCE_URI_METADATA_KEY, value: FILTER_CONTROL_SENTINEL}}, dsLeaf]},
+        "the control probe must pin a value no document can carry");
+    test:assertEquals(probes[1], {andAll: [{'equals: {key: "tenant", value: "acme"}}, dsLeaf]},
+        "the filtered enumeration sends the user filter scoped to the data source");
+    test:assertEquals(probes[2], dsLeaf, "the pin-key observation samples this data source only");
+
+    // Every later probe is PINNED to one document — the A18 repair. None of them is
+    // the bare user filter, because no candidate is resolved by set membership.
+    test:assertTrue(probes.length() > 3, probes.toJsonString());
+    foreach int i in 3 ..< probes.length() {
+        test:assertTrue(probes[i].toJsonString().includes(VECTOR_SOURCE_URI_METADATA_KEY),
+            string `probe ${i} is not pinned to a document: ${probes[i].toJsonString()}`);
+    }
+
+    // Only the genuine match is deleted.
+    json[] deletes = readVectorDeletes();
+    test:assertEquals(deletes.length(), 1);
+    json[] identifiers = <json[]>deletes[0];
+    test:assertEquals(identifiers.length(), 1);
+    test:assertEquals(identifiers[0], {dataSourceType: "CUSTOM", custom: {id: VDEL_MATCH_ID}});
+
+    // The pin tells the two non-matches apart, which is the whole point of resolving
+    // candidates individually. `probe-miss` is reachable by its pin but not under the
+    // filter, so the FILTER excluded it — sound, and silent. `probe-hidden` answers
+    // neither probe, so nothing can be concluded about it — reported.
+    test:assertTrue(result is ai:Error);
+    if result is ai:Error {
+        string msg = result.message();
+        test:assertTrue(msg.includes(VDEL_HIDDEN_ID),
+            string `a document the pin could not reach must be reported: ${msg}`);
+        test:assertFalse(msg.includes(VDEL_MISS_ID),
+            string `a document the pin proved excluded by the filter must not be reported: ${msg}`);
+    }
+}
+
+// A store that IGNORES the metadata filter must not cause a mass delete. This mock
+// answers EVERY `Retrieve` call — filtered or not — with the same unrelated
+// document, so neither enumeration ever sees any of the three real candidate ids.
+// (`reachable.length()` stays at 1 here, so the explicit "store does not honour
+// filters" refusal in `resolveDataSourceDeletes` does not fire — see
+// tests/knowledgebase_a17_test.bal for that refusal firing when
+// `reachable.length() > 1`. Either way nothing may be deleted.) AWS documents
+// exactly this failure mode for MongoDB Atlas, where "Metadata filtering doesn't
+// work by default". Trusting a non-empty response as proof of a match would mark
+// every document a "hit" and wipe the knowledge base; checking identity must not.
+isolated service class VectorIgnoresFilterMock {
+    *http:Service;
+
+    isolated resource function get [string... path](http:Request req) returns json|error {
+        string p = req.rawPath;
+        if p == string `/knowledgebases/${VDEL_KB_ID}` {
+            return {
+                knowledgeBase: {
+                    knowledgeBaseId: VDEL_KB_ID,
+                    name: "kb",
+                    status: "ACTIVE",
+                    knowledgeBaseConfiguration: {'type: "VECTOR"}
+                }
+            };
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}` {
+            return {
+                dataSource: {
+                    dataSourceId: VDEL_DS_ID,
+                    status: "AVAILABLE",
+                    dataSourceConfiguration: {'type: "CUSTOM"},
+                    vectorIngestionConfiguration: {chunkingConfiguration: {chunkingStrategy: "FIXED_SIZE"}}
+                }
+            };
+        }
+        return error(string `unexpected GET ${p}`);
+    }
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        string p = req.rawPath;
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/` {
+            return {dataSourceSummaries: [{dataSourceId: VDEL_DS_ID, name: "ds"}]};
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}/documents` {
+            return {
+                documentDetails: [VDEL_MATCH_ID, VDEL_MISS_ID, VDEL_HIDDEN_ID].map(id => <json>{
+                    identifier: {dataSourceType: "CUSTOM", custom: {id}},
+                    status: "INDEXED"
+                })
+            };
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}/documents/deleteDocuments` {
+            json body = check req.getJsonPayload();
+            recordVectorDelete((<map<json>>body)["documentIdentifiers"] ?: []);
+            return {documentDetails: []};
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/retrieve` {
+            // Always the same unrelated document, whatever the filter said.
+            return {retrievalResults: [vecDelResult("some-other-document")]};
+        }
+        return error(string `unexpected POST ${p}`);
+    }
+}
+
+@test:Config {}
+function testDeleteByFilterDoesNotMassDeleteWhenTheStoreIgnoresTheFilter() returns error? {
+    final int port = 18704;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new VectorIgnoresFilterMock(), "/");
+    check mockListener.'start();
+    lock {
+        vectorDeletePayloads.removeAll();
+    }
+
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
+    ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
+    check mockListener.gracefulStop();
+
+    // NOTHING may be deleted: neither enumeration ever returned any of the real ids.
+    test:assertEquals(readVectorDeletes().length(), 0,
+        "a store that ignores the filter must not cause any deletion");
+
+    // And the caller must be told, not left thinking it succeeded. The sentinel
+    // control catches this store before the filtered enumeration is trusted at all,
+    // so the whole DATA SOURCE is refused by name rather than each document being
+    // reported individually — a store that never applies filters says nothing about
+    // any particular document.
+    test:assertTrue(result is ai:Error);
+    if result is ai:Error {
+        string msg = result.message();
+        test:assertTrue(msg.includes(VDEL_DS_ID), msg);
+        test:assertTrue(msg.includes("honouring metadata filters"), msg);
+    }
+}
+
+// An empty `ai:MetadataFilters` maps to no filter at all. Left unguarded, "no filter"
+// would make deleteByFilter behave like an unconditional bulk delete. A group made
+// only of EMPTY sub-groups is not nil — `metadataFiltersToRetrievalFilter` yields
+// `{"andAll": [null, null]}` for it — so a plain nil check would let it through.
+@test:Config {}
+function testDeleteByFilterRefusesNestedEmptyFilterGroups() returns error? {
+    final int port = 18706;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new VectorDeleteMock(), "/");
+    check mockListener.'start();
+    lock {
+        vectorDeletePayloads.removeAll();
+    }
+
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
+    ai:MetadataFilters nestedEmpty = {filters: [{filters: []}, {filters: []}]};
+    // Nested empty groups now COLLAPSE to `()` rather than producing
+    // `{"andAll": [null, null]}` — the `is json` test in
+    // `metadataFiltersToRetrievalFilter` used to accept the recursive call's `()`
+    // because `()` is a member of `json`, and the malformed filter reached the wire
+    // as a 400. The guard's leaf count stays as the independent second condition:
+    // it answers "did the caller constrain anything?" without depending on how the
+    // encoder folds empty groups.
+    json? mapped = check metadataFiltersToRetrievalFilter(nestedEmpty);
+    test:assertTrue(mapped is (), "nested empty groups must collapse to nil, not to a null-bearing andAll");
+    test:assertEquals(filterLeafCount(nestedEmpty), 0);
+
+    ai:Error? result = kb.deleteByFilter(nestedEmpty);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is ai:Error);
+    if result is ai:Error {
+        test:assertTrue(result.message().includes("at least one"), result.message());
+    }
+    test:assertEquals(readVectorDeletes().length(), 0, "a filter with no leaf predicates must delete nothing");
+}
+
+@test:Config {}
+function testDeleteByFilterRefusesAnEmptyFilterSet() returns error? {
+    final int port = 18705;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new VectorDeleteMock(), "/");
+    check mockListener.'start();
+    lock {
+        vectorDeletePayloads.removeAll();
+    }
+
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
+    ai:Error? result = kb.deleteByFilter({filters: []});
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is ai:Error);
+    if result is ai:Error {
+        test:assertTrue(result.message().includes("at least one"), result.message());
+    }
+    test:assertEquals(readVectorDeletes().length(), 0, "an empty filter set must delete nothing");
+}
+
+// Data sources other than CUSTOM/S3 cannot be deleted through this API at all —
+// `DocumentIdentifier.dataSourceType` has only those two members. They must be
+// named in the error rather than silently skipped. Zero candidates on the CUSTOM
+// data source here, so the two-enumeration algorithm never runs for it either —
+// `deleteByFilter` skips straight past a data source with nothing to classify.
+isolated service class VectorUndeletableSourceMock {
+    *http:Service;
+
+    isolated resource function get [string... path](http:Request req) returns json|error {
+        string p = req.rawPath;
+        if p == string `/knowledgebases/${VDEL_KB_ID}` {
+            return {
+                knowledgeBase: {
+                    knowledgeBaseId: VDEL_KB_ID,
+                    name: "kb",
+                    status: "ACTIVE",
+                    knowledgeBaseConfiguration: {'type: "VECTOR"}
+                }
+            };
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}` {
+            return {
+                dataSource: {
+                    dataSourceId: VDEL_DS_ID,
+                    status: "AVAILABLE",
+                    dataSourceConfiguration: {'type: "CUSTOM"},
+                    vectorIngestionConfiguration: {chunkingConfiguration: {chunkingStrategy: "FIXED_SIZE"}}
+                }
+            };
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/DSSHAREPT1` {
+            return {
+                dataSource: {
+                    dataSourceId: "DSSHAREPT1",
+                    dataSourceConfiguration: {'type: "SHAREPOINT"}
+                }
+            };
+        }
+        return error(string `unexpected GET ${p}`);
+    }
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        string p = req.rawPath;
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/` {
+            return {
+                dataSourceSummaries: [
+                    {dataSourceId: VDEL_DS_ID, name: "custom-ds"},
+                    {dataSourceId: "DSSHAREPT1", name: "sharepoint-ds"}
+                ]
+            };
+        }
+        if p == string `/knowledgebases/${VDEL_KB_ID}/datasources/${VDEL_DS_ID}/documents` {
+            return {documentDetails: []};
+        }
+        return error(string `unexpected POST ${p}`);
+    }
+}
+
+// BED-29: a SharePoint (or S3, or any other) data source on the same knowledge base
+// is not this class's data source, so deleteByFilter neither touches it nor fails
+// because of it.
+@test:Config {}
+function testDeleteByFilterIgnoresTheKnowledgeBasesOtherDataSources() returns error? {
+    final int port = 18703;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new VectorUndeletableSourceMock(), "/");
+    check mockListener.'start();
+
+    SelfManagedKnowledgeBase kb = check new (VDEL_KB_ID, KB_TEST_CREDS, "us-east-1",
+        endpoint = {customEndpoint: string `http://localhost:${port}`});
+    ai:Error? result = kb.deleteByFilter({filters: [{key: "tenant", operator: ai:EQUAL, value: "acme"}]});
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is (), result is ai:Error ? result.message() : "");
+}

@@ -1,0 +1,535 @@
+// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.com).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import ballerina/ai;
+import ballerina/http;
+import ballerina/test;
+
+// A17 — `deleteByFilter` on a self-managed knowledge base whose data source is
+// CUSTOM was deleting nothing: the old per-document pinned probe keyed on
+// `x-amz-bedrock-kb-source-uri`, which Bedrock does not emit for that source type.
+// Replaced by two paged `Retrieve` enumerations per data source (see
+// `resolveDataSourceDeletes`, knowledgebase_common.bal). These tests cover the parts
+// that do not need a full `deleteByFilter` end-to-end run: the pure three-way
+// classification, and the two refusal paths (page-cap truncation, and a store that
+// does not appear to honour metadata filters).
+
+// ============================================================================
+// pinnedFilter / fanOutParentOf — pure, table-tested.
+// ============================================================================
+
+@test:Config {}
+function testPinnedFilterEmitsTheDocumentIdAsANumberNotAString() {
+    // `ai:Metadata.id` is an `int`; Bedrock stores it as a NUMBER and returns it as a
+    // decimal. A leaf carrying the STRING "540200" matches nothing, so this is the
+    // difference between the pin working and A17 recurring.
+    test:assertEquals(pinnedFilter(KB_DOCUMENT_ID_METADATA_KEY, "540200"),
+        {'equals: {key: "id", value: 540200}});
+
+    // A fan-out id pins on its PARENT, which is the value the metadata holds — every
+    // sibling carries the parent's `ai:Metadata.id`, not its own ordinal.
+    test:assertEquals(pinnedFilter(KB_DOCUMENT_ID_METADATA_KEY, "540801#37"),
+        {'equals: {key: "id", value: 540801}});
+
+    // A source-uri pin is a plain string equality on the value `listDeletableDocuments`
+    // built, with no numeric coercion.
+    test:assertEquals(pinnedFilter(SOURCE_URI_METADATA_KEY, "doc-1"),
+        {'equals: {key: SOURCE_URI_METADATA_KEY, value: "doc-1"}});
+
+    // An id that is not numeric at all (a random UUID, from a document ingested with
+    // no `ai:Metadata.id`) falls back to string equality rather than emitting garbage.
+    test:assertEquals(pinnedFilter(KB_DOCUMENT_ID_METADATA_KEY, "not-a-number"),
+        {'equals: {key: "id", value: "not-a-number"}});
+}
+
+@test:Config {}
+function testFanOutParentOf() {
+    test:assertEquals(fanOutParentOf("540801#37"), "540801");
+    test:assertEquals(fanOutParentOf("540801#0"), "540801");
+    test:assertEquals(fanOutParentOf("540801"), "540801", "an id that never fanned out is its own parent");
+    test:assertEquals(fanOutParentOf("doc-1"), "doc-1");
+}
+
+// ============================================================================
+// resolveDataSourceDeletes — the two refusal paths, against a local mock transport.
+// ============================================================================
+
+const string A17_KB_ID = "KBA17TEST1";
+const string A17_DS_ID = "DSA17TEST1";
+
+function a17Transport(int port) returns BedrockTransport|error
+    => new (
+        check resolveCredentials(KB_TEST_CREDS), "us-east-1",
+        check buildAgentEndpoint(AGENT_DATA, "us-east-1", {customEndpoint: string `http://localhost:${port}`}),
+        (), (), true);
+
+isolated function a17Result(string id) returns json => {
+    content: {text: string `text for ${id}`, 'type: "TEXT"},
+    location: {'type: "CUSTOM", customDocumentLocation: {id}},
+    metadata: {"_source_uri": id, "_data_source_id": A17_DS_ID},
+    score: 0.9
+};
+
+// A store that ignores the metadata filter entirely: the SAME two documents come
+// back whether or not `filter` is present, so the filtered and unfiltered passes
+// see identical, more-than-one-element sets. Per A17, this must refuse rather than
+// silently allow a mass delete keyed on a filter the store never applied.
+isolated service class FilterNotHonouredMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        // Same two documents regardless of whether a filter was sent.
+        return {retrievalResults: [a17Result("doc-1"), a17Result("doc-2")]};
+    }
+}
+
+@test:Config {}
+function testResolveDataSourceDeletesRefusesWhenTheStoreDoesNotAppearToHonourFilters() returns error? {
+    final int port = 18780;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FilterNotHonouredMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    DeletableDocument[] candidates = [
+        {sourceValue: "doc-1", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-1"}}},
+        {sourceValue: "doc-2", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-2"}}}
+    ];
+    json userFilter = {'equals: {key: "tenant", value: "acme"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        test:assertEquals(result.toDelete.length(), 0, "nothing may be deleted when the filter is not honoured");
+        test:assertEquals(result.indeterminate.length(), 0);
+        test:assertTrue(result.refusalReason is string);
+        string reason = result.refusalReason ?: "";
+        test:assertTrue(reason.includes(A17_DS_ID), reason);
+        test:assertTrue(reason.includes("honour"), reason);
+    }
+}
+
+// A single-document store that HONOURS filters must not be refused. The refusal now
+// rests on the sentinel control probe (a filter no document can satisfy), not on
+// comparing two enumerations' sizes, so "only one document is reachable" is no longer
+// a special case that needed excusing — it is simply a store that answers the control
+// correctly.
+isolated service class SingleReachableDocumentMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
+        return {retrievalResults: [a17Result("doc-1")]};
+    }
+}
+
+@test:Config {}
+function testASingleReachableDocumentIsNotMistakenForAnUnfilteredStore() returns error? {
+    final int port = 18781;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new SingleReachableDocumentMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    DeletableDocument[] candidates = [
+        {sourceValue: "doc-1", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-1"}}}
+    ];
+    json userFilter = {'equals: {key: "tenant", value: "acme"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        test:assertTrue(result.refusalReason is (),
+            string `a store that answers the control probe correctly must not be refused: ${result.refusalReason ?: ""}`);
+        test:assertEquals(result.toDelete.length(), 1, "the one document matches and must be deleted");
+    }
+}
+
+// ============================================================================
+// The negative control that separates "the store ignored the filter" from "the
+// filter is honoured and legitimately matches everything".
+//
+// `matched == reachable` alone cannot tell those apart, and refusing on it alone
+// would make an ordinary single-tenant cleanup — `deleteByFilter({tenant == "acme"})`
+// on a knowledge base where every document IS `acme` — permanently impossible.
+// `storeIgnoresMetadataFilters` re-probes with `FILTER_CONTROL_SENTINEL`, a value no
+// document can carry, and only a store that STILL returns results is refused.
+// ============================================================================
+
+// Honours filters: returns nothing for the sentinel control, everything otherwise.
+// Models the innocent case — the caller's filter really does select both documents.
+isolated service class FilterHonouredMatchesEverythingMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
+        return {retrievalResults: [a17Result("doc-1"), a17Result("doc-2")]};
+    }
+}
+
+@test:Config {}
+function testAFilterThatLegitimatelyMatchesEveryDocumentStillDeletes() returns error? {
+    final int port = 18783;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FilterHonouredMatchesEverythingMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    DeletableDocument[] candidates = [
+        {sourceValue: "doc-1", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-1"}}},
+        {sourceValue: "doc-2", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-2"}}}
+    ];
+    json userFilter = {'equals: {key: "tenant", value: "acme"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        test:assertTrue(result.refusalReason is (),
+            string `a store that honours filters must not be refused: ${result.refusalReason ?: ""}`);
+        test:assertEquals(result.toDelete.length(), 2, "both documents genuinely match and must be deleted");
+        test:assertEquals(result.indeterminate.length(), 0);
+    }
+}
+
+// The control probe itself failing is NOT permission to delete on a filter that may
+// never have been applied: refuse, and say the check could not be completed rather
+// than asserting the store is broken.
+isolated service class FilterControlProbeFailsMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns http:Response|error {
+        json payload = check req.getJsonPayload();
+        http:Response response = new;
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            response.statusCode = 400;
+            response.setJsonPayload({message: "Unknown metadata key in filter"});
+            return response;
+        }
+        response.statusCode = 200;
+        response.setJsonPayload({retrievalResults: [a17Result("doc-1"), a17Result("doc-2")]});
+        return response;
+    }
+}
+
+@test:Config {}
+function testAFailedFilterControlProbeRefusesRatherThanDeleting() returns error? {
+    final int port = 18784;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FilterControlProbeFailsMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    DeletableDocument[] candidates = [
+        {sourceValue: "doc-1", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-1"}}},
+        {sourceValue: "doc-2", identifier: {dataSourceType: "CUSTOM", custom: {id: "doc-2"}}}
+    ];
+    json userFilter = {'equals: {key: "tenant", value: "acme"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        test:assertEquals(result.toDelete.length(), 0, "an unverifiable filter must delete nothing");
+        test:assertTrue(result.refusalReason is string);
+        test:assertTrue((result.refusalReason ?: "").includes("could not be completed"),
+            result.refusalReason ?: "");
+    }
+}
+
+// ============================================================================
+// A19 — a document must never be deleted on another document's evidence.
+//
+// A fan-out family and a BARE-id document can share one `ai:Metadata.id`:
+//
+//   ingest({id: 7, tenant: "acme"})                    -> document "7"
+//   ingest({id: 7, tenant: "globex"}, chunked into 30) -> documents "7#0".."7#29"
+//
+// A pin on `id == 7` selects all 31. An earlier version accepted any of them as
+// evidence for any other, so `deleteByFilter(tenant == "globex")` destroyed the acme
+// document too — and said nothing about it. Identity is now exact.
+// ============================================================================
+
+isolated function a19Result(string id, string tenant) returns json => {
+    content: {text: string `text for ${id}`, 'type: "TEXT"},
+    location: {'type: "CUSTOM", customDocumentLocation: {id}},
+    // No source-uri key: this is a CUSTOM data source, so `observePinKey` must fall
+    // back to the caller's own `id` attribute — the shape that makes A19 reachable.
+    metadata: {"id": 7, "tenant": tenant, "_data_source_id": A17_DS_ID},
+    score: 0.9
+};
+
+// One bare-id document (acme) plus a 30-member fan-out family (globex), all under
+// `ai:Metadata.id` 7, in a store that genuinely evaluates the filter it is sent.
+isolated service class FanOutFamilyMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
+        map<json> search = <map<json>>(<map<json>>(<map<json>>payload)["retrievalConfiguration"])
+            ["managedSearchConfiguration"];
+        json? filter = search.hasKey("filter") ? search["filter"] : ();
+
+        json[] results = [];
+        if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "acme", "_data_source_id": A17_DS_ID}) {
+            results.push(a19Result("7", "acme"));
+        }
+        foreach int i in 0 ..< 30 {
+            if filter is () || check deleteTestFilterMatches(filter, {"id": 7, "tenant": "globex", "_data_source_id": A17_DS_ID}) {
+                results.push(a19Result(string `7#${i}`, "globex"));
+            }
+        }
+        return {retrievalResults: results};
+    }
+}
+
+isolated function a19Candidates() returns DeletableDocument[] {
+    DeletableDocument[] candidates =
+        [{sourceValue: "7", identifier: {dataSourceType: "CUSTOM", custom: {id: "7"}}}];
+    foreach int i in 0 ..< 30 {
+        string id = string `7#${i}`;
+        candidates.push({sourceValue: id, identifier: {dataSourceType: "CUSTOM", custom: {id}}});
+    }
+    return candidates;
+}
+
+@test:Config {}
+function testABareIdDocumentIsNotDeletedOnItsFanOutNamesakesEvidence() returns error? {
+    final int port = 18785;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FanOutFamilyMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        a19Candidates(), SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        string deleted = result.toDelete.toJsonString();
+
+        // THE regression: the acme document shares the family's parent id and nothing
+        // else. It must survive, and it must not be reported either — the unfiltered
+        // pinned probe reaches it, so "the filter excluded it" is an observation.
+        test:assertFalse(deleted.includes("\"id\":\"7\"}"),
+            string `the bare-id document was deleted on a namesake's evidence: ${deleted}`);
+        test:assertEquals(result.indeterminate.length(), 0, result.indeterminate.toJsonString());
+
+        // And the family that genuinely matches is still deleted IN FULL — the fix
+        // must not buy safety by giving up on fan-outs.
+        test:assertEquals(result.toDelete.length(), 30, deleted);
+        foreach int i in 0 ..< 30 {
+            test:assertTrue(deleted.includes(string `7#${i}`), string `sibling 7#${i} was not deleted: ${deleted}`);
+        }
+    }
+}
+
+// ============================================================================
+// A20 — a pin group larger than one `Retrieve` page must not be reported as done.
+//
+// `Retrieve` answers ONE relevance-bounded call of at most `numberOfResults` and
+// offers no `nextToken`, so a group above the cap cannot be enumerated. A 180-sibling
+// family lost exactly 100 members while the enumeration reported `truncated: false`,
+// and the 80 survivors were never named — a partial delete reported as a complete one.
+// ============================================================================
+
+// A 180-member family under one `ai:Metadata.id`, behind a store that caps every
+// answer at the requested `numberOfResults` — which is what the real API does.
+isolated service class OversizedPinGroupMock {
+    *http:Service;
+
+    isolated resource function post [string... path](http:Request req) returns json|error {
+        json payload = check req.getJsonPayload();
+        if payload.toJsonString().includes(FILTER_CONTROL_SENTINEL) {
+            return {retrievalResults: []};
+        }
+        map<json> search = <map<json>>(<map<json>>(<map<json>>payload)["retrievalConfiguration"])
+            ["managedSearchConfiguration"];
+        int requested = <int>search["numberOfResults"];
+
+        // The two probes see DIFFERENT windows of the family, because each is its own
+        // relevance-ranked call and the filter changes the ranking. This is what the
+        // live failure looked like: survivors scattered across the whole index range
+        // (`#0`,`#1`,`#3` deleted, `#2`,`#4`,`#5` kept) rather than a clean tail.
+        //
+        // Filtered probe -> the first 100 siblings. Unfiltered pin probe -> a window
+        // shifted by 80, so it reaches every sibling the filtered probe missed. Under
+        // the old rule those 80 were "reachable but unmatched" and were skipped
+        // SILENTLY; the caller was told nothing.
+        boolean filtered = payload.toJsonString().includes("tenant");
+        int firstIndex = filtered ? 0 : 80;
+
+        json[] results = [];
+        foreach int i in firstIndex ..< 180 {
+            if results.length() >= requested {
+                break;
+            }
+            results.push(a19Result(string `7#${i}`, "globex"));
+        }
+        // No `nextToken`: the real API offers none, which is precisely why a full page
+        // cannot be read as "the result set ended".
+        return {retrievalResults: results};
+    }
+}
+
+@test:Config {}
+function testAPinGroupBeyondTheRetrieveCapIsReportedNotSilentlyHalfDeleted() returns error? {
+    final int port = 18786;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new OversizedPinGroupMock(), "/");
+    check mockListener.'start();
+
+    DeletableDocument[] candidates = [];
+    foreach int i in 0 ..< 180 {
+        string id = string `7#${i}`;
+        candidates.push({sourceValue: id, identifier: {dataSourceType: "CUSTOM", custom: {id}}});
+    }
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        // The confirmed 100 are still deleted: each was exactly identified under the
+        // caller's filter, which is sound however much of the group the probe saw.
+        // Deleting them is also what lets a repeat call finish the job.
+        test:assertEquals(result.toDelete.length(), KB_MAX_RESULTS_PER_CALL, "confirmed matches must still be deleted");
+
+        // THE regression: the 80 that were cut off must be NAMED, not silently kept.
+        test:assertEquals(result.indeterminate.length(), 80,
+            string `every unchecked sibling must be reported: ${result.indeterminate.length()}`);
+
+        // And the caller must be told why, and that repeating the call continues.
+        test:assertTrue(result.notes.length() > 0, "the cap must be explained");
+        string note = result.notes[0];
+        test:assertTrue(note.includes("cap"), note);
+        test:assertTrue(note.includes("repeat"), note);
+    }
+}
+
+// The cap note must NOT appear when a group fits: a full page is only suspicious when
+// it is the cap, and a group of exactly one page's worth that is fully matched is done.
+@test:Config {}
+function testAGroupThatFitsInOnePageIsNotFlaggedAsTruncated() returns error? {
+    final int port = 18787;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FanOutFamilyMock(), "/");
+    check mockListener.'start();
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        a19Candidates(), SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        test:assertEquals(result.notes.length(), 0, result.notes.toJsonString());
+        test:assertEquals(result.toDelete.length(), 30);
+        test:assertEquals(result.indeterminate.length(), 0);
+    }
+}
+
+// ============================================================================
+// A21 — the error must scale with the REQUEST, not with the knowledge base.
+//
+// A delete of 105 documents that fully succeeded returned an error naming 455
+// unrelated ones, because those carry no `ai:Metadata.id` for the pin to match. An
+// error that always fires and is always enormous gets ignored, and this one sometimes
+// matters. Each cause is now reported once, with an exact count and a bounded sample.
+// ============================================================================
+
+@test:Config {}
+function testDocumentsWithNoMetadataIdAreSeparatedWithoutProbingThem() returns error? {
+    final int port = 18788;
+    http:Listener mockListener = check new (port);
+    check mockListener.attach(new FanOutFamilyMock(), "/");
+    check mockListener.'start();
+
+    // The 30-member family, plus 40 documents carrying UUID-shaped ids — the shape
+    // `documentIdFor` produces when the caller supplied no `ai:Metadata.id`.
+    DeletableDocument[] candidates = a19Candidates();
+    foreach int i in 0 ..< 40 {
+        string id = string `3f2b9c${i}-7a41-4e2d-9f10-000000000000`;
+        candidates.push({sourceValue: id, identifier: {dataSourceType: "CUSTOM", custom: {id}}});
+    }
+
+    BedrockTransport transport = check a17Transport(port);
+    json userFilter = {'equals: {key: "tenant", value: "globex"}};
+    DataSourceDeleteResult|ai:Error result = resolveDataSourceDeletes(transport, A17_KB_ID, A17_DS_ID, userFilter,
+        candidates, SOURCE_URI_METADATA_KEY, MANAGED_DATA_SOURCE_ID_METADATA_KEY, managedDeleteRetrieve);
+    check mockListener.gracefulStop();
+
+    test:assertTrue(result is DataSourceDeleteResult, (result is ai:Error ? result.message() : ""));
+    if result is DataSourceDeleteResult {
+        // The family still deletes in full.
+        test:assertEquals(result.toDelete.length(), 30);
+
+        // The 40 unpinnable documents are reported, and for the RIGHT reason: an id
+        // that cannot be an `ai:Metadata.id` is decidable without asking the service,
+        // so none of them cost a probe.
+        test:assertEquals(result.indeterminate.length(), 40);
+        foreach UnresolvedCandidate candidate in result.indeterminate {
+            test:assertEquals(candidate.reason, UNRESOLVED_NO_DOCUMENT_ID,
+                string `${candidate.sourceValue} should have been ruled out before any probe`);
+        }
+    }
+}
+
+@test:Config {}
+function testTheDeleteErrorReportsOneLinePerCauseWithABoundedSample() {
+    UnresolvedCandidate[] unresolved = [];
+    foreach int i in 0 ..< 455 {
+        unresolved.push({sourceValue: string `doc-${i}`, dataSourceId: "DS1", reason: UNRESOLVED_NO_DOCUMENT_ID});
+    }
+    unresolved.push({sourceValue: "lost-1", dataSourceId: "DS1", reason: UNRESOLVED_UNREACHABLE});
+
+    ai:Error? outcome = deleteByFilterOutcome(unresolved, [], []);
+    test:assertTrue(outcome is ai:Error);
+    if outcome is ai:Error {
+        string msg = outcome.message();
+
+        // Exact counts, one line per cause.
+        test:assertTrue(msg.includes("455 document(s)"), msg);
+        test:assertTrue(msg.includes("1 document(s)"), msg);
+
+        // A bounded sample, not 455 ids: the tenth is shown, the eleventh is not.
+        test:assertTrue(msg.includes("doc-9"), msg);
+        test:assertFalse(msg.includes("doc-10 "), msg);
+        test:assertTrue(msg.includes("and 445 more"), msg);
+
+        // And the cause is actionable rather than a bare "could not confirm".
+        test:assertTrue(msg.includes("ai:Metadata.id"), msg);
+    }
+}
