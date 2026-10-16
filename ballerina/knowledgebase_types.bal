@@ -93,7 +93,7 @@ public type ManagedKnowledgeBaseDefinition record {|
 public type ManagedKnowledgeBaseConfig record {|
     # Seconds to wait for documents to be indexed
     decimal ingestTimeout = 300;
-    # Results fetched per AWS call (1-100). `retrieve`'s `maxLimit` sets how many are returned
+    # Upper limit on results per retrieval (1-100)
     int numberOfResults?;
     # HTTP client configuration
     http:ClientConfiguration httpConfig?;

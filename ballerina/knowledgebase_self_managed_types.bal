@@ -354,7 +354,7 @@ public type SelfManagedKnowledgeBaseDefinition record {|
 public type SelfManagedKnowledgeBaseConfig record {|
     # Seconds to wait for documents to be indexed
     decimal ingestTimeout = 300;
-    # Results fetched per AWS call (1-100). `retrieve`'s `maxLimit` sets how many are returned
+    # Upper limit on results per retrieval (1-100)
     int numberOfResults?;
     # Search strategy for retrieval. Chosen by Bedrock when unset
     SearchType overrideSearchType?;
